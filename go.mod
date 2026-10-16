@@ -60,3 +60,7 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+// norma 为本项目核心 agent 基建，原上游 github.com/Autumn-27/norma 曾发生仓库删除。
+// 将解析重定向到维护者 fork（内容 = 上游 v0.4.4，fork 内 module 声明保持原路径），彻底解耦单点依赖。
+replace github.com/Autumn-27/norma => github.com/chu0119/Norma v0.4.4
