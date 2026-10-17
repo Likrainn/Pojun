@@ -2052,6 +2052,6 @@ func (t *ToolSet) PlannerTools() []actool.CoreTool {
 		t.listUntestedAssets(),
 		// search_vulns / get_vuln：识别出目标组件后查公开已知漏洞（NVD+KEV），
 		// 规划阶段把「有现成利用的方向」排进 todolist。
-		t.searchVulns(), t.getVuln(), t.getPoc(),
+		t.searchVulns(), t.getVuln(), t.getPoc(), t.scanWithNuclei(),
 	}
 }

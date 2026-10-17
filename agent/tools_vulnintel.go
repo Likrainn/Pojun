@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	actool "github.com/Autumn-27/norma/tool"
 
@@ -22,6 +23,13 @@ var vulnintelStore *vulnintel.Store
 
 // SetVulnIntelStore wires the shared intel store; nil disables the tools.
 func SetVulnIntelStore(s *vulnintel.Store) { vulnintelStore = s }
+
+// nucleiTemplatesDir is the local nuclei-templates checkout (empty = scan tool
+// unavailable). Set alongside the store at startup.
+var nucleiTemplatesDir string
+
+// SetNucleiTemplatesDir wires the template tree path; empty disables scan tool.
+func SetNucleiTemplatesDir(dir string) { nucleiTemplatesDir = dir }
 
 // searchVulns exposes product-keyed CVE retrieval. Version matching against
 // NVD criteria is intentionally returned as raw material (criteria text + a
@@ -117,8 +125,7 @@ func (t *ToolSet) getVuln() actool.CoreTool {
 }
 
 // getPoc exposes aggregated PoC/EXP entries for one CVE.
-func (t *ToolSet) getPoc() actool.CoreTool {
-	return readTool(
+func (t *ToolSet) getPoc() actool.CoreTool {	return readTool(
 		"get_poc",
 		"取单条已知漏洞的【现成 PoC/利用】聚合：GitHub 上引用该 CVE 的公开仓库，"+
 			"按星数排序。先 search_vulns 确认漏洞存在，再 get_poc 找现成弹药；返回的是"+
@@ -150,3 +157,53 @@ func (t *ToolSet) getPoc() actool.CoreTool {
 	)
 }
 
+
+// scanWithNuclei assembles a nuclei command for the worker's Bash tool. The
+// tool deliberately does NOT execute nuclei itself: Bash runs it through the
+// recording proxy + approval gates like every other command, keeping audit
+// semantics uniform. What this tool adds is template selection (CVE-keyed)
+// and a correct, version-pinned command line.
+func (t *ToolSet) scanWithNuclei() actool.CoreTool {
+	return readTool(
+		"scan_with_nuclei",
+		"组装一条【nuclei 模板扫描】命令交给 Bash 执行(本工具只组命令不执行)。"+
+			"适合已确认目标可达、且 search_vulns 找到对应 CVE 后做批量模板验证。"+
+			"give cve_id 时只跑命中该 CVE 的模板(推荐,快且聚焦);不给则跑全模板树"+
+			"(慢,慎用,建议配合 severity 收窄)。模板库随情报同步自动更新。"+
+			"命令输出为 JSONL 结果,每行一个发现;没有输出=没有模板命中。",
+		obj(map[string]any{
+			"target":   str("扫描目标 URL,如 https://example.com"),
+			"cve_id":   str("CVE 编号(可选,推荐):只跑命中该 CVE 的模板,如 CVE-2021-41773"),
+			"severity": str("严重度过滤(可选):critical,high,medium,low 逗号组合"),
+		}, "target"),
+		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+			if nucleiTemplatesDir == "" {
+				return actool.Errorf("scan_with_nuclei 未启用: 模板库路径未配置"), nil
+			}
+			if !vulnintel.NucleiInstalled() {
+				return actool.Errorf("nuclei 未安装(当前运行环境不含该二进制;Docker 镜像已内置)"), nil
+			}
+			var a struct {
+				Target   string `json:"target"`
+				CVEID    string `json:"cve_id"`
+				Severity string `json:"severity"`
+			}
+			_ = json.Unmarshal(in, &a)
+			cmd, cancel, err := vulnintel.BuildNucleiCmd(context.Background(), nucleiTemplatesDir, vulnintel.ScanArgs{
+				Target:       a.Target,
+				CVEID:        a.CVEID,
+				Severity:     a.Severity,
+				TimeoutTotal: 10 * time.Minute,
+			})
+			if err != nil {
+				return actool.Errorf("组装扫描命令失败: " + err.Error()), nil
+			}
+			defer cancel()
+			return jsonResult(map[string]any{
+				"run_with_bash": strings.Join(cmd.Args, " "),
+				"note": "用 Bash 工具执行上面这条命令(默认 10 分钟超时,超时会截断输出);" +
+					"输出为 JSONL,每行一个模板命中;空输出=无命中。发现真实漏洞后走 report_finding 走正常上报。",
+			})
+		},
+	)
+}

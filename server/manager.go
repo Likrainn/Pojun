@@ -225,6 +225,7 @@ type Manager struct {
 	enrich      *enrich.Engine         // engine-side asset auto-completion (DNS/HTTP)
 	interceptor *intercept.Interceptor // user-configured tool-call interception rules
 	vulnintel   *vulnintel.Store       // public CVE/KEV intel store (agent search_vulns reads it)
+	nucleiDir   string                 // local nuclei-templates checkout (synced by vulnintel goroutine)
 
 	companyMu sync.Mutex // serializes task/company-scope commits with live handle registration
 	// taskStateMu preserves commit order between PostgreSQL lifecycle writes and
@@ -455,7 +456,9 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	// 同步走独立 goroutine：延迟 90s 起跑避开启动风暴，默认每 6h 一轮；关闭开关只
 	// 停同步，已入库数据仍可查。
 	m.vulnintel = vulnintel.New(m.pg)
+	m.nucleiDir = vulnintel.TemplatesDir(m.dir)
 	agent.SetVulnIntelStore(m.vulnintel)
+	agent.SetNucleiTemplatesDir(m.nucleiDir)
 	if pg.GetBool(settingVulnIntelOn, true) {
 		go m.runVulnIntelSync()
 	} else {
@@ -812,6 +815,13 @@ func (m *Manager) runVulnIntelSync() {
 			// 资产联动:新同步的 CVE 反向匹配 service 资产指纹,受影响任务挂 hint。
 			// 同步没完整完成也照跑——KEV stub 与已 upsert 的记录都已可查。
 			m.linkVulnIntelAssets()
+			// nuclei 模板树:clone(首轮)/pull(后续)。失败不阻塞主流程,
+			// scan_with_nuclei 会报"模板树不可用"。
+			tplCtx, tplCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			if err := vulnintel.EnsureTemplates(tplCtx, m.nucleiDir); err != nil {
+				log.Printf("[vulnintel] nuclei 模板树更新失败: %v", err)
+			}
+			tplCancel()
 		}
 		time.Sleep(6 * time.Hour)
 	}
