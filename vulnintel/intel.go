@@ -145,7 +145,7 @@ SELECT c.cve_id, c.severity, c.cvss_score, c.kev, COALESCE(c.published_at::text,
        ), '') AS matched
 FROM vuln_cves c
 JOIN vuln_cpe_products p ON p.cve_id = c.cve_id AND p.product ILIKE $1`+vendorCond+`
-GROUP BY c.cve_id
+GROUP BY c.id
 ORDER BY c.kev DESC,
          (CASE WHEN $4 <> '' AND c.cpe_criteria::text LIKE '%' || $4 || '%' THEN 1 ELSE 0 END) DESC,
          c.cvss_score DESC NULLS LAST, c.published_at DESC
@@ -258,8 +258,10 @@ type SyncState struct {
 // column default) when absent — callers decide their own enabled semantics.
 func (s *Store) GetSyncState(ctx context.Context, source string) (SyncState, error) {
 	st := SyncState{Source: source, Enabled: true}
+	// to_char forces ISO-8601 on the way out; the ::text cast would return
+	// Postgres's own "2024-05-06 07:08:09+00" which nothing here parses.
 	var lastSync string
-	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(last_sync_at::text,''), cursor, total_synced, last_error, enabled
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(to_char(last_sync_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),''), cursor, total_synced, last_error, enabled
 		FROM vuln_sync_state WHERE source=$1`, source).
 		Scan(&lastSync, &st.Cursor, &st.TotalSynced, &st.LastError, &st.Enabled)
 	if err != nil {
