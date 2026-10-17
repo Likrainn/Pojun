@@ -130,12 +130,9 @@ func (s *Store) SearchVulns(ctx context.Context, vendor, product, version string
 	if !strings.ContainsAny(pattern, "%_") {
 		pattern = "%" + pattern + "%"
 	}
-	args := []any{pattern, limit}
-	vendorCond := ""
-	if v := strings.TrimSpace(vendor); v != "" {
-		vendorCond = " AND p.vendor ILIKE $3"
-		args = append(args, "%"+strings.ToLower(v)+"%")
-	}
+	// Fixed placeholders: optional filters are always passed (empty = no filter).
+	// Conditionally appended $N breaks PostgreSQL when the numbers skip a slot.
+	args := []any{pattern, strings.TrimSpace(vendor), strings.TrimSpace(version), limit}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT c.cve_id, c.severity, c.cvss_score, c.kev, COALESCE(c.published_at::text,''),
        COALESCE(c.title,''), c.kev_date_added IS NOT NULL AS kev_row,
@@ -144,12 +141,13 @@ SELECT c.cve_id, c.severity, c.cvss_score, c.kev, COALESCE(c.published_at::text,
          FROM vuln_cpe_products p WHERE p.cve_id = c.cve_id AND p.product ILIKE $1
        ), '') AS matched
 FROM vuln_cves c
-JOIN vuln_cpe_products p ON p.cve_id = c.cve_id AND p.product ILIKE $1`+vendorCond+`
+JOIN vuln_cpe_products p ON p.cve_id = c.cve_id AND p.product ILIKE $1
+                        AND ($2 = '' OR p.vendor ILIKE '%' || $2 || '%')
 GROUP BY c.id
 ORDER BY c.kev DESC,
-         (CASE WHEN $4 <> '' AND c.cpe_criteria::text LIKE '%' || $4 || '%' THEN 1 ELSE 0 END) DESC,
+         (CASE WHEN $3 <> '' AND c.cpe_criteria::text LIKE '%' || $3 || '%' THEN 1 ELSE 0 END) DESC,
          c.cvss_score DESC NULLS LAST, c.published_at DESC
-LIMIT $2`, args...)
+LIMIT $4`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search vulns: %w", err)
 	}
