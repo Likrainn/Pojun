@@ -447,6 +447,15 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 		if err := m.traffic.SetUpstreamProxy(m.globalProxy); err != nil {
 			log.Printf("[proxy] 全局代理 %q 无效，已忽略: %v", m.globalProxy, err)
 		}
+		// 代理池恢复(upstream 钩子是"池优先",池非空时覆盖上面的单代理)。
+		// 放 manager 的字段恢复段之后,与 capture 状态无关(池只影响出口选择)。
+		if pool := loadProxyPoolState(pg); pool != nil {
+			if err := m.traffic.SetProxyPool(pool.Entries, pool.Strategy); err != nil {
+				log.Printf("[proxypool] 池恢复失败: %v", err)
+			} else if len(pool.Entries) > 0 {
+				log.Printf("[proxypool] 已恢复 %d 个上游代理(策略 %s,池优先于全局代理)", len(pool.Entries), pool.Strategy)
+			}
+		}
 	}
 	m.enrich = enrich.New(m.assets, m.ProxyAddr, 4)
 	// Reconcile the seeded browser MCP with the persisted capture state, so a

@@ -825,6 +825,17 @@ export const api = {
   // 渠道是多实例资源（同一类型可配多个机器人、各有过滤规则），因此独立成组，
   // 不塞进扁平的 settings 键值里。
   notifyMeta: () => get<NotificationMeta>(`/notify/meta`),
+  proxyPoolGet: () =>
+    get<{
+      entries: { url: string; name: string; enabled: boolean; weight: number }[];
+      strategy: string;
+      running: { url: string; name: string; failures: number }[];
+      capturing: boolean;
+    }>(`/proxypool`),
+  proxyPoolPut: (payload: {
+    entries: { url: string; name: string; enabled: boolean; weight: number }[];
+    strategy: string;
+  }) => put<{ entries: []; strategy: string; running: []; capturing: boolean }>(`/proxypool`, payload),
   vulnintelStatus: () =>
     get<{
       enabled: boolean;
