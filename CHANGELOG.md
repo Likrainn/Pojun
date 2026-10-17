@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+## [0.3.16] - 2026-10-17
+
+> 独立维护版首个正式版本。基于 v0.3.15 定版源码,本版起由维护者继续演进。
+
+### 新增的功能
+
+- **漏洞情报库（第一批）**：新增 `vulnintel` 子系统,定期同步 NVD CVE 与 CISA KEV 在野利用清单到本地 PostgreSQL。agent 新增 `search_vulns`（按组件名检索已知漏洞,KEV 优先排序 + 版本粗筛）与 `get_vuln`（完整描述/CVSS/CPE 版本区间/参考链接）两个工具,挂给 worker/planner/mainagent——worker 识别出目标组件后可直接查公开已知漏洞与现成利用,不再靠模型现想。首次启动自动全量回填（约 40.9 万条,匿名速率下分轮完成）,此后每 6 小时增量;`settings.vulnintel_enabled` 可关;可选配置 NVD API key 提升同步速率;出网走全局出口代理。版本是否落在影响区间由模型结合 CPE criteria 原文判断,结构化区间匹配与 PoC 聚合在后续批次。
+
+### 修复的问题
+
+- **norma 依赖解耦**：agent 全部基建此前单点依赖 `github.com/Autumn-27/norma`,该路径曾随原作者删库而不可解析。现 go.mod 以 `replace` 重定向到维护者 fork（`github.com/chu0119/Norma`,内容 = 上游 v0.4.4）,顺带升级 v0.3.15 所用的 v0.4.3 → v0.4.4。
+- **llmrec 测试依赖服务启动副作用**：`llm_usage` 表由服务启动路径确保存在,测试在干净库上因缺表失败。测试改为自建,不再依赖运行时副作用。
+- **删除断言已移除 API 的僵尸测试**：`TestGraphOverviewExpandsAssociatedCompanyScope` 断言的 `coverage.scope` 键在 graph_overview 上下文瘦身重构时已从生产代码移除,测试自上游 v0.3.6 起未同步,CI 必挂。
+
+### 变更
+
+- **CI 门禁**：新增 `ci.yml`——PostgreSQL service + `go build/vet/test`（含全部需要真库的测试,串行跑包消除跨包 PG 死锁）与前端 `build:static`。此前测试从未在干净环境验证过,本次共揪出并修复:llm_usage 副作用依赖、跨包死锁、僵尸测试、biome 与代码脱节等存量问题。
+- **设计文档重建**:docs/ 新增双图架构、引擎与调度闭环、LLM 接入层、审批与拦截四篇设计文档(重建自 v0.3.15 代码);移除 `.gitignore` 的 `/docs/` 忽略规则——原作者的 8+ 篇设计文档因该规则从未进入版本控制,随原仓库删除而永久丢失。
+
 ## [0.3.15] - 2026-10-07
 
 ### 拦截
