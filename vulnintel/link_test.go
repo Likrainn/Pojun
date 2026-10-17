@@ -85,6 +85,11 @@ func TestEndToEnd(t *testing.T) {
 	if err := st.UpsertCVE(ctx, cve(cveID, "apache", "http_server", "2.4.49", 9.8)); err != nil {
 		t.Fatal(err)
 	}
+	// 夹具的 modified_at 是 2024 旧值;真实命中路径要么 KEV 要么最近同步——
+	// 标 KEV 进候选池(顺带覆盖 MarkKEV 与 NVD upsert 共存路径)。
+	if err := st.MarkKEV(ctx, cveID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	got, err := st.LinkAssetsToVulns(ctx, time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatal(err)
