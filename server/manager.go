@@ -809,6 +809,9 @@ func (m *Manager) runVulnIntelSync() {
 				log.Printf("[vulnintel] 本轮同步未完整完成: %v（游标已保留，下轮续跑）", err)
 			}
 			cancel()
+			// 资产联动:新同步的 CVE 反向匹配 service 资产指纹,受影响任务挂 hint。
+			// 同步没完整完成也照跑——KEV stub 与已 upsert 的记录都已可查。
+			m.linkVulnIntelAssets()
 		}
 		time.Sleep(6 * time.Hour)
 	}
