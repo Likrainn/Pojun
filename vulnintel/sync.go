@@ -12,6 +12,8 @@ import (
 type Config struct {
 	NvdAPIKey    string        // optional; lifts the 5 req/30s anonymous cap
 	ProxyURL     string        // global egress proxy for outbound fetches (empty = direct)
+	GitHubToken  string        // optional; lifts GitHub search limits for PoC aggregation
+	PocEnabled   bool          // aggregate GitHub PoC repos for recently synced CVEs
 	BackfillDays int           // first-run lookback; 0 (default) = full catalog (~409k records,
 	                           // ≈205 pages: ~22 min anonymous / ~3 min with a key, split across runs)
 	PageDelay    time.Duration // inter-request delay; 0 = derived from the key
@@ -42,7 +44,7 @@ func Run(ctx context.Context, st *Store, cfg Config) error {
 		defer cancel()
 	}
 
-	var kevErr, nvdErr error
+	var kevErr, nvdErr, pocErr error
 	if err := syncKEV(ctx, st, cfg); err != nil {
 		kevErr = err
 		log.Printf("[vulnintel] kev sync: %v", err)
@@ -51,7 +53,97 @@ func Run(ctx context.Context, st *Store, cfg Config) error {
 		nvdErr = err
 		log.Printf("[vulnintel] nvd sync: %v", err)
 	}
-	return errors.Join(kevErr, nvdErr)
+	if cfg.PocEnabled {
+		if err := syncPoCs(ctx, st, cfg); err != nil {
+			pocErr = err
+			log.Printf("[vulnintel] poc sync: %v", err)
+		}
+	}
+	return errors.Join(kevErr, nvdErr, pocErr)
+}
+
+// syncPoCs aggregates GitHub PoC repos for CVEs synced since the previous PoC
+// watermark (or, first run, recent high-impact records). Only CVEs present in
+// vuln_cves are queried — the pool of KEV + recent high-severity first, since
+// 409k × 1 search each is neither feasible nor useful.
+func syncPoCs(ctx context.Context, st *Store, cfg Config) error {
+	client, err := NewGitHubClient(cfg.GitHubToken, cfg.ProxyURL)
+	if err != nil {
+		return err
+	}
+	state, err := st.GetSyncState(ctx, "poc")
+	if err != nil {
+		return err
+	}
+	// Query pool: KEV first (exploited in the wild → PoC most valuable), then
+	// the latest NVD window records, capped hard by the unauthenticated budget.
+	rows, err := st.db.QueryContext(ctx, `SELECT cve_id FROM vuln_cves
+		WHERE kev = true
+		   OR published_at > now() - interval '30 days'
+		ORDER BY kev DESC, GREATEST(COALESCE(cvss_score,0), 0) DESC, published_at DESC
+		LIMIT 400`)
+	if err != nil {
+		return err
+	}
+	var targets []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil {
+			targets = append(targets, id)
+		}
+	}
+	rows.Close()
+	fetched := 0
+	failures := 0
+	for _, cveID := range targets {
+		if err := ctx.Err(); err != nil {
+			break
+		}
+		pocs, err := client.SearchPoCs(ctx, cveID)
+		if err != nil {
+			var rl *RateLimited
+			if errors.As(err, &rl) {
+				wait := rl.RetryAfter
+				if wait <= 0 {
+					wait = 70 * time.Second // unauthenticated search: 10/min window resets
+				}
+				select {
+				case <-ctx.Done():
+					break // outer
+				case <-time.After(wait):
+				}
+				continue
+			}
+			failures++
+			if failures > 5 { // source down / quirk — abandon for this run
+				log.Printf("[vulnintel] poc sync aborting after %d failures: %v", failures, err)
+				break
+			}
+			continue
+		}
+		for _, p := range pocs {
+			if err := st.UpsertPoC(ctx, p); err != nil {
+				log.Printf("[vulnintel] poc upsert %s: %v", p.CVEID, err)
+			}
+		}
+		fetched++
+		time.Sleep(2 * time.Second) // stay far under the 10/min search cap
+	}
+	state.LastSyncAt = nowPtr()
+	state.TotalSynced = int64(fetched)
+	state.Enabled = true
+	if ctx.Err() != nil {
+		state.LastError = ctx.Err().Error()
+	} else if failures > 0 {
+		state.LastError = fmt.Sprintf("%d/%d lookups failed", failures, fetched+failures)
+	} else {
+		state.LastError = ""
+	}
+	if err := st.SaveSyncState(ctx, state); err != nil {
+		return err
+	}
+	log.Printf("[vulnintel] poc synced: %d CVE lookups", fetched)
+	return nil
 }
 
 // syncKEV overwrites the in-the-wild flags from the full catalog.KEV moves

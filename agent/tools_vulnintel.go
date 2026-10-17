@@ -115,3 +115,38 @@ func (t *ToolSet) getVuln() actool.CoreTool {
 		},
 	)
 }
+
+// getPoc exposes aggregated PoC/EXP entries for one CVE.
+func (t *ToolSet) getPoc() actool.CoreTool {
+	return readTool(
+		"get_poc",
+		"取单条已知漏洞的【现成 PoC/利用】聚合：GitHub 上引用该 CVE 的公开仓库，"+
+			"按星数排序。先 search_vulns 确认漏洞存在，再 get_poc 找现成弹药；返回的是"+
+			"仓库地址与描述，不替你执行——用 Bash clone/分析仓库内容、按其说明构造利用。"+
+			"没有命中只代表公开仓库没有现成代码，不代表漏洞不可利用。",
+		obj(map[string]any{
+			"cve_id": str("CVE 编号，如 CVE-2021-41773"),
+		}, "cve_id"),
+		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+			if vulnintelStore == nil {
+				return actool.Errorf("get_poc 未启用: 漏洞情报库未初始化"), nil
+			}
+			var a struct {
+				CVEID string `json:"cve_id"`
+			}
+			_ = json.Unmarshal(in, &a)
+			if strings.TrimSpace(a.CVEID) == "" {
+				return actool.Errorf("cve_id 不能为空"), nil
+			}
+			hits, err := vulnintelStore.GetPoCs(context.Background(), a.CVEID)
+			if err != nil {
+				return actool.Errorf("查询 PoC 失败: " + err.Error()), nil
+			}
+			return jsonResult(map[string]any{
+				"count": len(hits),
+				"pocs":  hits,
+			})
+		},
+	)
+}
+
