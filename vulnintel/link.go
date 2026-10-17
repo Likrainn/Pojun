@@ -71,6 +71,22 @@ func techTokens(s string) []string {
 			}
 		}
 	}
+	// 别名表:tech 侧的每个 token 也带上常见 CPE product 形态(带下划线的
+	// product 整串入集,不带下划线的按词切)。
+	for _, tok := range append([]string{}, out...) {
+		for _, alt := range techAliases[tok] {
+			alts := []string{strings.ToLower(alt)}
+			if !strings.Contains(alt, "_") {
+				alts = strings.Fields(strings.ToLower(alt))
+			}
+			for _, sub := range alts {
+				if !seen[sub] {
+					seen[sub] = true
+					out = append(out, sub)
+				}
+			}
+		}
+	}
 	return out
 }
 
@@ -85,12 +101,57 @@ func isVersionish(s string) bool {
 	return digits >= 2 && (strings.Contains(s, ".") || strings.HasPrefix(s, "v"))
 }
 
-// cpeTokens:product 段 + 下划线合并形态。
+// cpeTokens:product 段 + 下划线合并形态 + 常见缩写别名。
+// 缩写映射是必须的:真实世界的资产指纹写 "httpd",而 CPE product 是
+// "http_server"——纯 token 交集永远空。积累自真实资产清单,增量维护。
+var techAliases = map[string][]string{
+	"httpd":     {"http_server"},
+	"http":      {"http_server"},
+	"iis":       {"internet_information_services"},
+	"exchange":  {"exchange_server"},
+	"sqlserver": {"sql_server"},
+	"activedirectory": {"active_directory"},
+	"win":    {"windows"},
+	"winserver": {"windows"},
+	"cent":   {"centos"},
+	"ubuntu": {"ubuntu_linux"},
+	"debian": {"debian_linux"},
+	"vmwareesxi": {"esxi"},
+	"tomcat": {"apache_tomcat"},
+	"struts": {"apache_struts"},
+	"log4j":  {"apache_log4j"},
+	"spring": {"vmware_Spring", "pivotal_Spring", "spring_framework"},
+	"nginx":  {"nginx"},
+}
+
+// cpeTokens:product 段 + 下划线合并形态 + 常见缩写别名。
 func cpeTokens(product string) []string {
 	product = strings.ToLower(product)
 	toks := []string{product}
 	if compact := strings.ReplaceAll(product, "_", ""); compact != product && len(compact) >= 2 {
 		toks = append(toks, compact)
+	}
+	for _, alt := range techAliases[product] {
+		toks = append(toks, strings.ToLower(alt))
+	}
+	// 反向:product 命中某别名的 value 时带上 key("http_server" → "httpd"/"http"),
+	// 让 tech 侧写 "httpd" 与 CPE 侧 "http_server" 能相等命中。
+	for key, vals := range techAliases {
+		for _, v := range vals {
+			if v == product {
+				toks = append(toks, key)
+			}
+		}
+	}
+	// 反向:product 的首段(token before _)若是某别名的值,带上该别名键
+	// ("apache_tomcat" → "tomcat")。防 tech 写 "tomcat"、CPE 写 "apache_tomcat"。
+	if head, _, ok := strings.Cut(product, "_"); ok {
+		if alts, found := techAliases[head]; found {
+			for _, alt := range alts {
+				toks = append(toks, strings.ToLower(alt))
+			}
+			toks = append(toks, head)
+		}
 	}
 	return toks
 }

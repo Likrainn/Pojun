@@ -12,11 +12,11 @@ func TestTechTokensAndVersionish(t *testing.T) {
 		in   string
 		want string // joined expectation for readable failure output
 	}{
-		{"Apache httpd 2.4.49", "apache httpd"},
+		{"Apache httpd 2.4.49", "apache httpd http_server"},
 		{"nginx/1.24", "nginx"},
 		{"v12 framework", "framework"}, // leading v + digits stripped
-		{"http-server", "http-server http server httpserver"},
-		{"Tomcat", "tomcat"},
+		{"http-server", "http-server http server httpserver http_server"},
+		{"Tomcat", "tomcat apache_tomcat"},
 	}
 	for _, tc := range cases {
 		got := techTokens(tc.in)
@@ -26,6 +26,24 @@ func TestTechTokensAndVersionish(t *testing.T) {
 	}
 	if !isVersionish("1.24.3") || !isVersionish("v12") || isVersionish("httpd") || isVersionish("v") {
 		t.Error("isVersionish classification wrong")
+	}
+	// 真实场景:tech "httpd" 必须命中 CPE product "http_server"(双向别名)。
+	techSet := map[string]bool{}
+	for _, tok := range techTokens("Apache httpd 2.4.49") {
+		techSet[tok] = true
+	}
+	cpeSet := map[string]bool{}
+	for _, tok := range cpeTokens("http_server") {
+		cpeSet[tok] = true
+	}
+	hit := false
+	for tok := range techSet {
+		if cpeSet[tok] {
+			hit = true
+		}
+	}
+	if !hit {
+		t.Fatalf("httpd vs http_server no intersection: tech=%v cpe=%v", techSet, cpeSet)
 	}
 }
 
