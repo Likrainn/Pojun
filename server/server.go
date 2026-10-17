@@ -809,6 +809,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/notify/channels/{id}/test", s.notifyTestChannel)
 	mux.HandleFunc("GET /api/notify/deliveries", s.notifyListDeliveries)
 	mux.HandleFunc("POST /api/notify/deliveries/{id}/retry", s.notifyRetryDelivery)
+	mux.HandleFunc("GET /api/vulnintel/status", s.vulnintelStatus)
 	mux.HandleFunc("POST /api/settings/web-search/test", s.testWebSearch)
 	mux.HandleFunc("GET /api/report", s.getReport)
 	mux.HandleFunc("GET /api/chat/mentions", s.searchChatMentions)

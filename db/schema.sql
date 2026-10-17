@@ -1429,6 +1429,14 @@ CREATE TABLE IF NOT EXISTS vuln_cpe_products (
     PRIMARY KEY (cve_id, vendor, product)
 );
 CREATE INDEX IF NOT EXISTS idx_vuln_cpe_product ON vuln_cpe_products(product);
+-- 结构化版本区间(NVD cpeMatch 的 versionStart/End 字段,NULL=无该边界):
+-- 同一 (cve, vendor, product) 可能有多条不同区间的 cpeMatch,任一命中即算
+-- 该 CVE 影响该版本。criteria 字符串仍存 vuln_cves.cpe_criteria 供展示,
+-- 这里的四列供 search_vulns 做结构化版本判断。
+ALTER TABLE vuln_cpe_products ADD COLUMN IF NOT EXISTS version_start_incl TEXT;
+ALTER TABLE vuln_cpe_products ADD COLUMN IF NOT EXISTS version_start_excl TEXT;
+ALTER TABLE vuln_cpe_products ADD COLUMN IF NOT EXISTS version_end_incl   TEXT;
+ALTER TABLE vuln_cpe_products ADD COLUMN IF NOT EXISTS version_end_excl   TEXT;
 
 -- PoC/利用聚合（第二批填充；表先落，get_poc 工具后续接入）。
 CREATE TABLE IF NOT EXISTS vuln_pocs (

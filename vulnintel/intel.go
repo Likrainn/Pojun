@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +36,16 @@ type CVE struct {
 	Modified    time.Time
 	Criteria    []string // cpe:2.3:... 原文（含版本区间语法）
 	Refs        []string
+	Ranges      []CPERange // 结构化版本区间(versionStart/End 字段),供精确版本判断
+}
+
+// CPERange 是一条 cpeMatch 的版本区间(空串=该边界不存在)。
+type CPERange struct {
+	Criteria       string
+	StartIncluding string
+	StartExcluding string
+	EndIncluding   string
+	EndExcluding   string
 }
 
 // UpsertCVE writes one record: the row itself plus a rebuilt (vendor, product)
@@ -45,6 +56,10 @@ func (s *Store) UpsertCVE(ctx context.Context, c CVE) error {
 	}
 	criteria := marshalJSONB(c.Criteria)
 	refs := marshalJSONB(c.Refs)
+	rangesByCriteria := map[string]CPERange{}
+	for _, r := range c.Ranges {
+		rangesByCriteria[r.Criteria] = r
+	}
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO vuln_cves
 		(cve_id, source, title, description, severity, cvss_score, cvss_vector,
 		 published_at, modified_at, cpe_criteria, refs, synced_at)
@@ -68,13 +83,25 @@ func (s *Store) UpsertCVE(ctx context.Context, c CVE) error {
 		if !ok {
 			continue
 		}
+		// 同 (cve,vendor,product) 的多条 cpeMatch 区间取并:每个边界字段
+		// 收集所有非空值,查询时任一边界命中即算匹配。
 		key := vendor + "\x00" + product
 		if seen[key] {
+			// 已有行:合并区间字段(不同 cpeMatch 可能给不同区间)。
+			s.mergeRange(ctx, c.ID, vendor, product, rangesByCriteria[cr])
 			continue
 		}
 		seen[key] = true
-		if _, err := s.db.ExecContext(ctx, `INSERT INTO vuln_cpe_products (cve_id, vendor, product)
-			VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, c.ID, vendor, product); err != nil {
+		r := rangesByCriteria[cr]
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO vuln_cpe_products
+			(cve_id, vendor, product, version_start_incl, version_start_excl, version_end_incl, version_end_excl)
+			VALUES ($1,$2,$3,NULLIF($4,''),NULLIF($5,''),NULLIF($6,''),NULLIF($7,''))
+			ON CONFLICT (cve_id, vendor, product) DO UPDATE SET
+			  version_start_incl = COALESCE(vuln_cpe_products.version_start_incl, NULLIF($4,'')),
+			  version_start_excl = COALESCE(vuln_cpe_products.version_start_excl, NULLIF($5,'')),
+			  version_end_incl   = COALESCE(vuln_cpe_products.version_end_incl,   NULLIF($6,'')),
+			  version_end_excl   = COALESCE(vuln_cpe_products.version_end_excl,   NULLIF($7,''))`,
+			c.ID, vendor, product, r.StartIncluding, r.StartExcluding, r.EndIncluding, r.EndExcluding); err != nil {
 			return fmt.Errorf("index cpe %s: %w", c.ID, err)
 		}
 	}
@@ -114,6 +141,9 @@ type VulnHit struct {
 	// version 非空且出现在某条 criteria 的版本字段里时置位——粗筛信号，
 	// 版本是否真正落在影响区间由 LLM 结合 criteria 判断。
 	VersionSeen bool `json:"version_seen_in_criteria"`
+	// VersionInRange 三态:nil=无法判断(无结构化区间);true/false=结构化区间
+	// 判定结果(任一 cpeMatch 区间命中即 true)。
+	VersionInRange *bool `json:"version_in_range,omitempty"`
 }
 
 // SearchVulns 按组件名（可带厂商限定）检索已知漏洞。product 匹配 CPE product
@@ -139,7 +169,8 @@ SELECT c.cve_id, c.severity, c.cvss_score, c.kev, COALESCE(c.published_at::text,
        COALESCE((
          SELECT string_agg(DISTINCT p.vendor || '/' || p.product, ', ')
          FROM vuln_cpe_products p WHERE p.cve_id = c.cve_id AND p.product ILIKE $1
-       ), '') AS matched
+       ), '') AS matched,
+       MIN(p.product) AS hit_product
 FROM vuln_cves c
 JOIN vuln_cpe_products p ON p.cve_id = c.cve_id AND p.product ILIKE $1
                         AND ($2 = '' OR p.vendor ILIKE '%' || $2 || '%')
@@ -157,8 +188,8 @@ LIMIT $4`, args...)
 	for rows.Next() {
 		var h VulnHit
 		var kevRow bool
-		var matched string
-		if err := rows.Scan(&h.CVEID, &h.Severity, &h.Score, &h.KEV, &h.Published, &h.Title, &kevRow, &matched); err != nil {
+		var matched, hitProduct string
+		if err := rows.Scan(&h.CVEID, &h.Severity, &h.Score, &h.KEV, &h.Published, &h.Title, &kevRow, &matched, &hitProduct); err != nil {
 			return nil, err
 		}
 		if kevRow {
@@ -169,6 +200,11 @@ LIMIT $4`, args...)
 		}
 		if version != "" && s.criteriaContains(ctx, h.CVEID, version) {
 			h.VersionSeen = true
+		}
+		if version != "" {
+			if in, comparable := s.VersionInRange(ctx, h.CVEID, hitProduct, version); comparable {
+				h.VersionInRange = &in
+			}
 		}
 		out = append(out, h)
 	}
@@ -360,4 +396,125 @@ func splitUnescapedColons(s string) []string {
 
 func unescape(s string) string {
 	return strings.ReplaceAll(s, `\`, "")
+}
+
+// mergeRange folds another cpeMatch's range bounds into an existing index row
+// (different cpeMatch entries for the same product may carry different bounds;
+// query semantics are "any bound set matches").
+func (s *Store) mergeRange(ctx context.Context, cveID, vendor, product string, r CPERange) {
+	if r == (CPERange{}) {
+		return
+	}
+	_, _ = s.db.ExecContext(ctx, `UPDATE vuln_cpe_products SET
+		  version_start_incl = COALESCE(version_start_incl, NULLIF($4,'')),
+		  version_start_excl = COALESCE(version_start_excl, NULLIF($5,'')),
+		  version_end_incl   = COALESCE(version_end_incl,   NULLIF($6,'')),
+		  version_end_excl   = COALESCE(version_end_excl,   NULLIF($7,''))
+		WHERE cve_id=$1 AND vendor=$2 AND product=$3`,
+		cveID, vendor, product, r.StartIncluding, r.StartExcluding, r.EndIncluding, r.EndExcluding)
+}
+
+// VersionInRange reports whether version falls inside ANY stored range for
+// (cve, product). Returns (false, false) when no comparable range exists —
+// "not applicable" is distinct from "not in range".
+func (s *Store) VersionInRange(ctx context.Context, cveID, product, version string) (in, comparable bool) {
+	rows, err := s.db.QueryContext(ctx, `SELECT version_start_incl, version_start_excl,
+		version_end_incl, version_end_excl FROM vuln_cpe_products
+		WHERE cve_id=$1 AND product=$2
+		  AND (version_start_incl IS NOT NULL OR version_start_excl IS NOT NULL
+		    OR version_end_incl IS NOT NULL OR version_end_excl IS NOT NULL)`,
+		strings.ToUpper(strings.TrimSpace(cveID)), strings.ToLower(strings.TrimSpace(product)))
+	if err != nil {
+		return false, false
+	}
+	defer rows.Close()
+	any := false
+	for rows.Next() {
+		var si, se, ei, ee *string
+		if err := rows.Scan(&si, &se, &ei, &ee); err != nil {
+			continue
+		}
+		any = true
+		ok := true
+		for _, b := range []struct {
+			bound *string
+			cmp   int // -1: version must be > bound (excl) / >= (incl) → flip
+		}{} {
+			_ = b
+		}
+		if si != nil && cmpVersions(version, *si) < 0 {
+			ok = false
+		}
+		if se != nil && cmpVersions(version, *se) <= 0 {
+			ok = false
+		}
+		if ei != nil && cmpVersions(version, *ei) > 0 {
+			ok = false
+		}
+		if ee != nil && cmpVersions(version, *ee) >= 0 {
+			ok = false
+		}
+		if ok {
+			return true, true
+		}
+	}
+	return false, any
+}
+
+// cmpVersions compares dotted version strings leniently: numeric segments
+// numerically, others lexically; missing segments count as 0 ("1.2" == "1.2.0").
+// Returns -1/0/1. Non-numeric trailing suffixes ("1.0b3") sort below the bare
+// number ("1.0"), matching common pre-release semantics closely enough for
+// advisory ranges.
+func cmpVersions(a, b string) int {
+	a = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(a), "v"))
+	b = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(b), "v"))
+	as := strings.Split(a, ".")
+	bs := strings.Split(b, ".")
+	for i := 0; i < len(as) || i < len(bs); i++ {
+		av, bv := "0", "0" // missing segments count as 0 ("1.2" == "1.2.0")
+		if i < len(as) {
+			av = as[i]
+		}
+		if i < len(bs) {
+			bv = bs[i]
+		}
+		if c := cmpSegment(av, bv); c != 0 {
+			return c
+		}
+	}
+	return 0
+}
+
+func cmpSegment(a, b string) int {
+	an, aErr := strconv.Atoi(a)
+	bn, bErr := strconv.Atoi(b)
+	aNum, bNum := aErr == nil, bErr == nil
+	switch {
+	case aNum && bNum:
+		return cmpInt(an, bn)
+	case aNum:
+		return 1 // numeric segment outranks suffixed ("1" > "1b3" handled per-field)
+	case bNum:
+		return -1
+	default:
+		// both non-numeric: strip trailing alpha for numeric compare then lex
+		an2, aErr2 := strconv.Atoi(strings.TrimRight(a, "abcdefghijklmnopqrstuvwxyz"))
+		bn2, bErr2 := strconv.Atoi(strings.TrimRight(b, "abcdefghijklmnopqrstuvwxyz"))
+		if aErr2 == nil && bErr2 == nil && an2 != bn2 {
+			return cmpInt(an2, bn2)
+		}
+		return strings.Compare(a, b)
+	}
+}
+
+func cmpInt(a, b int) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
 }

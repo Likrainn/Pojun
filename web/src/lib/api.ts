@@ -825,6 +825,13 @@ export const api = {
   // 渠道是多实例资源（同一类型可配多个机器人、各有过滤规则），因此独立成组，
   // 不塞进扁平的 settings 键值里。
   notifyMeta: () => get<NotificationMeta>(`/notify/meta`),
+  vulnintelStatus: () =>
+    get<{
+      enabled: boolean;
+      nuclei_templates_dir: string;
+      sources: { source: string; last_sync_at?: string; cursor: string; total_synced: number; last_error: string; enabled: boolean }[];
+      counts: { cves: number; kev: number; pocs: number };
+    }>(`/vulnintel/status`),
   notifyChannels: () =>
     get<{ channels: NotificationChannel[] }>(`/notify/channels`).then((r) => arr(r.channels)),
   notifyCreateChannel: (payload: {

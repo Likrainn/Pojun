@@ -77,8 +77,12 @@ type nvdMetric struct {
 type nvdConfiguration struct {
 	Nodes []struct {
 		CPEMatch []struct {
-			Vulnerable bool   `json:"vulnerable"`
-			Criteria   string `json:"criteria"`
+			Vulnerable            bool   `json:"vulnerable"`
+			Criteria              string `json:"criteria"`
+			VersionStartIncluding string `json:"versionStartIncluding"`
+			VersionStartExcluding string `json:"versionStartExcluding"`
+			VersionEndIncluding   string `json:"versionEndIncluding"`
+			VersionEndExcluding   string `json:"versionEndExcluding"`
 		} `json:"cpeMatch"`
 	} `json:"nodes"`
 }
@@ -191,6 +195,16 @@ func ToCVE(w nvdWrapper) (CVE, bool) {
 				}
 				seen[m.Criteria] = true
 				out.Criteria = append(out.Criteria, m.Criteria)
+				if m.VersionStartIncluding != "" || m.VersionStartExcluding != "" ||
+					m.VersionEndIncluding != "" || m.VersionEndExcluding != "" {
+					out.Ranges = append(out.Ranges, CPERange{
+						Criteria:       m.Criteria,
+						StartIncluding: m.VersionStartIncluding,
+						StartExcluding: m.VersionStartExcluding,
+						EndIncluding:   m.VersionEndIncluding,
+						EndExcluding:   m.VersionEndExcluding,
+					})
+				}
 			}
 		}
 	}
