@@ -2050,5 +2050,8 @@ func (t *ToolSet) PlannerTools() []actool.CoreTool {
 		t.addTaskScope(),
 		// list_untested_assets：按需查本任务范围内未测资产(类型+分页)，自行决定补测。
 		t.listUntestedAssets(),
+		// search_vulns / get_vuln：识别出目标组件后查公开已知漏洞（NVD+KEV），
+		// 规划阶段把「有现成利用的方向」排进 todolist。
+		t.searchVulns(), t.getVuln(),
 	}
 }

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"github.com/chu0119/artex/guard"
 	"github.com/chu0119/artex/intercept"
 	"github.com/chu0119/artex/traffic"
+	"github.com/chu0119/artex/vulnintel"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
@@ -222,6 +224,7 @@ type Manager struct {
 	traffic     *traffic.Traffic       // process-wide recording proxy (may be nil)
 	enrich      *enrich.Engine         // engine-side asset auto-completion (DNS/HTTP)
 	interceptor *intercept.Interceptor // user-configured tool-call interception rules
+	vulnintel   *vulnintel.Store       // public CVE/KEV intel store (agent search_vulns reads it)
 
 	companyMu sync.Mutex // serializes task/company-scope commits with live handle registration
 	// taskStateMu preserves commit order between PostgreSQL lifecycle writes and
@@ -260,6 +263,11 @@ const (
 	// (http/https/socks5). Empty = direct. Distinct from web_search_proxy (which
 	// only routes the search backend) and the per-profile LLM proxy.
 	settingGlobalProxy = "global_proxy"
+	// 漏洞情报库（vulnintel）同步开关，默认开——同步自带限速、延迟启动与每轮上限，
+	// agent 的 search_vulns/get_vuln 读它；关闭只是停同步，已入库数据仍可查。
+	settingVulnIntelOn = "vulnintel_enabled"
+	// NVD API key（可选）：匿名 5 req/30s，配 key 50 req/30s，首次回填快 ~10 倍。
+	settingNvdApiKey = "nvd_api_key"
 	settingWorkers     = "workers"
 	settingLLMRecord   = "llm_record"
 	// LLM 轮询(故障转移)。默认关闭——开启后走「全局激活配置」的 agent 在当前配置
@@ -443,6 +451,16 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	// Reconcile the seeded browser MCP with the persisted capture state, so a
 	// restart with capture already on keeps Playwright routed through the proxy.
 	m.syncBrowserMCPProxy()
+	// 漏洞情报库：store 全局共享（agent 的 search_vulns/get_vuln 经包级注入读取）。
+	// 同步走独立 goroutine：延迟 90s 起跑避开启动风暴，默认每 6h 一轮；关闭开关只
+	// 停同步，已入库数据仍可查。
+	m.vulnintel = vulnintel.New(m.pg)
+	agent.SetVulnIntelStore(m.vulnintel)
+	if pg.GetBool(settingVulnIntelOn, true) {
+		go m.runVulnIntelSync()
+	} else {
+		log.Printf("[vulnintel] 同步已关闭（settings.%s=false），agent 工具将返回未启用", settingVulnIntelOn)
+	}
 	return m, nil
 }
 
@@ -764,6 +782,36 @@ func (m *Manager) ProxyCACert() string {
 		return ""
 	}
 	return m.traffic.CACertPath()
+}
+
+// runVulnIntelSync drives the periodic CVE/KEV sync. One pass per cycle; the
+// per-run ceiling (vulnintel.Config.MaxRuntime) bounds each pass, the cursor
+// resumes where the previous one stopped, so a slow first backfill simply
+// finishes over several cycles. The toggle is re-read each cycle so turning it
+// off in the UI takes effect without a restart. No shutdown channel: the
+// process exit reaps it, same as the traffic proxy goroutine.
+func (m *Manager) runVulnIntelSync() {
+	time.Sleep(90 * time.Second) // 避开启动风暴（LLM 链接、traffic proxy 起动期）
+	for {
+		if !m.pg.GetBool(settingVulnIntelOn, true) {
+			log.Printf("[vulnintel] 同步已关闭，进入待机")
+		} else {
+			key := strings.TrimSpace(os.Getenv("NVD_API_KEY"))
+			if v, ok, _ := m.pg.GetSetting(settingNvdApiKey); ok && strings.TrimSpace(v) != "" {
+				key = strings.TrimSpace(v)
+			}
+			cfg := vulnintel.Config{
+				NvdAPIKey: key,
+				ProxyURL:  m.GlobalProxy(),
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
+			if err := vulnintel.Run(ctx, m.vulnintel, cfg); err != nil {
+				log.Printf("[vulnintel] 本轮同步未完整完成: %v（游标已保留，下轮续跑）", err)
+			}
+			cancel()
+		}
+		time.Sleep(6 * time.Hour)
+	}
 }
 
 // GlobalProxy returns the configured global egress proxy URL (empty = direct).

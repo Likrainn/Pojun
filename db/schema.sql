@@ -1384,3 +1384,75 @@ CREATE INDEX IF NOT EXISTS idx_notification_deliveries_batch
     ON notification_deliveries(batch_id) WHERE batch_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_notification_deliveries_channel
     ON notification_deliveries(channel_id, id DESC);
+
+-- ============================================================================
+-- 漏洞情报库（vulnintel）：定期同步的公开 CVE/PoC 情报，供 agent 在识别目标
+-- 组件后直接检索已知漏洞与现成利用，而不是每次靠模型现想。
+-- 数据全部来自公开源（NVD / CISA KEV），同步走全局出口代理。
+-- ============================================================================
+
+-- CVE 主表：按 NVD 记录 upsert（cve_id 唯一）。kev 列由 CISA KEV feed 单独回填，
+-- 两路同步互不覆盖对方写的列。
+CREATE TABLE IF NOT EXISTS vuln_cves (
+    id             BIGSERIAL PRIMARY KEY,
+    cve_id         TEXT NOT NULL UNIQUE,
+    -- nvd = NVD 全量/增量记录；来源标记保留给后续 OSV 等第二来源合并。
+    source         TEXT NOT NULL DEFAULT 'nvd',
+    title          TEXT NOT NULL DEFAULT '',
+    description    TEXT NOT NULL DEFAULT '',
+    -- 由 CVSS 分数映射：CRITICAL/HIGH/MEDIUM/LOW/NONE/UNKNOWN（无评分时）。
+    severity       TEXT NOT NULL DEFAULT 'UNKNOWN',
+    cvss_score     DOUBLE PRECISION,
+    cvss_vector    TEXT NOT NULL DEFAULT '',
+    published_at   TIMESTAMPTZ,
+    modified_at    TIMESTAMPTZ,
+    -- NVD configurations 的 criteria 原文数组（cpe:2.3:... 字符串，含版本区间
+    -- 语法 versionEndExcluding 等）。由 LLM 在 search_vulns 结果上做版本语义
+    -- 判断——结构化区间匹配是后续批次的活。
+    cpe_criteria   JSONB,
+    refs           JSONB,
+    -- CISA KEV 在野利用标记与收录日期，kev.go 同步回填。
+    kev            BOOLEAN NOT NULL DEFAULT false,
+    kev_date_added TIMESTAMPTZ,
+    synced_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_vuln_cves_severity ON vuln_cves(severity);
+CREATE INDEX IF NOT EXISTS idx_vuln_cves_published ON vuln_cves(published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vuln_cves_kev ON vuln_cves(kev, published_at DESC) WHERE kev;
+
+-- 从 CPE criteria 提取的 (vendor, product) 倒排表：search_vulns 按 product 名
+-- 命中的索引。与 vuln_cves.cve_id 同生共死（upsert CVE 时先删后插）。
+CREATE TABLE IF NOT EXISTS vuln_cpe_products (
+    cve_id  TEXT NOT NULL,
+    vendor  TEXT NOT NULL DEFAULT '',
+    product TEXT NOT NULL,
+    PRIMARY KEY (cve_id, vendor, product)
+);
+CREATE INDEX IF NOT EXISTS idx_vuln_cpe_product ON vuln_cpe_products(product);
+
+-- PoC/利用聚合（第二批填充；表先落，get_poc 工具后续接入）。
+CREATE TABLE IF NOT EXISTS vuln_pocs (
+    id        BIGSERIAL PRIMARY KEY,
+    cve_id    TEXT NOT NULL,
+    -- github / exploit-db / nuclei …
+    source    TEXT NOT NULL,
+    url       TEXT NOT NULL,
+    title     TEXT NOT NULL DEFAULT '',
+    -- poc / exploit / template / advisory
+    kind      TEXT NOT NULL DEFAULT 'poc',
+    stars     INTEGER NOT NULL DEFAULT 0,
+    synced_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (source, url)
+);
+CREATE INDEX IF NOT EXISTS idx_vuln_pocs_cve ON vuln_pocs(cve_id);
+
+-- 同步水位：每个数据源一行。cursor 存 NVD lastModStartDate（ISO8601），
+-- KEV 无游标语义（全量覆盖），cursor 留空。
+CREATE TABLE IF NOT EXISTS vuln_sync_state (
+    source        TEXT PRIMARY KEY,
+    last_sync_at  TIMESTAMPTZ,
+    cursor        TEXT NOT NULL DEFAULT '',
+    total_synced  BIGINT NOT NULL DEFAULT 0,
+    last_error    TEXT NOT NULL DEFAULT '',
+    enabled       BOOLEAN NOT NULL DEFAULT true
+);

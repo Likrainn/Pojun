@@ -655,6 +655,9 @@ func (t *ToolSet) WorkerTools() []actool.CoreTool {
 		t.searchAllWorkerTraces(), t.getWorkerTrace(),
 		// node_detail：worker 拿到 intent_id/节点 id 后可查该节点完整详情（配合上面的回看）。
 		t.nodeDetail(),
+		// search_vulns / get_vuln：worker 识别出目标组件与版本后直接查已知漏洞与
+		// 影响区间——公开情报优先于模型现想 payload。
+		t.searchVulns(), t.getVuln(),
 		// 以下工具仍【不给】worker，只留给 planner/main（读上下文、跨 work 复盘是规划职责，
 		// worker 只做单条意图的执行与写回）：list_facts / list_companies / list_worker_traces。
 	}
@@ -678,6 +681,8 @@ func (t *ToolSet) MainAgentTools() []actool.CoreTool {
 		t.addTaskScope(),
 		// list_untested_assets：按需查本任务范围内未测资产(类型+分页)，自行决定补测。
 		t.listUntestedAssets(),
+		// search_vulns / get_vuln：人在环路上也可直接查公开已知漏洞情报。
+		t.searchVulns(), t.getVuln(),
 	}
 }
 
