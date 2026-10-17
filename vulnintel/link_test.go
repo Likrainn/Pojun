@@ -108,17 +108,29 @@ func TestEndToEnd(t *testing.T) {
 	if err := st.MarkKEV(ctx, cveID, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	// 任务挂链:Matches 按 (资产×任务) 生成,无任务的资产只进 MatchedAssets。
+	task, err := st.db.CreateTask("intel link test", "verify asset-vuln linking", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = st.db.Exec(`DELETE FROM task_asset_links WHERE task_id=$1`, task.ID) })
+	t.Cleanup(func() { _ = st.db.DeleteTask(task.ID) })
+	if _, err := st.db.Exec(`INSERT INTO task_asset_links(task_id, asset_id, source, source_summary)
+		VALUES ($1,$2,'agent','test fixture')`, task.ID, realAsset); err != nil {
+		t.Fatal(err)
+	}
+
 	got, err := st.LinkAssetsToVulns(ctx, time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
 	found := false
 	for _, m := range got.Matches {
-		if m.CVEID == cveID {
+		if m.CVEID == cveID && m.TaskID == task.ID {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("expected match for %s, got %+v (scanned=%d matched=%d)", cveID, got.Matches, got.ScannedAssets, got.MatchedAssets)
+		t.Fatalf("expected match for %s task=%d, got %+v (scanned=%d matched=%d)", cveID, task.ID, got.Matches, got.ScannedAssets, got.MatchedAssets)
 	}
 }

@@ -196,8 +196,8 @@ LIMIT 500`, since)
 		Tasks []int64
 	}
 	aRows, err := s.db.QueryContext(ctx, `
-SELECT a.id, a.technologies,
-       COALESCE((SELECT array_agg(DISTINCT l.task_id) FROM task_asset_links l WHERE l.asset_id = a.id), '{}')
+SELECT a.id, COALESCE(array_to_json(a.technologies)::text, '[]'),
+       COALESCE((SELECT array_to_json(array_agg(DISTINCT l.task_id)) FROM task_asset_links l WHERE l.asset_id = a.id), '[]')
 FROM assets a WHERE a.type='service'`)
 	if err != nil {
 		return nil, fmt.Errorf("query assets: %w", err)
@@ -228,10 +228,14 @@ FROM assets a WHERE a.type='service'`)
 			if len(toks) == 0 {
 				continue
 			}
+			log.Printf("[vulnintel][debug] asset=%d tech=%q toks=%v", a.ID, tech, toks)
 			for product, cs := range byProduct {
-				for _, pt := range cpeTokens(product) {
+				pts := cpeTokens(product)
+				log.Printf("[vulnintel][debug]   product=%q cpeToks=%v cves=%d", product, pts, len(cs))
+				for _, pt := range pts {
 					for _, tok := range toks {
 						if tok == pt {
+							log.Printf("[vulnintel][debug]   HIT tok=%s", tok)
 							hitCVEs = append(hitCVEs, cs...)
 							break
 						}
