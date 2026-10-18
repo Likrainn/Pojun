@@ -10,6 +10,7 @@ import (
 	acperm "github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 	"github.com/chu0119/artex/db"
+	"github.com/chu0119/artex/hosttools"
 )
 
 // compactIntents distills intents to {id, summary, state, asset_ids, parents,
@@ -504,6 +505,9 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 	if t.ts != nil && t.taskID > 0 {
 		out["stall"] = t.stallOverview()
 	}
+	// 宿主工具体检:本机 PATH 可直接经 Bash 调用的工具(可用/缺失+安装提示),
+	// 派意图选手段以家底为准——二进制部署形态下系统里有什么就能用什么。
+	out["tools"] = hosttools.Summary()
 	// cold-digest §6.1: 折叠冷区的 digest body，按最新成员时间降序取前 N；被截的更旧 digest
 	// 只给裸 id（仍可 expand_digest 展开），避免冷区唯一出口被无限拉长。
 	const coldDigestsCap = 15

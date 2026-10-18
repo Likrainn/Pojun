@@ -19,6 +19,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Autumn-27/norma/llm"
+	actool "github.com/Autumn-27/norma/tool"
+	"github.com/Autumn-27/norma/transcript"
 	"github.com/chu0119/artex/agent"
 	"github.com/chu0119/artex/db"
 	"github.com/chu0119/artex/intercept"
@@ -26,9 +29,6 @@ import (
 	"github.com/chu0119/artex/llmrec"
 	"github.com/chu0119/artex/report"
 	"github.com/chu0119/artex/traffic"
-	"github.com/Autumn-27/norma/llm"
-	actool "github.com/Autumn-27/norma/tool"
-	"github.com/Autumn-27/norma/transcript"
 )
 
 // BuildVersion is the backend application version, injected from cmd/artex at
@@ -816,6 +816,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/report", s.getReport)
 	mux.HandleFunc("GET /api/report/export", s.exportTaskDocx)
 	mux.HandleFunc("GET /api/findings/{id}/export", s.exportFindingDocx)
+	mux.HandleFunc("GET /api/tools/inventory", s.toolsInventory)
 	mux.HandleFunc("GET /api/chat/mentions", s.searchChatMentions)
 	mux.HandleFunc("POST /api/chat", s.chat)
 	mux.HandleFunc("POST /api/chat/upload", s.chatUpload) // 方式1 文件上传:落到会话/任务工作目录 uploads/
@@ -3400,7 +3401,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		NotifyDigestMins *int    `json:"notify_digest_interval_min"`
 		// 漏洞情报/回连:对外可达地址说明与端口映射说明(自由文本,net_context
 		// 工具读取展示给 agent)。null=不改,空串=清空。
-		EgressHint   *string `json:"egress_hint"`
+		EgressHint    *string `json:"egress_hint"`
 		EgressPortMap *string `json:"egress_port_map"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

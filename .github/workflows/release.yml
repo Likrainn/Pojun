@@ -12,8 +12,8 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -40,8 +40,8 @@ jobs:
           - { goos: darwin, goarch: arm64 }
           - { goos: windows, goarch: amd64 }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
           cache: true
@@ -123,7 +123,7 @@ jobs:
     needs: [binaries, docker-cred-check]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4 # 取 Dockerfile 与 skills/
+      - uses: actions/checkout@v5 # 取 Dockerfile 与 skills/
       - uses: actions/download-artifact@v4
         with:
           name: bin-linux-amd64

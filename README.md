@@ -73,23 +73,37 @@ AI 自主渗透测试系统（Go 后端 + Next.js 前端）
 ## 安装
 
 > 依赖数据库 **PostgreSQL**；探索需配置 **LLM**（`ANTHROPIC_API_KEY` 或 `OPENAI_API_KEY`，也可在 UI 里配）。
+>
+> **部署形态怎么选**：生产服务器/长期使用 → **方式一(部署脚本,二进制+systemd,主推)**；本地快速体验/不想碰数据库 → 方式三(Docker 全家桶)；其余场景见方式二/四。
 
-### 方式一：一键安装脚本（推荐）
+### 方式一：Linux 服务器部署脚本（推荐——二进制 + systemd）
+
+免 Docker,直接装进系统:预编译二进制 + 系统 PostgreSQL 自动建库 + systemd 常驻,幂等重跑即升级。**二进制形态下宿主装的渗透工具(nmap/sqlmap/nuclei…)ARTEX 经 Bash 直接调用**,Web「系统 → 宿主环境」页可查家底:
 
 ```bash
 git clone https://github.com/chu0119/ARTEX.git
 cd ARTEX
-./install.sh
+sudo ./deploy-linux.sh                 # 安装/升级
+sudo ./deploy-linux.sh --with-tools   # 顺装常用渗透工具集(nmap/sqlmap/hydra/nuclei 等)
 ```
 
-脚本会：检测 / 自动安装 Docker → 让你选 **① 全部 Docker** 或 **② 本地编译运行**：
+指定版本 `sudo VER=v0.3.18 ./deploy-linux.sh`,自定义目录 `sudo ARTX_DIR=/opt/artex ./deploy-linux.sh`。详见脚本头部注释。
 
-- **① 全部 Docker**：填一个 Postgres 密码（可回车随机）→ 自动写 `.env` → `docker compose up -d`。
-- **② 本地运行**：选数据库（连已有 / 用 Docker 起一个）→ 生成 `config.json` → `go` 编译内嵌单二进制 → 启动。
+### 方式二：下载预编译二进制（Releases）
 
-装好后打开 **http://localhost:8787**（首次进入 `/setup` 设置管理员密码）。
+到 [Releases](https://github.com/chu0119/ARTEX/releases) 下载对应平台的 zip，解压后得到 `artex` + `start.sh`（Windows 为 `start.bat`）+ `skills/` + `config.example.json`：
 
-### 方式二：Docker Compose（手动）
+```bash
+cp config.example.json config.json   # 填好 database 连接
+./start.sh                           # → http://localhost:8787
+```
+
+> 请用 `start.sh` / `start.bat` 启动，而不是直接跑 `./artex`。它是个守护脚本：程序退出后按退出码决定是否重新拉起，**页面上的[一键更新](#方式一页面一键更新推荐)靠它完成换装**。直接运行 `./artex` 时更新完就不会被拉起了。
+> 后台常驻：`nohup ./start.sh >artex.log 2>&1 &`。
+
+### 方式三：Docker Compose（开箱全家桶）
+
+零配置体验:镜像内置常用工具(nuclei 等),数据卷持久化:
 
 ```bash
 git clone https://github.com/chu0119/ARTEX.git
@@ -106,19 +120,22 @@ docker compose up -d          # 拉取 xingchuan1314/artex 镜像 + postgres
 `/message?sessionId=...` 接收 JSON-RPC 请求；配置时将 URL 填为 `/sse`，请求头按
 `Authorization=Bearer <token>` 填写。
 
-### 方式三：下载预编译二进制（Releases）
-
-到 [Releases](https://github.com/chu0119/ARTEX/releases) 下载对应平台的 zip，解压后得到 `artex` + `start.sh`（Windows 为 `start.bat`）+ `skills/` + `config.example.json`：
+### 方式四：一键安装脚本（源码/Docker 交互选择）
 
 ```bash
-cp config.example.json config.json   # 填好 database 连接
-./start.sh                           # → http://localhost:8787
+git clone https://github.com/chu0119/ARTEX.git
+cd ARTEX
+./install.sh
 ```
 
-> 请用 `start.sh` / `start.bat` 启动，而不是直接跑 `./artex`。它是个守护脚本：程序退出后按退出码决定是否重新拉起，**页面上的[一键更新](#方式一页面一键更新推荐)靠它完成换装**。直接运行 `./artex` 时更新完就不会被拉起了。
-> 后台常驻：`nohup ./start.sh >artex.log 2>&1 &`。
+脚本会：检测 / 自动安装 Docker → 让你选 **① 全部 Docker** 或 **② 本地编译运行**：
 
-### 方式四：从源码编译单二进制
+- **① 全部 Docker**：填一个 Postgres 密码（可回车随机）→ 自动写 `.env` → `docker compose up -d`。
+- **② 本地运行**：选数据库（连已有 / 用 Docker 起一个）→ 生成 `config.json` → `go` 编译内嵌单二进制 → 启动。
+
+装好后打开 **http://localhost:8787**（首次进入 `/setup` 设置管理员密码）。
+
+### 方式五：从源码编译单二进制
 
 ```bash
 # 1) 前端静态导出
@@ -130,7 +147,7 @@ CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
 ./start.sh
 ```
 
-### 方式五：构建跨平台 Release 压缩包
+### 方式六：构建跨平台 Release 压缩包
 
 `build.sh` 会先构建并嵌入前端，再使用 Go linker 去除调试信息，并将发布文件压缩为 zip。Release 模式默认生成 Linux amd64/arm64、macOS amd64/arm64 和 Windows amd64 的 zip 包：
 

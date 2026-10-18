@@ -843,6 +843,13 @@ export const api = {
       sources: { source: string; last_sync_at?: string; cursor: string; total_synced: number; last_error: string; enabled: boolean }[];
       counts: { cves: number; kev: number; pocs: number };
     }>(`/vulnintel/status`),
+  // 宿主工具体检:本机 PATH 里的渗透工具可用性(二进制部署形态的家底)
+  toolsInventory: () =>
+    get<{
+      tools: { name: string; bin: string; available: boolean; purpose: string; install?: string }[];
+      summary: { available: string[]; missing: { name: string; install: string }[]; hint: string };
+      deploy_mode: "docker" | "host";
+    }>(`/tools/inventory`),
   notifyChannels: () =>
     get<{ channels: NotificationChannel[] }>(`/notify/channels`).then((r) => arr(r.channels)),
   notifyCreateChannel: (payload: {

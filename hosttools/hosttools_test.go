@@ -1,0 +1,86 @@
+package hosttools
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+func TestInventoryCoversCatalog(t *testing.T) {
+	inv := Inventory()
+	if len(inv) != 22 {
+		t.Fatalf("目录应有 22 项,得到 %d", len(inv))
+	}
+	// curl 在任何测试环境都该存在(Git/CI 镜像自带),用它验证探测为真
+	foundCurl := false
+	for _, t2 := range inv {
+		if t2.Bin == "" {
+			t.Errorf("%s: Bin 未回填", t2.Name)
+		}
+		if t2.Name == "curl" {
+			foundCurl = true
+			if !t2.Available {
+				t.Error("curl 应被探测为可用")
+			}
+			if t2.Install != "" {
+				t.Error("可用工具不应带安装提示")
+			}
+		}
+	}
+	if !foundCurl {
+		t.Fatal("目录里没有 curl")
+	}
+}
+
+func TestSummaryShape(t *testing.T) {
+	s := Summary()
+	avail, ok := s["available"].([]string)
+	if !ok || len(avail) == 0 {
+		t.Fatalf("available 应为非空字符串数组: %#v", s["available"])
+	}
+	missing, ok := s["missing"].([]map[string]string)
+	if !ok {
+		t.Fatalf("missing 类型不对: %#v", s["missing"])
+	}
+	for _, m := range missing {
+		if m["install"] == "" {
+			t.Errorf("缺失工具 %s 应带安装提示", m["name"])
+		}
+	}
+	if s["hint"] == "" {
+		t.Fatal("hint 不能为空")
+	}
+}
+
+func TestSummaryTextMarksAvailability(t *testing.T) {
+	// 用一个临时 PATH 只含空目录,让全部工具缺失(不依赖环境)
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	txt := SummaryText()
+	if !containsAll(txt, "✗ nmap", "未安装") {
+		t.Errorf("空 PATH 下应全部标记缺失: %s", txt)
+	}
+	// 放一个假 curl 进 PATH,应翻成可用(Windows 下 LookPath 只认 .exe 等可执行扩展)
+	name := "curl"
+	if runtime.GOOS == "windows" {
+		name = "curl.exe"
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	txt = SummaryText()
+	if !containsAll(txt, "✓ curl") {
+		t.Errorf("假 curl 应被标记可用: %s", txt)
+	}
+}
+
+func containsAll(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
+}
