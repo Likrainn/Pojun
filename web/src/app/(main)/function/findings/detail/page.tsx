@@ -5,7 +5,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 
-import { ArrowLeftIcon, ArrowUpRightIcon, ShieldAlertIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowUpRightIcon, FileDownIcon, ShieldAlertIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { CopyButton } from "@/components/copy-button";
@@ -145,6 +145,9 @@ function FindingDetailInner() {
           </h1>
           <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-muted-foreground text-xs">#{finding.id}</code>
           <Separator orientation="vertical" className="mx-1 h-4" />
+          <Button size="sm" variant="outline" onClick={() => api.downloadFindingDocx(finding.id)}>
+            <FileDownIcon /> 导出 Word
+          </Button>
           <StatusBadge domain="severity" value={finding.severity} dot />
           <StatusBadge domain="finding" value={finding.status} dot />
           {finding.inherited && finding.source_task_id && (

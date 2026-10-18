@@ -814,6 +814,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/proxypool", s.proxyPoolPut)
 	mux.HandleFunc("POST /api/settings/web-search/test", s.testWebSearch)
 	mux.HandleFunc("GET /api/report", s.getReport)
+	mux.HandleFunc("GET /api/report/export", s.exportTaskDocx)
+	mux.HandleFunc("GET /api/findings/{id}/export", s.exportFindingDocx)
 	mux.HandleFunc("GET /api/chat/mentions", s.searchChatMentions)
 	mux.HandleFunc("POST /api/chat", s.chat)
 	mux.HandleFunc("POST /api/chat/upload", s.chatUpload) // 方式1 文件上传:落到会话/任务工作目录 uploads/

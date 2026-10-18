@@ -890,6 +890,34 @@ export const api = {
     if (!r.ok) throw new Error(`report: ${r.status}`);
     return r.text();
   },
+  // 任务总报告 Word 导出(浏览器侧触发下载;需带 JWT)
+  downloadTaskDocx: async (task: string) => {
+    const token = getToken();
+    const r = await fetch(`/api/report/export${tq(task)}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!r.ok) throw new Error(`docx: ${r.status}`);
+    const blob = await r.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `artex-report-${task || "active"}-${new Date().toISOString().slice(0, 10)}.docx`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  },
+  // 单漏洞 Word 导出
+  downloadFindingDocx: async (id: number | string) => {
+    const token = getToken();
+    const r = await fetch(`/api/findings/${id}/export`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!r.ok) throw new Error(`docx: ${r.status}`);
+    const blob = await r.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `artex-finding-${id}-${new Date().toISOString().slice(0, 10)}.docx`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  },
   chatMentions: (kind: string, query: string, signal?: AbortSignal, cursor = "") =>
     http<{ items: ChatMention[]; next_cursor?: string }>(
       `/chat/mentions?${new URLSearchParams({ kind, q: query, cursor })}`,
