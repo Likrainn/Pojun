@@ -494,7 +494,6 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedWorkerReadToolsUnbind() // list_facts/list_companies/list_worker_traces 从 worker 默认解绑(一次性)
 	s.seedWorkerReadbackRebind()  // 修复旧迁移误删：把 search_all_worker_traces/get_worker_trace/node_detail 补绑回 worker(一次性)
 	s.seedAutoReportFindingBinding()
-	s.unbindGoalMetDefault()
 	s.reseedGoalsPrompt()             // goals 提示词加入「抽操作约束」步 → 旧库追加一版新默认(一次性)
 	s.reseedMainAgentPrompt()         // mainagent 提示词加入「目标达成后 add_intent 反问是否建目标」(一次性)
 	s.reseedPlannerPrompt()           // planner 提示词:重写「0 意图」正当理由 + 加量化验收核对(一次性)
@@ -544,23 +543,6 @@ func (s *Server) refreshBuiltinToolSchemas() {
 	}
 	_ = s.m.pg.SetSetting(flag, "true")
 	log.Printf("[tools] 已刷新 orchestration/platform 工具 schema 到代码默认(一次性)")
-}
-
-// unbindGoalMetDefault removes goal_met's default "planner" binding ONCE (guarded by
-// a settings flag), so existing DBs match the new default of NO agent. goal_met bypasses
-// per-goal prove_goal to declare the whole task done — powerful/risky and redundant with
-// the prove_goal→auto-complete path — so it ships unbound; users can re-bind it per agent
-// in the UI. A user's own binding to another agent is untouched (we only strip planner).
-func (s *Server) unbindGoalMetDefault() {
-	const flag = "goal_met_unbind_default_v1"
-	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
-		return
-	}
-	if err := s.m.pg.RemoveAgentFromTool("planner", "goal_met"); err != nil {
-		log.Printf("[tools] goal_met 解绑 planner 失败: %v", err)
-		return
-	}
-	_ = s.m.pg.SetSetting(flag, "true")
 }
 
 // reseedGoalsPrompt 把 goals 目标拆解器的提示词刷成【当前代码默认】——因为默认正文新增了
@@ -917,4 +899,15 @@ func (s *Server) seedAutoDefaultBindings() {
 		return
 	}
 	_ = s.m.pg.SetSetting(flag, "true")
+	// goal_met 默认绑 planner(收官门槛落地;起点未绑过的实例补上,已手动.unbind 的
+	// 会被此把加回——可接受:该设置名为 v4 的变更点,与 auto 的 v3 同语义)。
+	const goalFlag = "goal_met_planner_binding_v1"
+	if v, _, _ := s.m.pg.GetSetting(goalFlag); v != "true" {
+		if err := s.m.pg.AddAgentToToolBinding("planner", []string{"goal_met"}); err != nil {
+			log.Printf("[toolcatalog] goal_met 绑 planner 失败: %v", err)
+		} else {
+			_ = s.m.pg.SetSetting(goalFlag, "true")
+			log.Printf("[toolcatalog] goal_met 已默认绑定 planner(收官门槛)")
+		}
+	}
 }

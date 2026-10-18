@@ -2019,3 +2019,21 @@ func (s *ExplorationStore) ActivityByIDsForTerminalIntents(ids []int64) ([]Activ
 func (s *ExplorationStore) AddStandaloneFinding(taskID, nodeID int64, vulnclass, name, severity, summary, evidence, worker string, assetIDs []int64) (int64, error) {
 	return s.db.AddFinding(taskID, nodeID, vulnclass, name, severity, summary, evidence, worker, assetIDs)
 }
+
+// StallOverview 收官态势的字段(group activity round 边界 + 最近产出窗口)。
+// 由 agent 包的 stallOverview 调用,per-round 一次;数据都在本探索范围内,
+// 查询形状固定且便宜。
+func (s *ExplorationStore) StallOverview() (rounds, recentNew, openCnt int, err error) {
+	if err = s.db.QueryRow(`SELECT count(*) FROM activity
+		WHERE kind='round' AND exploration_id=$1`, s.expID).Scan(&rounds); err != nil {
+		return
+	}
+	if err = s.db.QueryRow(`SELECT count(*) FROM exploration_nodes
+		WHERE exploration_id=$1 AND kind IN ('fact','finding')
+		AND created_at > now() - interval '6 hours'`, s.expID).Scan(&recentNew); err != nil {
+		return
+	}
+	err = s.db.QueryRow(`SELECT count(*) FROM exploration_nodes
+		WHERE exploration_id=$1 AND kind='intent' AND state='open'`, s.expID).Scan(&openCnt)
+	return
+}

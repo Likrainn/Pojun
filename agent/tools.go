@@ -498,6 +498,12 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 		recentDone = recentDone[:recentDoneCap]
 	}
 	out["recent_done_intents"] = compactIntents(recentDone, parentsOf, yieldsOf)
+	// 收官态势(边际收益):最近 N 轮规划后,全任务有没有新的 fact/finding 产出。
+	// 连续 ≥3 轮零新产出且 frontier 空 → 提示考虑 finish_task 收官(预算保护:
+	// 这时候继续派大概率烧 token 无产出)。程序算好放在这里,planner 不用自己数。
+	if t.ts != nil && t.taskID > 0 {
+		out["stall"] = t.stallOverview()
+	}
 	// cold-digest §6.1: 折叠冷区的 digest body，按最新成员时间降序取前 N；被截的更旧 digest
 	// 只给裸 id（仍可 expand_digest 展开），避免冷区唯一出口被无限拉长。
 	const coldDigestsCap = 15
@@ -2064,4 +2070,28 @@ func (t *ToolSet) PlannerTools() []actool.CoreTool {
 		// 规划阶段把「有现成利用的方向」排进 todolist。
 		t.searchVulns(), t.getVuln(), t.getPoc(), t.scanWithNuclei(), t.netContext(),
 	}
+}
+
+// stallOverview 计算本任务的"边际收益"态势:最近的产出轮是第几轮、
+// 距今几轮无新 fact/finding(零产出即停)。读 activity 的 round/result
+// 流水在 SQL 一把算,per-turn 开销受探索图 EXPLAIN的可控范围。
+// 返回 nil 也有意义:任务还年轻,没到能谈收官的规模。
+func (t *ToolSet) stallOverview() map[string]any {
+	rounds, recentNew, openCnt, err := t.ts.StallOverview()
+	if err != nil {
+		return nil
+	}
+	out := map[string]any{"planner_rounds": rounds}
+	if rounds < 5 {
+		// 前几轮还在打底,谈边际收益太早
+		return out
+	}
+	out["new_facts_findings_6h"] = recentNew
+	out["open_intents_now"] = openCnt
+	// 提示位:零新产出 + 无 open → 建议收官
+	if recentNew == 0 && openCnt == 0 {
+		out["hint"] = "最近 6 小时无新 fact/finding 且无 open 意图——边际收益可能已耗尽。若目标确已尽力," +
+			"考虑用 finish_task 收官(说明理由);仍有未测方向就继续派意图。"
+	}
+	return out
 }
