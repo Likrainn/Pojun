@@ -1292,6 +1292,16 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 				result.EvidenceNote = "漏洞已保存。Agent 自动绑定流量已关闭，可在页面人工关联流量。"
 			}
 		}
+		if recorded.Duplicate {
+			// 指纹命中:证据已合并进已有记录。硬闸语义必须讲清,否则模型会把
+			// "重复"理解成失败而换个说法再报一遍。
+			result.EvidenceNote = "★ 该漏洞此前已上报(finding_id=" + strconv.FormatInt(recorded.FindingID, 10) +
+				"),本次证据已【合并】进原记录——这不是失败,无需再次 report_finding,更不要换标题/类别重报。" +
+				"继续探索其它方向即可;若原记录的 severity 有变化,已在本次合并中更新。"
+			if len(recorded.Traffic.Bindings) == 0 {
+				result.EvidenceStatus = "merged"
+			}
+		}
 		raw, _ := json.Marshal(result)
 		return actool.Text(fmt.Sprintf("finding recorded: %d\n%s", recorded.NodeID, raw)), nil
 	})
@@ -2052,6 +2062,6 @@ func (t *ToolSet) PlannerTools() []actool.CoreTool {
 		t.listUntestedAssets(),
 		// search_vulns / get_vuln：识别出目标组件后查公开已知漏洞（NVD+KEV），
 		// 规划阶段把「有现成利用的方向」排进 todolist。
-		t.searchVulns(), t.getVuln(), t.getPoc(), t.scanWithNuclei(),
+		t.searchVulns(), t.getVuln(), t.getPoc(), t.scanWithNuclei(), t.netContext(),
 	}
 }

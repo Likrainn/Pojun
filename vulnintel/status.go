@@ -4,6 +4,7 @@ package vulnintel
 // 一次查询搞定,前端不需要拼多次请求。
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -39,4 +40,18 @@ func (s *Store) StatusSnapshot(ctx context.Context) map[string]any {
 		"sources": sources,
 		"counts":  counts,
 	}
+}
+
+// EgressHint 读取用户配置的回连可达地址说明(settings.egress_hint)。
+func (s *Store) EgressHint(ctx context.Context) string {
+	var v string
+	_ = s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key='egress_hint'`).Scan(&v)
+	return strings.TrimSpace(v)
+}
+
+// EgressPortMap 读取端口映射说明(settings.egress_port_map),如 "4444-4450:4444-4450"。
+func (s *Store) EgressPortMap(ctx context.Context) string {
+	var v string
+	_ = s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key='egress_port_map'`).Scan(&v)
+	return strings.TrimSpace(v)
 }

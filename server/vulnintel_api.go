@@ -4,6 +4,9 @@ package server
 
 import (
 	"net/http"
+	"strings"
+
+	pgdb "github.com/chu0119/artex/db"
 )
 
 func (s *Server) vulnintelStatus(w http.ResponseWriter, r *http.Request) {
@@ -20,4 +23,15 @@ func (s *Server) vulnintelStatus(w http.ResponseWriter, r *http.Request) {
 	st["enabled"] = pg.GetBool(settingVulnIntelOn, true)
 	st["nuclei_templates_dir"] = m.nucleiDir
 	writeJSON(w, 200, st)
+}
+
+// egressHint / egressPortMap 读回连配置(settings;读失败按空串处理)。
+func egressHint(pg *pgdb.DB) string {
+	v, _, _ := pg.GetSetting("egress_hint")
+	return strings.TrimSpace(v)
+}
+
+func egressPortMap(pg *pgdb.DB) string {
+	v, _, _ := pg.GetSetting("egress_port_map")
+	return strings.TrimSpace(v)
 }

@@ -3321,6 +3321,9 @@ func (s *Server) settingsPayload() map[string]any {
 		"notify_enabled":             s.m.pg.GetBool(settingNotifyEnabled, true),
 		"notify_public_base_url":     notifyPublicBaseURL(s.m.pg),
 		"notify_digest_interval_min": notifyDigestIntervalMin(s.m.pg),
+		// 漏洞情报/回连配置(net_context 工具读取展示给 agent)
+		"egress_hint":     egressHint(s.m.pg),
+		"egress_port_map": egressPortMap(s.m.pg),
 	}
 }
 
@@ -3393,6 +3396,10 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		NotifyEnabled    *bool   `json:"notify_enabled"`
 		NotifyBaseURL    *string `json:"notify_public_base_url"`
 		NotifyDigestMins *int    `json:"notify_digest_interval_min"`
+		// 漏洞情报/回连:对外可达地址说明与端口映射说明(自由文本,net_context
+		// 工具读取展示给 agent)。null=不改,空串=清空。
+		EgressHint   *string `json:"egress_hint"`
+		EgressPortMap *string `json:"egress_port_map"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, 400, err.Error())
@@ -3418,6 +3425,18 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// 推送全局项:投递引擎每轮重新读取,所以即时生效、无需重启。
+	if req.EgressHint != nil {
+		if err := s.m.pg.SetSetting("egress_hint", strings.TrimSpace(*req.EgressHint)); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.EgressPortMap != nil {
+		if err := s.m.pg.SetSetting("egress_port_map", strings.TrimSpace(*req.EgressPortMap)); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
 	if req.NotifyEnabled != nil {
 		if err := s.m.pg.SetBool(settingNotifyEnabled, *req.NotifyEnabled); err != nil {
 			writeErr(w, 500, err.Error())

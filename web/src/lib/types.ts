@@ -947,6 +947,9 @@ export interface Settings {
   notify_enabled?: boolean; // 推送总开关，默认开；用于维护期一键止血
   notify_public_base_url?: string; // 漏洞详情回链的外部访问地址；空=消息不带回链
   notify_digest_interval_min?: number; // 汇总模式周期（分钟），默认 30
+  // ---- 漏洞情报/回连（net_context 工具读取展示给 agent）----
+  egress_hint?: string; // 对外可达地址说明(公网 IP/宿主内网地址等,自由文本)
+  egress_port_map?: string; // 端口映射说明(容器端口→宿主端口)
 }
 
 // ---- 漏洞 IM 推送 ----

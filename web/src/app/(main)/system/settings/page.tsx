@@ -2,12 +2,13 @@
 
 import * as React from "react";
 
-import { CpuIcon, FlaskConicalIcon, KeyboardIcon, RadioTowerIcon, SearchIcon, ShieldAlertIcon } from "lucide-react";
+import { CpuIcon, FlaskConicalIcon, KeyboardIcon, NetworkIcon, RadioTowerIcon, SearchIcon, ShieldAlertIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -30,6 +31,9 @@ export default function SystemSettingsPage() {
   const [proxyInput, setProxyInput] = React.useState("");
   const [savingProxy, setSavingProxy] = React.useState(false);
   const [globalProxyInput, setGlobalProxyInput] = React.useState("");
+  const [egressHintInput, setEgressHintInput] = React.useState("");
+  const [egressPortMapInput, setEgressPortMapInput] = React.useState("");
+  const [savingEgress, setSavingEgress] = React.useState(false);
   const [savingGlobalProxy, setSavingGlobalProxy] = React.useState(false);
   const [testing, setTesting] = React.useState(false);
   const [loaded, setLoaded] = React.useState(false);
@@ -55,6 +59,8 @@ export default function SystemSettingsPage() {
     setTavilyKeySet(!!s.tavily_key_set);
     setProxyInput(s.web_search_proxy ?? "");
     setGlobalProxyInput(s.global_proxy ?? "");
+    setEgressHintInput((s as { egress_hint?: string }).egress_hint ?? "");
+    setEgressPortMapInput((s as { egress_port_map?: string }).egress_port_map ?? "");
     setPyInterp(s.python_interpreter ?? "");
     setWorkers(String(s.workers ?? 3));
     setInjectPlanner(s.constraints_inject_planner !== false);
@@ -232,6 +238,21 @@ export default function SystemSettingsPage() {
       .finally(() => setSavingGlobalProxy(false));
   };
 
+  const saveEgress = () => {
+    setSavingEgress(true);
+    api
+      .setSettings({
+        egress_hint: egressHintInput,
+        egress_port_map: egressPortMapInput,
+      })
+      .then((s) => {
+        apply(s);
+        toast.success("已保存回连配置（net_context 即时可见）");
+      })
+      .catch((e) => toast.error(`保存失败：${(e as Error).message}`))
+      .finally(() => setSavingEgress(false));
+  };
+
   // Run a real "test" search ("test") against the CURRENT form values (backend +
   // proxy + entered key), falling back to saved values server-side. Toasts result.
   const runTest = () => {
@@ -361,6 +382,50 @@ export default function SystemSettingsPage() {
             <p className="text-muted-foreground text-xs">
               {globalProxyInput.trim() ? "已配置 · 所有目标流量经此代理出网" : "未配置 · 目标流量直连出网"}
             </p>
+          </CardContent>
+        </Card>
+
+        <Card className="mb-4 break-inside-avoid md:mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <NetworkIcon className="size-4" />
+              回连配置（reverse shell / MSF）
+            </CardTitle>
+            <CardDescription>
+              告诉 Agent 对外<b>可达的地址与端口</b>。容器内运行时 agent 看到的是容器 IP，目标连不进来——
+              起监听前 Agent 会读 <code>net_context</code>，这里的配置就是它拿到的 LHOST/LPORT 依据。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <div>
+              <Label htmlFor="egress-hint" className="font-normal text-muted-foreground text-sm">
+                可达地址说明
+              </Label>
+              <Textarea
+                id="egress-hint"
+                className="mt-1 font-mono text-xs"
+                rows={3}
+                placeholder={`例：公网渗透 → LHOST=203.0.113.10（服务器公网 IP）\n内网渗透 → 宿主已接入目标网段，LHOST=192.168.1.5（eth0）\nMSF 走 msfconsole，handler 端口 4444-4450`}
+                value={egressHintInput}
+                onChange={(e) => setEgressHintInput(e.target.value)}
+              />
+            </div>
+            <div>
+              <Label htmlFor="egress-port-map" className="font-normal text-muted-foreground text-sm">
+                端口映射说明
+              </Label>
+              <Input
+                id="egress-port-map"
+                autoComplete="off"
+                className="font-mono text-xs"
+                placeholder="例：4444-4450（容器到宿主 1:1 已在 docker-compose 映射）"
+                value={egressPortMapInput}
+                onChange={(e) => setEgressPortMapInput(e.target.value)}
+              />
+            </div>
+            <Button type="button" onClick={saveEgress} disabled={!loaded || savingEgress}>
+              保存回连配置
+            </Button>
           </CardContent>
         </Card>
 

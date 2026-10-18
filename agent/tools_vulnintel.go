@@ -9,6 +9,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"strings"
 	"time"
 
@@ -203,6 +204,57 @@ func (t *ToolSet) scanWithNuclei() actool.CoreTool {
 				"run_with_bash": strings.Join(cmd.Args, " "),
 				"note": "用 Bash 工具执行上面这条命令(默认 10 分钟超时,超时会截断输出);" +
 					"输出为 JSONL,每行一个模板命中;空输出=无命中。发现真实漏洞后走 report_finding 走正常上报。",
+			})
+		},
+	)
+}
+
+// netContext 输出当前运行环境的网络上下文(网卡/路由/用户配置的回连信息),
+// 供 reverse shell / bind shell / MSF 的 LHOST/LPORT 决策。
+// 刻意不 exec ip 命令(镜像里 iproute2 不保证有),用 Go 原生枚举。
+func (t *ToolSet) netContext() actool.CoreTool {
+	return readTool(
+		"net_context",
+		"获取本机网络上下文:全部网卡 IP(容器内视角)、以及平台配置的【回连可达地址】。"+
+			"在容器里运行时,本机 IP 是容器内网地址,目标大概率连不进来——起 reverse shell / "+
+			"MSF handler 前【必须】先看本工具:用配置的公网 IP/宿主映射地址做 LHOST,端口用"+
+			"已映射的端口段;bind shell 或目标同网段时才可用本机内网 IP。",
+		obj(map[string]any{}),
+		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+			type iface struct {
+				Name string   `json:"name"`
+				IPs  []string `json:"ips"`
+			}
+			var ifaces []iface
+			addrs, err := net.Interfaces()
+			if err == nil {
+				for _, a := range addrs {
+					if a.Flags&net.FlagUp == 0 {
+						continue
+					}
+					addrs2, err := a.Addrs()
+					if err != nil || len(addrs2) == 0 {
+						continue
+					}
+					it := iface{Name: a.Name, IPs: []string{}}
+					for _, ad := range addrs2 {
+						it.IPs = append(it.IPs, ad.String())
+					}
+					ifaces = append(ifaces, it)
+				}
+			}
+			var hint, portMap string
+			if vulnintelStore != nil {
+				hint = vulnintelStore.EgressHint(ctx)
+				portMap = vulnintelStore.EgressPortMap(ctx)
+			}
+			return jsonResult(map[string]any{
+				"interfaces":          ifaces,
+				"egress_hint":         hint,
+				"egress_port_map":     portMap,
+				"note": "interfaces 是【容器内视角】,对外不可达;egress_hint 是平台配置的对外可达地址与映射说明。"+
+					"reverse shell 的 LHOST 用 hint 里的可达地址,监听端口必须在 port_map 声明过的映射范围内。" +
+					"hint 为空说明平台未配置——请用 add_hint 请求人工提供,不要拿容器 IP 盲目回连。",
 			})
 		},
 	)
