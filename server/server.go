@@ -25,7 +25,6 @@ import (
 	"github.com/chu0119/artex/agent"
 	"github.com/chu0119/artex/db"
 	"github.com/chu0119/artex/intercept"
-	"github.com/chu0119/artex/listener"
 	"github.com/chu0119/artex/llmpool"
 	"github.com/chu0119/artex/llmrec"
 	"github.com/chu0119/artex/report"
@@ -50,9 +49,6 @@ type Server struct {
 	// lm is the process-wide callback listener. It is initialized lazily so an
 	// installation that never needs a callback opens no extra socket or goroutine.
 	listenOnce     sync.Once
-	listenerMu     sync.Mutex
-	listenerClosed bool
-	lm             *listener.Manager
 
 	// concMu serializes concurrency-cap decisions (admission + reconcile) so a
 	// scheduler tick and an HTTP settings change / task creation can't both count
@@ -273,7 +269,6 @@ func (s *Server) Close() {
 	if s == nil {
 		return
 	}
-	s.closeListener()
 }
 
 // Restored deadline and worker loops must inherit the same context as new tasks,
