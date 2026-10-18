@@ -383,10 +383,14 @@ func RecordFindingTx(ctx context.Context, tx *sql.Tx, in RecordFindingInput, pre
 	}
 	// ── 同任务内指纹去重:同一 (vulnclass,name,assets) 视为同一漏洞的重复上报,
 	// 证据合并进已有记录而不是再插一行——"报了 A 又把 A 重新报一遍"在写入层被
-	// 硬性拦住,不依赖模型自觉。resolved/fixed/false_positive/ignored 已是终态
-	// 或人工结论,不参与合并(修复后再复现 = 值得新开一条;误报后再证实 = 翻案)。
+	// 硬性拦住,不依赖模型自觉。
+	// 仅对【带资产锚定】的上报启用:无资产锚定时无法区分"同一目标"与"两个
+	// 不同入口的同名漏洞",合并会误伤(如不同端口各一个 SQLi 都叫 SQL injection);
+	// 宁漏勿误,worker 正常上报都会带 asset_ids。
+	// resolved/fixed/false_positive/ignored 已是终态或人工结论,不参与合并
+	// (修复后再复现 = 值得新开一条;误报后再证实 = 翻案)。
 	fp := FindingFingerprint(in)
-	if in.TaskID > 0 && fp != "" {
+	if in.TaskID > 0 && fp != "" && len(in.AssetIDs) > 0 {
 		var (
 			dupeID     int64
 			dupeNode   int64
