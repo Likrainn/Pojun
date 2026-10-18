@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/chu0119/artex/db"
 	acperm "github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
+	"github.com/chu0119/artex/db"
 )
 
 // compactIntents distills intents to {id, summary, state, asset_ids, parents,
@@ -1224,7 +1224,7 @@ func (t *ToolSet) goalMet() actool.CoreTool {
 
 func (t *ToolSet) addFinding() actool.CoreTool {
 	return writeTool("report_finding", "记录确认的漏洞，用 evidence 提供命令输出、日志等可验证证据。任务上下文传当前 intent_id。返回的 finding_id 是独立漏洞记录 ID，finding_node_id 是探索节点 ID（第一行保留该节点编号）。", obj(map[string]any{
-		"vulnclass": str("漏洞类别"), "name": str("漏洞名称"), "severity": str("critical|high|medium|low"), "summary": str("发现摘要"),
+		"vulnclass": str("漏洞类别,【必须】从标准类别里选:" + db.VulnClassPromptText() + "。具体 CVE/漏洞编号写进 name,类别选「已知漏洞」;实在不属于任何一类才用「其他」"), "name": str("漏洞名称"), "severity": str("critical|high|medium|low"), "summary": str("发现摘要"),
 		"intent_id": idp("当前任务的意图 id"), "asset_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "受影响资产 id"},
 		"evidence":         str("证据/PoC 文本"),
 		"evidence_hint_id": idp("可选：本任务中对应此漏洞的提示节点 ID，自动携带其结构化 traffic_refs；不能引用继承提示或其他漏洞的提示"),
@@ -1468,7 +1468,7 @@ func (t *ToolSet) addOneGoal(it goalItem) (int64, error) {
 		return 0, fmt.Errorf("text 不能为空")
 	}
 	payload := map[string]any{"text": text}
-	if vc := strings.TrimSpace(it.VulnClass); vc != "" {
+	if vc := db.NormalizeVulnClass(it.VulnClass); vc != "" {
 		payload["vulnclass"] = vc
 	}
 	origin := t.worker
@@ -1491,11 +1491,11 @@ func (t *ToolSet) setGoals() actool.CoreTool {
 	return writeTool("set_goals",
 		"给【本任务】新增探索目标(goal)。目标=最终可交付/可核验的结果,不是攻击步骤或侦察动作。\n"+
 			"★优先批量:多个目标放进 goals 数组一次提交,返回 ids 与之等长同序(失败项 id=0,详情见 errors)。单条则省略 goals 直接给顶层 text。\n"+
-			"vulnclass 可选:对应漏洞类(如 SQLi/IDOR),业务逻辑类目标留空。目标是否达成由系统判定标记 met,本工具只负责新增。",
+			"vulnclass 可选:对应漏洞类,标准类别:"+db.VulnClassPromptText()+";业务逻辑类目标留空。目标是否达成由系统判定标记 met,本工具只负责新增。",
 		obj(map[string]any{
 			"goals":     map[string]any{"type": "array", "description": "【优先用这个】要新增的目标数组,按顺序处理。每个元素:text(必填,一个独立可验证的最终目标)+ vulnclass(可选)。返回 ids 与本数组等长、同序。", "items": map[string]any{"type": "object"}},
 			"text":      str("[单条] 一个独立可验证的最终目标"),
-			"vulnclass": str("[单条] 对应漏洞类(若明确),如 SQLi/IDOR;业务逻辑目标可留空"),
+			"vulnclass": str("[单条] 对应漏洞类(若明确),标准类别:" + db.VulnClassPromptText() + ";业务逻辑目标可留空"),
 		}),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
 			if t.ts == nil {

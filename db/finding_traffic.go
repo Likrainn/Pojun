@@ -389,6 +389,9 @@ func RecordFindingTx(ctx context.Context, tx *sql.Tx, in RecordFindingInput, pre
 	// 宁漏勿误,worker 正常上报都会带 asset_ids。
 	// resolved/fixed/false_positive/ignored 已是终态或人工结论,不参与合并
 	// (修复后再复现 = 值得新开一条;误报后再证实 = 翻案)。
+	// vulnclass 归一(变体写法→标准类别):写入即归一,聚合视图与指纹去重
+	// 都基于标准值——SQLi 与 SQL注入 从此是同一类别、同一指纹。
+	in.VulnClass = NormalizeVulnClass(in.VulnClass)
 	fp := FindingFingerprint(in)
 	if in.TaskID > 0 && fp != "" && len(in.AssetIDs) > 0 {
 		var (

@@ -109,3 +109,51 @@ func TestBuildTaskDocxAndFindingDocx(t *testing.T) {
 		t.Fatal("empty finding docx")
 	}
 }
+
+// TestTaskDocxAggregation 同类多主机上报在总报告里折叠:类别分布一行 +
+// 明细按类别分组(变体写法 SQLi/SQL注入 也要折进同一组)。
+func TestTaskDocxAggregation(t *testing.T) {
+	mk := func(id int64, class, sev string) *db.DBFinding {
+		return &db.DBFinding{
+			ID: id, VulnClass: class, Name: "MS17-010", Severity: sev,
+			Summary: "smb reachable", Evidence: "nmap -p445",
+			AssetIDs: []int64{id * 10}, CreatedAt: time.Now(),
+		}
+	}
+	findings := []*db.DBFinding{
+		mk(1, "永恒之蓝", "high"), mk(2, "CVE-2017-0144", "high"), mk(3, "已知漏洞", "high"),
+		mk(4, "SQLi", "critical"), mk(5, "sql注入", "medium"),
+		mk(6, "未授权访问", "low"),
+	}
+	in := TaskDocxInput{Title: "T", GeneratedAt: time.Now(), Findings: findings}
+	var buf bytes.Buffer
+	if err := BuildTaskDocx(in).Encode(&buf); err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc string
+	for _, f := range zr.File {
+		if f.Name == "word/document.xml" {
+			rc, _ := f.Open()
+			var b bytes.Buffer
+			_, _ = b.ReadFrom(rc)
+			rc.Close()
+			doc = b.String()
+		}
+	}
+	if doc == "" {
+		t.Fatal("no document.xml")
+	}
+	// 已知漏洞组(3 条,变体已折叠)排第一组;注入组(2 条)次之
+	for _, frag := range []string{
+		"2.1 已知漏洞(共 3 条)", "2.2 注入(共 2 条)", "2.3 未授权访问(共 1 条)",
+		"漏洞类别分布", "涉及资产数",
+	} {
+		if !strings.Contains(doc, frag) {
+			t.Errorf("document.xml missing %q", frag)
+		}
+	}
+}

@@ -39,8 +39,9 @@ func sevRankKey(f *db.DBFinding) int {
 }
 
 // BuildTaskDocx 渲染任务总报告:
-// 封面(标题/目标/时间) → 概览(资产分布 + 严重度分布表) → 漏洞明细(逐条 H2,
-// 按严重度降序;report 正文 Markdown 转纯文本段落 + evidence 代码块)。
+// 封面(标题/目标/时间) → 概览(资产分布 + 严重度分布 + 漏洞类别分布) →
+// 漏洞明细(按类别折叠分组,类内按严重度降序;report 正文 Markdown 转纯文本
+// 段落 + evidence 代码块)。同类漏洞×多主机的重复上报在类别层折叠呈现。
 func BuildTaskDocx(in TaskDocxInput) *Docx {
 	d := NewDocx()
 
@@ -84,35 +85,93 @@ func BuildTaskDocx(in TaskDocxInput) *Docx {
 		}
 	}
 	d.Table([]string{"严重度", "数量"}, rows)
+
+	// 漏洞类别分布(同类别多主机上报在这里折叠成一行——"永恒之蓝×16 主机"
+	// 在总览就是一个数字,不用翻 16 页明细)
+	if groups := groupByClass(in.Findings); len(groups) > 0 {
+		d.H2("漏洞类别分布")
+		rows := make([][]string, 0, len(groups))
+		for _, g := range groups {
+			rows = append(rows, []string{g.class, fmt.Sprint(len(g.items)), fmt.Sprint(len(g.assets))})
+		}
+		d.Table([]string{"漏洞类别", "条数", "涉及资产数"}, rows)
+	}
 	d.PageBreak()
 
-	// 漏洞明细(严重度降序,同类相邻)
-	sorted := append([]*db.DBFinding{}, in.Findings...)
-	sort.SliceStable(sorted, func(i, j int) bool { return sevRankKey(sorted[i]) < sevRankKey(sorted[j]) })
-
+	// 漏洞明细:按类别分组折叠(类内按严重度降序),类别按条数降序——
+	// 同一漏洞在多台主机上是多条记录,但阅读时按类别看,每类一段。
 	d.H1("二、漏洞明细")
-	for i, f := range sorted {
-		d.H2(fmt.Sprintf("%d. [%s] %s", i+1, SeverityCN(f.Severity), findingTitle(f)))
-		d.P(fmt.Sprintf("漏洞类别:%s", nz(f.VulnClass, "未分类")))
-		if len(f.AssetIDs) > 0 {
-			d.P(fmt.Sprintf("影响资产 id:%s", joinIDs(f.AssetIDs)))
+	groups := groupByClass(in.Findings)
+	for gi, g := range groups {
+		d.H2(fmt.Sprintf("2.%d %s(共 %d 条)", gi+1, g.class, len(g.items)))
+		for fi, f := range g.items {
+			d.H3(fmt.Sprintf("2.%d.%d [%s] %s", gi+1, fi+1, SeverityCN(f.Severity), findingTitle(f)))
+			d.P(fmt.Sprintf("漏洞类别:%s", nz(f.VulnClass, "未分类")))
+			if len(f.AssetIDs) > 0 {
+				d.P(fmt.Sprintf("影响资产 id:%s", joinIDs(f.AssetIDs)))
+			}
+			d.P(fmt.Sprintf("发现时间:%s · 发现者:%s", FormatTimeUTC(f.CreatedAt), nz(f.Worker, "-")))
+			if strings.TrimSpace(f.Summary) != "" {
+				d.H3("摘要")
+				d.P(f.Summary)
+			}
+			if body := strings.TrimSpace(f.Report); body != "" {
+				d.H3("详细报告")
+				writeMarkdownish(d, body)
+			}
+			if ev := strings.TrimSpace(f.Evidence); ev != "" {
+				d.H3("证据 / PoC")
+				d.Code(ev)
+			}
+			d.P("")
 		}
-		d.P(fmt.Sprintf("发现时间:%s · 发现者:%s", FormatTimeUTC(f.CreatedAt), nz(f.Worker, "-")))
-		if strings.TrimSpace(f.Summary) != "" {
-			d.H3("摘要")
-			d.P(f.Summary)
-		}
-		if body := strings.TrimSpace(f.Report); body != "" {
-			d.H3("详细报告")
-			writeMarkdownish(d, body)
-		}
-		if ev := strings.TrimSpace(f.Evidence); ev != "" {
-			d.H3("证据 / PoC")
-			d.Code(ev)
-		}
-		d.P("")
 	}
 	return d
+}
+
+// classGroup 同一漏洞类别的发现聚合(含去重资产集合)。
+// 归一用 db.NormalizeVulnClass:写入层已归一新记录,历史变体(SQLi vs 注入)
+// 在读取侧同样折叠,总报告不因旧数据开天窗。
+type classGroup struct {
+	class  string
+	items  []*db.DBFinding
+	assets map[int64]struct{}
+}
+
+func groupByClass(fs []*db.DBFinding) []classGroup {
+	idx := map[string]*classGroup{}
+	var order []string
+	for _, f := range fs {
+		c := db.NormalizeVulnClass(f.VulnClass)
+		if c == "" {
+			c = "未分类"
+		}
+		g, ok := idx[c]
+		if !ok {
+			g = &classGroup{class: c, assets: map[int64]struct{}{}}
+			idx[c] = g
+			order = append(order, c)
+		}
+		g.items = append(g.items, f)
+		for _, a := range f.AssetIDs {
+			g.assets[a] = struct{}{}
+		}
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		gi, gj := idx[order[i]], idx[order[j]]
+		// 条数降序,同条数按类别名字典序保证稳定
+		if len(gi.items) != len(gj.items) {
+			return len(gi.items) > len(gj.items)
+		}
+		return gi.class < gj.class
+	})
+	out := make([]classGroup, 0, len(order))
+	for _, c := range order {
+		g := idx[c]
+		sort.SliceStable(g.items, func(i, j int) bool { return sevRankKey(g.items[i]) < sevRankKey(g.items[j]) })
+		out = append(out, *g)
+	}
+	return out
 }
 
 // BuildFindingDocx 渲染单漏洞报告(复现步骤/证据/修复建议的自包含文档)。
