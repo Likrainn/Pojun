@@ -812,9 +812,18 @@ func (m *Manager) runVulnIntelSync() {
 			if v, ok, _ := m.pg.GetSetting(settingNvdApiKey); ok && strings.TrimSpace(v) != "" {
 				key = strings.TrimSpace(v)
 			}
+			// 同步出网代理回退链:全局代理 → 搜索代理(常见配置组合,搜索代理本来就
+			// 是"对外网可达"语义)→ 直连。被墙环境(如校园网)直连 cisa.gov 会吃
+			// 404 拦截页,KEV 整体失败——实测教训。
+			proxyURL := m.GlobalProxy()
+			if proxyURL == "" {
+				if v, ok, _ := m.pg.GetSetting(settingWebSearchProxy); ok {
+					proxyURL = strings.TrimSpace(v)
+				}
+			}
 			cfg := vulnintel.Config{
 				NvdAPIKey: key,
-				ProxyURL:  m.GlobalProxy(),
+				ProxyURL:  proxyURL,
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
 			if err := vulnintel.Run(ctx, m.vulnintel, cfg); err != nil {
