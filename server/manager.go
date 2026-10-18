@@ -284,6 +284,10 @@ const (
 	// agent(planner/worker/主 agent/对话)由 noa 接管上下文压缩,取代内置 compaction。
 	// 每 run 读一次,切换只影响之后启动的 run。
 	settingNoaCompaction = "noa_compaction"
+	// C2 (Command & Control) 功能开关，默认关。
+	settingC2Enabled = "c2_enabled"
+	// WebShell 功能开关，默认关。
+	settingWebShellEnabled = "web_shell_enabled"
 	// defaultWebSearchBackend is used when web search is on but no backend was picked.
 	defaultWebSearchBackend = "ddgs"
 	// deepSeekWebSearchBackend borrows the active LLM profile instead of its own
@@ -611,6 +615,61 @@ func (m *Manager) deepSeekSearchCreds() (baseURL, apiKey, model string) {
 	return p.BaseURL, p.APIKey, p.Model
 }
 
+
+// WebSearchEnabled reports whether web search is enabled.
+func (m *Manager) WebSearchEnabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.webSearchOn
+}
+
+// VulnintelEnabled reports whether the vulnerability intelligence sync is enabled.
+func (m *Manager) VulnintelEnabled() bool {
+	if m.pg == nil {
+		return false
+	}
+	return m.pg.GetBool(settingVulnIntelOn, true)
+}
+
+// SetVulnintelEnabled persists and applies the vulnintel toggle. Sync goroutine
+// checks this flag on each cycle, so the toggle takes effect on the next cycle.
+func (m *Manager) SetVulnintelEnabled(on bool) error {
+	return m.pg.SetBool(settingVulnIntelOn, on)
+}
+
+// ProxyPoolEnabled reports whether the proxy pool is configured and running.
+func (m *Manager) ProxyPoolEnabled() bool {
+	if m.traffic == nil {
+		return false
+	}
+	return m.traffic.ProxyPoolEnabled()
+}
+
+// C2Enabled reports whether C2 (Command & Control) functionality is enabled.
+func (m *Manager) C2Enabled() bool {
+	if m.pg == nil {
+		return false
+	}
+	return m.pg.GetBool(settingC2Enabled, false)
+}
+
+// SetC2Enabled persists and applies the C2 toggle.
+func (m *Manager) SetC2Enabled(on bool) error {
+	return m.pg.SetBool(settingC2Enabled, on)
+}
+
+// WebShellEnabled reports whether WebShell functionality is enabled.
+func (m *Manager) WebShellEnabled() bool {
+	if m.pg == nil {
+		return false
+	}
+	return m.pg.GetBool(settingWebShellEnabled, false)
+}
+
+// SetWebShellEnabled persists and applies the WebShell toggle.
+func (m *Manager) SetWebShellEnabled(on bool) error {
+	return m.pg.SetBool(settingWebShellEnabled, on)
+}
 // SetWebSearch persists and applies the web-search settings. braveKey, tavilyKey, and
 // proxy are each left untouched when nil (so toggling the switch doesn't wipe a saved
 // key/proxy; pass a pointer to "" to clear). Callers must rebuild agents (applyLLM)

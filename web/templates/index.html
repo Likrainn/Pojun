@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en" data-theme-mode="system" data-theme-preset="default" data-content-layout="centered" data-navbar-style="default" data-sidebar-variant="inset" data-sidebar-collapsible="true" data-font="Inter" suppressHydrationWarning>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="ARTEX - AI 自主渗透测试系统">
+    <title>{{.Version}} - ARTEX</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/variables.css">
+    <link rel="stylesheet" href="/static/css/global.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <script>
+        // Theme boot script - runs before body renders to prevent flash
+        (function() {
+            try {
+                var theme = localStorage.getItem('theme_mode') || 'system';
+                var root = document.documentElement;
+                if (theme === 'system') {
+                    theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+                }
+                root.setAttribute('data-theme-mode', theme);
+            } catch (e) {
+                // Ignore localStorage errors in private browsing
+            }
+        })();
+    </script>
+</head>
+<body class="min-h-screen antialiased bg-background text-foreground">
+    <div id="app"></div>
+
+    <!-- Vendor libraries (loaded first) -->
+    <script src="/static/vendor/i18next.min.js"></script>
+    <script src="/static/vendor/dompurify.min.js"></script>
+    <script src="/static/vendor/marked.min.js"></script>
+
+    <!-- Core application modules -->
+    <script type="module" src="/static/js/core/config.js"></script>
+    <script type="module" src="/static/js/core/utils.js"></script>
+    <script type="module" src="/static/js/core/api.js"></script>
+    <script type="module" src="/static/js/core/auth.js"></script>
+    <script type="module" src="/static/js/core/router.js"></script>
+    <script type="module" src="/static/js/core/i18n.js"></script>
+    <script type="module" src="/static/js/core/store.js"></script>
+
+    <!-- Page modules (lazy loaded by router) -->
+    <script type="module" src="/static/js/pages/login.js"></script>
+    <script type="module" src="/static/js/pages/dashboard.js"></script>
+    <script type="module" src="/static/js/pages/tasks.js"></script>
+    <script type="module" src="/static/js/pages/findings.js"></script>
+    <script type="module" src="/static/js/pages/settings.js"></script>
+
+    <!-- App entry point -->
+    <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

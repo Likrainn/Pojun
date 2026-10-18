@@ -18,7 +18,7 @@ RUN_USER="artex"
 REPO_URL="https://github.com/chu0119/ARTEX"
 LISTEN_ADDR="${LISTEN_ADDR:-:8787}"
 PROXY_ADDR="${PROXY_ADDR:-127.0.0.1:8788}"
-PG_SUPER="${PG_SUPER:-postgres}"   # 本机 psql 管理员用户(pee认证)
+PG_SUPER="${PG_SUPER:-postgres}"   # 本机 psql 管理用户(peer认证)
 WITH_TOOLS=0
 
 info(){ printf '\033[36m[*]\033[0m %s\n' "$*"; }
@@ -79,7 +79,7 @@ chown -R "$RUN_USER:$RUN_USER" "$ARTX_DIR"
 
 # ── PostgreSQL(仅首次)──────────────────────────
 if [ ! -f "$ARTX_DIR/config.json" ]; then
-  info "配置 PostgreSQL…"
+  info "配置 PostgreSQL..."
   if ! command -v psql >/dev/null 2>&1; then
     if command -v apt-get >/dev/null 2>&1; then
       apt-get update && apt-get install -y postgresql
@@ -116,12 +116,13 @@ else
   ok "沿用既有 config.json(升级不覆盖)"
 fi
 
-# ── systemd 单元 ─────────────────────────────────
+# ── systemd 单元 (加固版)─────────────────────────
 cat > "/etc/systemd/system/${SERVICE}.service" <<UNIT
 [Unit]
 Description=ARTEX - AI Autonomous Penetration Testing System
+Documentation=https://github.com/chu0119/ARTEX
 After=network-online.target postgresql.service
-Wants=network-online.target
+Wants=network-online.target postgresql.service
 
 [Service]
 Type=simple
@@ -130,9 +131,23 @@ WorkingDirectory=${ARTX_DIR}
 ExecStart=${ARTX_DIR}/start.sh -addr ${LISTEN_ADDR} -proxy ${PROXY_ADDR}
 Restart=always
 RestartSec=5
-# 一键更新(start.sh 内 exit 75 换装流程)依赖可执行目录可写;数据目录卷已隔离
+# 安全加固
 NoNewPrivileges=true
 PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorAction=EPERM
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_DAC_OVERRIDE CAP_CHOWN
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target
@@ -144,7 +159,7 @@ systemctl enable --now "$SERVICE" 2>/dev/null || systemctl restart "$SERVICE"
 # 二进制部署形态的核心红利:工具装在系统里,ARTEX 经 Bash 直接调用,
 # 「系统 → 宿主环境」页与 agent 的 graph_overview 都能看到这份清单。
 install_tools(){
-  info "安装常用渗透工具(apt/dnf 源内)…"
+  info "安装常用渗透工具(apt/dnf 源内)..."
   if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq || warn "apt update 失败,继续尝试"
@@ -163,7 +178,7 @@ install_tools(){
 
   # nuclei:不在系统源,GitHub Release 下载(GitHub API 解析最新 tag → 资产名带版本)
   if ! command -v nuclei >/dev/null 2>&1; then
-    info "安装 nuclei(projectdiscovery)…"
+    info "安装 nuclei(projectdiscovery)..."
     NTAG="$(curl -fsSL --retry 2 https://api.github.com/repos/projectdiscovery/nuclei/releases/latest \
       | grep -oE '"tag_name": *"[^"]+"' | head -1 | cut -d'"' -f4)" || NTAG=""
     if [ -n "$NTAG" ]; then

@@ -323,6 +323,12 @@ func (t *Traffic) ProxyAddr() string {
 	return "http://" + t.addr
 }
 
+// ProxyPoolEnabled reports whether the proxy pool is configured and running.
+func (t *Traffic) ProxyPoolEnabled() bool {
+	return t.pool.Load() != nil
+}
+
+
 // SetUpstreamProxy points every captured request at a global egress proxy
 // (http/https/socks5, optional user:pass in the URL). An empty raw string clears
 // it, restoring direct dialing. The change is atomic and takes effect on the next

@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chu0119/artex/agent"
-	"github.com/chu0119/artex/db"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
+	"github.com/chu0119/artex/agent"
+	"github.com/chu0119/artex/db"
 )
 
 // jsonResult marshals v to a JSON tool result.
@@ -38,7 +38,9 @@ func jsonResult(v any) (actool.Result, error) {
 //
 //nolint:unused // used as the hostTools provider in wireAgentAugment
 func (s *Server) hostTools() ([]actool.CoreTool, map[string][]string) {
-	tools := append(s.m.HostTools(), s.orchestrationTools()...)
+	tools := append([]actool.CoreTool{}, s.m.HostTools()...)
+	tools = append(tools, s.listenerTools()...)
+	tools = append(tools, s.orchestrationTools()...)
 	tools = append(tools, s.findingRetestTools()...)
 	tools = append(tools, s.platformTools()...) // 平台操作工具(建改 skill/工具/MCP，给 Auto 用)
 	custom, err := s.customTools()
@@ -502,6 +504,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.upgradeReporterTriggerMessage() // 老库补迁移:让 reporter 回传 evidence_version(一次性)
 	s.seedFindingTrafficTools()       // 增加可选证据参数及只读证据工具，保留用户配置
 	s.seedFindingWorkflowTools()
+	s.seedListenerTools() // 回连接收器默认绑定 worker/pentest
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把
 	// list_assets/insert_assets/report_finding/list_findings/list_companies 连同
 	// pentest 一起 seed 好了（项目尚无旧库，不做迁移）。

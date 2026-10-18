@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ARTEX cross-platform release builder.
 #
-# The default mode builds one target and embeds the already-exported frontend.
+# The default mode builds one target and embeds the static frontend assets.
 # `./build.sh --release` builds and packages all supported desktop/server targets.
 #
 # Environment variables:
@@ -15,8 +15,6 @@
 #   ARTEX_PACKAGE_DIR=dist            Directory for release archives.
 #   ARTEX_COMPRESS=off                UPX mode: off, auto, or required.
 #   ARTEX_UPX_ARGS="--best --lzma"    Arguments passed to UPX.
-#   ARTEX_SKIP_FRONTEND=1             Reuse server/webui/dist (for CI artifact builds).
-#   ARTEX_SKIP_NPM_CI=1               Skip npm ci while rebuilding the frontend.
 #   ARTEX_GOSUMDB=sum.golang.org      Go checksum database.
 set -euo pipefail
 
@@ -111,20 +109,10 @@ else
   ARTEX_TARGETS="${ARTEX_TARGETS:-${ARTEX_TARGET_OS}/${ARTEX_TARGET_ARCH}}"
 fi
 
-if [ "${ARTEX_SKIP_FRONTEND:-0}" = "1" ]; then
-  [ -d server/webui/dist ] || die "ARTEX_SKIP_FRONTEND=1 但 server/webui/dist 不存在"
-else
-  command -v npm >/dev/null 2>&1 || die "未检测到 npm（前端静态构建需要 Node.js/npm）"
-  command -v rsync >/dev/null 2>&1 || die "未检测到 rsync"
-  info "构建前端静态资源"
-  if [ "${ARTEX_SKIP_NPM_CI:-0}" != "1" ]; then
-    (cd web && npm ci)
-  fi
-  (cd web && npm run build:static)
-  info "同步前端资源到 server/webui/dist"
-  mkdir -p server/webui/dist
-  rsync -a --delete web/out/ server/webui/dist/
-fi
+# Copy frontend assets into server package for Go embed
+info "准备前端资源用于 Go embed"
+rm -rf server/web
+cp -r web server/web
 
 compress_binary() {
   binary="$1"

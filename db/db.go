@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -278,6 +279,9 @@ ON CONFLICT (name) DO NOTHING`,
 	}
 	if err := d.seedDefaultInterceptRulesV3(); err != nil {
 		return fmt.Errorf("seed intercept rules v3: %w", err)
+	}
+	if err := d.seedDefaultInterceptRulesV4(); err != nil {
+		return fmt.Errorf("seed intercept rules v4: %w", err)
 	}
 	if err := d.seedDefaultAssetInterceptRules(); err != nil {
 		return fmt.Errorf("seed asset intercept rules: %w", err)
@@ -614,4 +618,76 @@ WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
 		return fmt.Errorf("rule %q: %w", name, err)
 	}
 	return d.SetSetting("intercept_default_rules_v3", "done")
+}
+
+// listenerLifecycleToolPattern is anchored because tool_name string matching by
+// substring would also catch unrelated future tools such as listener_start_proxy.
+const listenerLifecycleToolPattern = `^listener_(?:start|stop)$`
+
+// mergeEnabledInterceptTools appends newly introduced tools to a persisted
+// intercept-enabled list without reordering or removing the user's choices. A
+// malformed setting is left untouched instead of silently replacing user data.
+func mergeEnabledInterceptTools(raw string, additions ...string) (string, bool) {
+	var tools []string
+	if err := json.Unmarshal([]byte(raw), &tools); err != nil {
+		return raw, false
+	}
+	seen := make(map[string]struct{}, len(tools)+len(additions))
+	for _, name := range tools {
+		seen[name] = struct{}{}
+	}
+	changed := false
+	for _, name := range additions {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		tools = append(tools, name)
+		seen[name] = struct{}{}
+		changed = true
+	}
+	if !changed {
+		return raw, false
+	}
+	encoded, err := json.Marshal(tools)
+	if err != nil {
+		return raw, false
+	}
+	return string(encoded), true
+}
+
+// seedDefaultInterceptRulesV4 adds the callback-listener approval boundary.
+// listener_start/stop always ask; listener_send enters the same interception
+// layer as Bash so destructive-command rules and the optional model judge inspect
+// its data. Safe/high-frequency listener status/read calls stay outside that layer.
+func (d *DB) seedDefaultInterceptRulesV4() error {
+	const (
+		flag = "intercept_default_rules_v4_listener"
+		name = "[内置] 启停回连接收器"
+	)
+	if value, _, _ := d.GetSetting(flag); value == "done" {
+		return nil
+	}
+	if _, err := d.Exec(`
+INSERT INTO intercept_rules(name, enabled, priority, match_target, match_type, pattern, action, message, timeout_enabled, timeout_seconds, timeout_action)
+SELECT $1, true, 120, 'tool_name', 'regex', $2, 'ask', $3, true, 300, 'deny'
+WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
+		name,
+		listenerLifecycleToolPattern,
+		"启停宿主 TCP 回连接收器会开放端口或断开全局共享会话；请确认授权范围、监听端口、出口地址、Docker 端口映射及其他任务占用情况",
+	); err != nil {
+		return fmt.Errorf("rule %q: %w", name, err)
+	}
+
+	// No persisted list means Interceptor uses its code defaults (which already
+	// include both tools). Existing installations need a one-time append.
+	if raw, ok, err := d.GetSetting("intercept_enabled_tools"); err != nil {
+		return err
+	} else if ok {
+		if merged, changed := mergeEnabledInterceptTools(raw, "listener_start", "listener_stop", "listener_send"); changed {
+			if err := d.SetSetting("intercept_enabled_tools", merged); err != nil {
+				return err
+			}
+		}
+	}
+	return d.SetSetting(flag, "done")
 }
