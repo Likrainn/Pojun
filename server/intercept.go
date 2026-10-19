@@ -55,7 +55,10 @@ func (s *Server) wireInterceptReviewer() {
 		}
 		v := intercept.ParseVerdict(text)
 		if v.Action == "" {
-			return intercept.Decision{ProfileID: profileID}, fmt.Errorf("模型裁决格式无效，必须包含裁决、实际操作、成功后的后果和命中规则")
+			// 把模型原始回复截一段带进错误里：解析失败时只有「格式无效」这四个字
+			// 根本没法排查（是缺三段？分隔符不对？还是被 max_tokens 截断了？）。
+			return intercept.Decision{ProfileID: profileID},
+				fmt.Errorf("模型裁决格式无效（需要 decision + 三段 comment）：原始回复 %.400q", text)
 		}
 		return intercept.Decision{Action: v.Action, Message: v.Reason, ProfileID: profileID}, nil
 	})

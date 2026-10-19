@@ -176,34 +176,71 @@ func ParseVerdict(text string) Verdict {
 			return Verdict{}
 		}
 		key, ok := tok.(string)
-		if _, duplicate := fields[key]; !ok || duplicate || (key != "decision" && key != "comment") {
+		if !ok {
 			return Verdict{}
 		}
 		var value *string
 		if d.Decode(&value) != nil || value == nil {
 			return Verdict{}
 		}
+		// 允许模型多给字段（实测有回复带 reason/explanation 等）。只要
+		// decision 与 comment 都在，就按它们裁决；**不能**因为多了字段就
+		// 整条判无效——那等于让模型的额外解释变成裁决失败的唯一原因。
+		if _, dup := fields[key]; dup {
+			return Verdict{} // 同名重复：无法确定用哪个
+		}
 		fields[key] = *value
 	}
 	if tok, err := d.Token(); err != nil || tok != json.Delim('}') {
 		return Verdict{}
 	}
-	if _, err := d.Token(); err != io.EOF || len(fields) != 2 {
+	if _, err := d.Token(); err != io.EOF {
 		return Verdict{}
 	}
 	action, reason := fields["decision"], normalizeComment(fields["comment"])
+	if action == "" || reason == "" {
+		return Verdict{}
+	}
 	if action != "allow" && action != "ask" && action != "deny" {
 		return Verdict{}
 	}
 	if len(reason) > 2400 {
 		return Verdict{}
 	}
+	// 有标签时严格按标签解析：任一段为空 = 裁决说明不完整 = 无效。
+	// 不在这里兜底 —— 兜底只用于「压根没有标签」的情况。
 	operation, rest, ok := strings.Cut(strings.TrimPrefix(reason, "实际操作："), "；成功后的后果：")
 	if !ok || strings.TrimSpace(operation) == "" {
-		return Verdict{}
+		if strings.Contains(reason, "实际操作：") {
+			return Verdict{} // 带了标签但内容缺失 → 无效
+		}
+		return splitThreeSegments(action, reason)
 	}
 	consequence, rule, ok := strings.Cut(rest, "；命中规则：")
 	if !ok || strings.TrimSpace(consequence) == "" || strings.TrimSpace(rule) == "" {
+		if strings.Contains(reason, "成功后的后果：") || strings.Contains(reason, "命中规则：") {
+			return Verdict{}
+		}
+		return splitThreeSegments(action, reason)
+	}
+	return Verdict{Action: action, Reason: reason}
+}
+
+// splitThreeSegments is the fallback for a comment that has the three parts but
+// lost the labels ("读取文件；返回内容；命中规则 A5"). It only SPLITS on the
+// full-width semicolon — it never rewrites the content, and a comment with
+// fewer than three non-empty parts stays invalid.
+func splitThreeSegments(action, reason string) Verdict {
+	parts := strings.Split(reason, "；")
+	if len(parts) < 3 {
+		return Verdict{}
+	}
+	for _, p := range parts[:2] {
+		if strings.TrimSpace(p) == "" {
+			return Verdict{}
+		}
+	}
+	if strings.TrimSpace(strings.Join(parts[2:], "；")) == "" {
 		return Verdict{}
 	}
 	return Verdict{Action: action, Reason: reason}

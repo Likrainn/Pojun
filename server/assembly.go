@@ -7,6 +7,7 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/chu0119/artex/agent"
 	"github.com/chu0119/artex/db"
@@ -83,11 +84,20 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 				if !directVisible && !skillGated {
 					continue // neither directly visible nor referenced by a visible skill
 				}
-				cl, err := connectMCP(ctx, m)
-				if err != nil {
-					log.Printf("[mcp] %s 连接失败: %v", m.Name, err)
+				// 连接失败短期不重试：wireAgentAugment 每个 agent run 都会走一遍，
+				// 一个「本机没装 node」的 MCP（典型：browser 用 npx 启动）会在每个
+				// worker 启动时刷一条错误，几十轮下来日志全是它，真正的问题被淹掉。
+				// 失败后 10 分钟内直接跳过；期间照常打一条（首次）日志。
+				if until, bad := mcpFailedUntil(m.Name); bad && time.Now().Before(until) {
 					continue
 				}
+				cl, err := connectMCP(ctx, m)
+				if err != nil {
+					log.Printf("[mcp] %s 连接失败: %v（10 分钟内不再重试）", m.Name, err)
+					markMCPFailed(m.Name, 10*time.Minute)
+					continue
+				}
+				clearMCPFailure(m.Name) // 连上了：清掉失败记录，下轮照常重连
 				closers = append(closers, cl)
 				ts, err := cl.Tools(ctx)
 				if err != nil {

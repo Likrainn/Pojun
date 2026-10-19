@@ -14,6 +14,8 @@ func TestParseVerdictToleratesFormatting(t *testing.T) {
 		{"半角冒号", `{"decision":"allow","comment":"实际操作:读取文件;成功后的后果:返回内容;命中规则:A5"}`},
 		{"带换行", `{"decision":"deny","comment":"实际操作：删除订单\n成功后的后果：记录丢失\n命中规则：D4"}`},
 		{"代码围栏", "```json\n" + `{"decision":"ask","comment":"实际操作：删文件；成功后的后果：丢失；命中规则：ASK"}` + "\n```"},
+		{"多带字段", `{"decision":"allow","comment":"实际操作：读取文件；成功后的后果：返回内容；命中规则：A5","reason":"只读操作"}`},
+		{"三段无标签", `{"decision":"allow","comment":"读取文件；返回内容；命中规则 A5"}`},
 	}
 	for _, c := range cases {
 		v := ParseVerdict(c.reply)
