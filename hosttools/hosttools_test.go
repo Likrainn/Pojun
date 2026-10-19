@@ -68,8 +68,30 @@ func TestSummaryTextMarksAvailability(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", dir)
 	txt := SummaryText()
-	if !containsAll(txt, "✗ nmap", "未安装") {
-		t.Errorf("空 PATH 下应全部标记缺失: %s", txt)
+	// 空 PATH 下没有任何可用工具，SummaryText 返回空串
+	// （缺失清单对 worker 无用：它既不能装，也不该占 system prompt 的位置）。
+	if txt != "" {
+		t.Errorf("空 PATH 下应无可用工具清单,得到: %s", txt)
+	}
+	// 有工具时必须带用途 —— 只给名字的话模型判断不出该在什么场景调哪个。
+	dir2 := t.TempDir()
+	fake := dir2 + string(os.PathSeparator) + "curl"
+	if runtime.GOOS == "windows" {
+		fake += ".exe"
+	}
+	if err := os.WriteFile(fake, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir2)
+	txt2 := SummaryText()
+	if !strings.Contains(txt2, "curl") {
+		t.Errorf("有工具时应列出 curl: %s", txt2)
+	}
+	if !strings.Contains(txt2, "HTTP") {
+		t.Errorf("可用项应带用途: %s", txt2)
+	}
+	if strings.Contains(txt2, "nmap") {
+		t.Errorf("缺失的工具不该出现在清单里: %s", txt2)
 	}
 	// 放一个假 curl 进 PATH,应翻成可用(Windows 下 LookPath 只认 .exe 等可执行扩展)
 	name := "curl"

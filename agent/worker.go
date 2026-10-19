@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/chu0119/artex/db"
+	"github.com/chu0119/artex/hosttools"
 	"github.com/chu0119/artex/intercept"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/harness"
@@ -291,7 +292,14 @@ func workerSystem(proxyAddr, caCert, dataDir, runDir string) string {
 	// caCert is present only when the recording MITM is on, which is exactly when
 	// the traffic_* tools are registered — so it gates the traffic-tool note.
 	// Optional finding guidance is added for every role after tool resolution.
-	return body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir)
+	out := body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir)
+	// 宿主工具清单：真正动手的是 worker，所以清单必须进 worker 的 system prompt。
+	// 之前只有 planner 的唤醒提示里有（用于「派意图选手段」），worker 看不到——
+	// 于是新装的一批工具（dalfox/feroxbuster/chisel…）一次都没被用起来。
+	if t := hosttools.SummaryText(); t != "" {
+		out += "\n\n【本机可用工具】\n" + t
+	}
+	return out
 }
 
 // renderIntentTask formats the claimed intent for the worker's launch USER message:

@@ -16,6 +16,7 @@ package hosttools
 import (
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -254,17 +255,36 @@ func Summary() map[string]any {
 	}
 }
 
-// SummaryText 纯文本形态(提示词注入用):一行可用、一行缺失。
+// SummaryText 纯文本形态（提示词注入用）：一行一个可用工具，带用途。
+//
+// 只列【可用】的：缺失的工具模型既不能调，也不该在提示里占位置（一次
+// worker 运行的 system prompt 里放几十条「未安装」纯属浪费上下文）。
+// 用途必须带上——只给名字的话模型判断不出该在什么场景调哪个
+// （chisel / dalfox / feroxbuster 这类尤其明显）。
+//
+// 曾经这个函数定义了却没有调用方：工具清单只进了 planner 的唤醒提示，
+// 而真正动手的 worker 看不到它——于是新装的一批工具一次都没被用起来。
 func SummaryText() string {
 	var b strings.Builder
+	avail := 0
 	for _, t := range Inventory() {
-		if t.Available {
-			b.WriteString("✓ " + t.Name + "\n")
+		if !t.Available {
+			continue
+		}
+		avail++
+		if t.Purpose != "" {
+			b.WriteString("✓ " + t.Bin + " —— " + t.Purpose + "\n")
 		} else {
-			b.WriteString("✗ " + t.Name + "(未安装:" + t.Install + ")\n")
+			b.WriteString("✓ " + t.Bin + "\n")
 		}
 	}
-	return b.String()
+	if avail == 0 {
+		return ""
+	}
+	return "可用工具 " + strconv.Itoa(avail) + " 个（都是本机 PATH 里可直接经 Bash 调用的命令）：\n" + b.String() +
+		"\n动手前先想一下这些工具能不能直接解决问题——别用 python3 从头造轮子，" +
+		"也别因为不认得某个工具的名字就忽略它。确实需要本机没有的工具时，" +
+		"在意图/小结里写清楚要装什么，不要自行安装。"
 }
 
 // Arch 归一化为 Release 资产里用的架构名。
