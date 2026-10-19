@@ -36,7 +36,6 @@ func NewNvdClient(apiKey string, proxyURL string) (*NvdClient, error) {
 		HTTP:   &http.Client{Timeout: 60 * time.Second, Transport: transport},
 	}, nil
 }
-
 // nvdResponse is the subset of the CVE API 2.0 envelope we consume.
 type nvdResponse struct {
 	ResultsPerPage  int          `json:"resultsPerPage"`

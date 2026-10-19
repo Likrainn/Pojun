@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.3.31] - 2026-10-19
+
+### 修复的问题
+
+- **CISA KEV 同步从未成功过**：`FetchKEV` 用 `NvdClient.Base` 拼 URL，而 `NewNvdClient` 把 Base 设成了 `services.nvd.nist.gov`，于是每轮都去请求 `services.nvd.nist.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json` 并拿回一个 404 的 XHTML 错误页（日志里那句 `kev feed status 404: <!DOCTYPE html ...>`）。结果漏洞情报库的**「在野利用」标记一条都没有**，而 KEV 恰恰是 `search_vulns` 排序里权重最高的一档。KEV 固定走 cisa.gov，与 NVD 的 Base 解耦；加了一条回归测试盯住「生产客户端的默认 Base 下必须打 cisa.gov」。
+
 ## [0.3.30] - 2026-10-19
 
 > 能力批次：让「对话里派活」真正走任务，并修好被加固挡死的渗透工具。

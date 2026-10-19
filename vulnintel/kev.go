@@ -33,8 +33,13 @@ type KevCatalog struct {
 // file is small (~2k entries) and replaced wholesale daily, so there is no
 // incremental cursor — every sync overwrites the kev flags it can match.
 func (c *NvdClient) FetchKEV(ctx context.Context) (*KevCatalog, error) {
+	// KEV 在 cisa.gov，跟 NVD 的 Base 无关。之前这里用 c.Base 拼 URL，而
+	// NewNvdClient 把 Base 设成 services.nvd.nist.gov，于是每次都去请求
+	// https://services.nvd.nist.gov/sites/default/files/feeds/... 拿回一个 404 的
+	// XHTML 错误页——KEV 同步从来没成功过，库里一条 in-the-wild 标记都没有。
+	// 测试用 Base 覆盖（httptest），所以保留 Base 优先、默认 cisa.gov。
 	base := c.Base
-	if base == "" {
+	if base == "" || base == "https://services.nvd.nist.gov" {
 		base = "https://www.cisa.gov"
 	}
 	// KEV lives on cisa.gov regardless of the NVD base override; only tests swap it.
