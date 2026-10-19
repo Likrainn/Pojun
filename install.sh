@@ -569,10 +569,28 @@ PYEOF
     sleep 1
   done
 
-  if PGPASSWORD="$db_pass" psql -h "$db_host" -p "$db_port" -U "$db_user" -d "$db_name" \
-       -v ON_ERROR_STOP=1 -c \
-       "INSERT INTO settings(key, value) VALUES ('install_proxy', :'proxy') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()" \
-       -v proxy="$INSTALL_PROXY" >/dev/null 2>&1; then
+  # 写入 setting。
+  #
+  # 不用 psql 的 `:'proxy'` 变量替换：`-c` 的参数**不走 psql 的变量替换**
+  # （那是 `-f` 读文件、或交互式会话才有的路径），实测直接报
+  # "syntax error at or near :"。所以这里用 Python 生成完整 SQL——值做
+  # 标准的 SQL 字符串转义（代理地址已过 URL 校验，但仍不把原始串直接拼）。
+  if PGPASSWORD="$db_pass" python3 - "$db_host" "$db_port" "$db_user" "$db_name" "$INSTALL_PROXY" <<'PYEOF'
+import json, subprocess, sys
+host, port, user, dbname, proxy = sys.argv[1:6]
+# SQL 字符串字面量转义:单引号翻倍。代理地址已过 URL 校验(仅 http/https/socks5
+# 且必须带 host:port),不含控制字符。
+lit = "'" + proxy.replace("'", "''") + "'"
+sql = ("INSERT INTO settings(key, value) VALUES ('install_proxy', %s) "
+       "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()" % lit)
+p = subprocess.run(
+    ["psql", "-h", host, "-p", port, "-U", user, "-d", dbname,
+     "-v", "ON_ERROR_STOP=1", "-c", sql],
+    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+)
+sys.exit(p.returncode)
+PYEOF
+  then
     ok "运行期装机代理已写入（宿主环境页的一键安装会沿用）"
   else
     warn "写入运行期装机代理失败，可在 Web「系统 → 宿主环境」页手动填一次"
