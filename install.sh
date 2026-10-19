@@ -284,7 +284,10 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallFilter=@system-service
-SystemCallErrorAction=EPERM
+# 指令名是 SystemCallErrorNumber。原先写的 SystemCallErrorAction **根本不存在**，
+# systemd 只会静默忽略它（日志一行 "Unknown key ... ignoring"），于是超纲的系统调用
+# 走默认动作 SIGSYS 直接杀进程，而不是这里想要的"干净拒绝"。
+SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_DAC_OVERRIDE CAP_CHOWN
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 
@@ -350,7 +353,9 @@ RestrictNamespaces=true
 RestrictRealtime=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 LockPersonality=true
-SystemCallFilter=@system-service
+# 刻意不设 SystemCallFilter：助手要以 root 调 apt/dpkg，而 dpkg 会执行包自带的任意
+# 维护脚本，白名单永远赶不上它们的实际需要，一旦超纲就是 SIGSYS 硬杀——装到一半被
+# 杀比安装报错更难排查。助手的真实安全边界是 socket 权限 + 代码里的工具白名单。
 CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_FSETID CAP_KILL CAP_SETGID CAP_SETUID CAP_SETPCAP CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SYS_CHROOT CAP_MKNOD CAP_AUDIT_WRITE CAP_SETFCAP
 LimitNOFILE=65536
 
