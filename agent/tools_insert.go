@@ -558,7 +558,9 @@ func (t *ToolSet) listAssets() actool.CoreTool {
 			"未传 id/ids 时 dsl 必须非空（不允许无条件全量查询）。\n"+
 			"可用字段：domain(根/子/服务域名)、root_domain、ip、cidr(网段，如 10.10.0.0/16)、url、page_title、icp、service_name、app_name、method(如 GET/POST)、service_type(http|other)、record_type(如 A/CNAME)、technology(数组，=模糊 ==精确)、port/status_code/company_id(整数)。\n"+
 			"**查某个网段用 cidr=10.10.0.0/16，不要用 ip>=10.0.0.0**（ip 是字符串字段，不支持大小比较）。\n"+
-			"示例：cidr=10.10.0.0/16 ；status_code>=400 AND technology=shiro ；(port==80 OR port==443) AND technology=nginx",
+			"**查空值用 field==\"\"**（精确匹配，同时覆盖空串与 NULL）；= 是模糊匹配、查不到空值。"+
+			"想找「已登记但还没测」的资产，用 list_untested_assets（它按类型分页给，比自己拼 DSL 省事）。\n"+
+			"示例：cidr=10.10.0.0/16 ；status_code>=400 AND technology=shiro ；(port==80 OR port==443) AND technology=nginx ；service_name==\"\"",
 		obj(map[string]any{
 			"dsl":    str(`DSL 查询表达式（语法/字段见工具描述）。未传 id/ids 时必须非空。`),
 			"type":   str("资产类型过滤：root_domain|ip|subdomain|app|service|endpoint（独立字段，可与 dsl 叠加；单独 type 不足以查询，仍需 dsl）"),

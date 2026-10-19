@@ -389,6 +389,13 @@ func (b *whereBuilder) buildLeaf(e Expr) (string, error) {
 		case "=":
 			return col + " ILIKE " + b.next("%"+e.Value+"%"), nil
 		case "==":
+			// 空值精确匹配要同时覆盖 NULL 与空串：资产库里大量"没有 service_name
+			// 的 HTTP 服务"存的是 NULL 而不是 ''（实测 2180 个 http 服务里 2073 个
+			// service_name 为 NULL），`= ''` 匹配不到它们，agent 就看不见这批
+			// 「端口开着、服务类型已知、但还没深挖」的面。
+			if e.Value == "" {
+				return "(" + col + " IS NULL OR " + col + " = '')", nil
+			}
 			return col + " = " + b.next(e.Value), nil
 		case "!=":
 			return col + " NOT ILIKE " + b.next("%"+e.Value+"%"), nil
