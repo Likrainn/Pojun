@@ -158,14 +158,15 @@ fetch_release(){
   ok "目标版本: $VERSION"
   local zip="artex-${VERSION#v}-${PKG_ARCH}.zip"
   info "下载 $zip"
-  "${CURL[@]}" "https://github.com/$REPO/releases/download/$VERSION/$zip" -o "$TMP/artex.zip"
+  # 用原名落盘：SHA256SUMS 里写的就是这个名字，改名保存会让 sha256sum -c 找不到文件。
+  "${CURL[@]}" "https://github.com/$REPO/releases/download/$VERSION/$zip" -o "$TMP/$zip"
   if "${CURL[@]}" "https://github.com/$REPO/releases/download/$VERSION/SHA256SUMS" -o "$TMP/SHA256SUMS" 2>/dev/null; then
-    ( cd "$TMP" && grep "$zip" SHA256SUMS | sha256sum -c - ) || die "SHA256 校验失败"
+    ( cd "$TMP" && grep " $zip\$" SHA256SUMS | sha256sum -c - ) || die "SHA256 校验失败"
     ok "SHA256 校验通过"
   else
     warn "未取到 SHA256SUMS，跳过校验"
   fi
-  unzip -oq "$TMP/artex.zip" -d "$TMP/unpack" || die "解压失败（需要 unzip）"
+  unzip -oq "$TMP/$zip" -d "$TMP/unpack" || die "解压失败（需要 unzip）"
 }
 
 # ══════════════════════════════════════════════════
