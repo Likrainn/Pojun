@@ -15,6 +15,7 @@ import (
 
 	actool "github.com/Autumn-27/norma/tool"
 
+	"github.com/chu0119/artex/selfupdate"
 	"github.com/chu0119/artex/vulnintel"
 )
 
@@ -212,13 +213,22 @@ func (t *ToolSet) scanWithNuclei() actool.CoreTool {
 // netContext 输出当前运行环境的网络上下文(网卡/路由/用户配置的回连信息),
 // 供 reverse shell / bind shell / MSF 的 LHOST/LPORT 决策。
 // 刻意不 exec ip 命令(镜像里 iproute2 不保证有),用 Go 原生枚举。
+//
+// 说明按部署形态分两套：二进制部署时本机网卡就是可用地址，内网渗透直接用；
+// 容器部署时本机 IP 是容器内网地址，目标大概率连不进来，必须用宿主/公网可达地址。
 func (t *ToolSet) netContext() actool.CoreTool {
+	inDocker := selfupdate.InDocker()
+	desc := "获取本机网络上下文：全部网卡 IP、以及平台配置的【回连可达地址】。"
+	if inDocker {
+		desc += "当前运行在容器里：本机 IP 是容器内网地址，目标大概率连不进来——起 reverse shell / " +
+			"MSF handler 前【必须】先看本工具，用配置的宿主/公网可达地址做 LHOST，端口用已映射的端口段。"
+	} else {
+		desc += "当前是二进制(宿主)部署：interfaces 就是本机真实网卡，内网渗透直接用本机在该网段的 IP 做 LHOST 即可，" +
+			"bind/reverse shell 都不需要额外的端口映射配置。"
+	}
 	return readTool(
 		"net_context",
-		"获取本机网络上下文:全部网卡 IP(容器内视角)、以及平台配置的【回连可达地址】。"+
-			"在容器里运行时,本机 IP 是容器内网地址,目标大概率连不进来——起 reverse shell / "+
-			"MSF handler 前【必须】先看本工具:用配置的公网 IP/宿主映射地址做 LHOST,端口用"+
-			"已映射的端口段;bind shell 或目标同网段时才可用本机内网 IP。",
+		desc,
 		obj(map[string]any{}),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			type iface struct {
@@ -248,13 +258,22 @@ func (t *ToolSet) netContext() actool.CoreTool {
 				hint = vulnintelStore.EgressHint(ctx)
 				portMap = vulnintelStore.EgressPortMap(ctx)
 			}
+			note := ""
+			if inDocker {
+				note = "interfaces 是【容器内视角】，对外大概率不可达——reverse shell 的 LHOST 要用宿主/对外可达地址" +
+					"（egress_hint 若有），监听端口必须在 port_map 声明过的映射范围内。" +
+					"两者都为空说明平台未配置：用 add_hint 请求人工提供，不要拿容器 IP 盲目回连。"
+			} else {
+				note = "这是宿主二进制部署：interfaces 就是本机真实网卡，内网渗透可直接拿本机在该网段的 IP 当 LHOST，" +
+					"端口随意绑、无需映射。目标是公网或跨网段时，挑其中一个对目标可达的地址即可。" +
+					"egress_hint / port_map 为空不影响本机直连；若不确定哪个地址对目标可达，可用 add_hint 问一句。"
+			}
 			return jsonResult(map[string]any{
-				"interfaces":          ifaces,
-				"egress_hint":         hint,
-				"egress_port_map":     portMap,
-				"note": "interfaces 是【容器内视角】,对外不可达;egress_hint 是平台配置的对外可达地址与映射说明。"+
-					"reverse shell 的 LHOST 用 hint 里的可达地址,监听端口必须在 port_map 声明过的映射范围内。" +
-					"hint 为空说明平台未配置——请用 add_hint 请求人工提供,不要拿容器 IP 盲目回连。",
+				"interfaces":      ifaces,
+				"egress_hint":     hint,
+				"egress_port_map": portMap,
+				"deploy_mode":     map[bool]string{true: "docker", false: "host"}[inDocker],
+				"note":            note,
 			})
 		},
 	)
