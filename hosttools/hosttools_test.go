@@ -41,13 +41,21 @@ func TestSummaryShape(t *testing.T) {
 	if !ok || len(avail) == 0 {
 		t.Fatalf("available 应为非空字符串数组: %#v", s["available"])
 	}
-	missing, ok := s["missing"].([]map[string]string)
+	// missing 只给名字：安装提示是给人看的（宿主环境页），模型既不能装
+	// 也不需要知道怎么装，给它几十条安装命令只是每轮都在烧上下文。
+	missing, ok := s["missing"].([]string)
 	if !ok {
 		t.Fatalf("missing 类型不对: %#v", s["missing"])
 	}
 	for _, m := range missing {
-		if m["install"] == "" {
-			t.Errorf("缺失工具 %s 应带安装提示", m["name"])
+		if m == "" {
+			t.Error("缺失项不应为空串")
+		}
+	}
+	// available 每项都要带用途：模型只看到名字就用不对工具。
+	for _, a := range avail {
+		if !strings.Contains(a, ": ") {
+			t.Errorf("available 项 %q 应带用途", a)
 		}
 	}
 	if s["hint"] == "" {
