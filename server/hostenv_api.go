@@ -72,6 +72,21 @@ func (s *Server) installProxy() string {
 	return strings.TrimSpace(v)
 }
 
+// maintenanceProxy 维护类出网（检查/下载更新、安装宿主工具）走哪个代理。
+//
+// 优先「装机代理」——它本来就是为「连 GitHub 拉东西」准备的；老部署没配过它时
+// 回落到全局代理，保证行为不变。两者语义不同：全局代理是给**目标流量**隐藏源 IP
+// 用的，拿它去拉更新只是历史上没有别的选择。
+func (s *Server) maintenanceProxy() string {
+	if p := s.installProxy(); p != "" {
+		return p
+	}
+	if s.m == nil {
+		return ""
+	}
+	return s.m.GlobalProxy()
+}
+
 // hostenvStatus 体检页的总入口:工具清单 + 是否支持一键安装。
 func (s *Server) hostenvStatus(w http.ResponseWriter, r *http.Request) {
 	available, reason := s.hostdProbe(r.Context())

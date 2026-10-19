@@ -74,20 +74,61 @@ AI 自主渗透测试系统（Go 后端 + Next.js 前端）
 
 > 依赖数据库 **PostgreSQL**；探索需配置 **LLM**（`ANTHROPIC_API_KEY` 或 `OPENAI_API_KEY`，也可在 UI 里配）。
 >
-> **部署形态怎么选**：生产服务器/长期使用 → **方式一(部署脚本,二进制+systemd,主推)**；本地快速体验/不想碰数据库 → 方式三(Docker 全家桶)；其余场景见方式二/四。
+> **部署形态怎么选**：生产服务器/长期使用 → **方式一（一键部署脚本，二进制 + systemd，主推）**；本地快速体验 → 方式一里选 Docker；其余见方式二/三。
 
-### 方式一：Linux 服务器部署脚本（推荐——二进制 + systemd）
+### 方式一：一键部署脚本（推荐）
 
-免 Docker,直接装进系统:预编译二进制 + 系统 PostgreSQL 自动建库 + systemd 常驻,幂等重跑即升级。**二进制形态下宿主装的渗透工具(nmap/sqlmap/nuclei…)ARTEX 经 Bash 直接调用**,Web「系统 → 宿主环境」页可查家底:
+**一个脚本**，运行后选**二进制**还是 **Docker**，再走对应流程。二进制是主推形态：单文件 + systemd + 系统 PostgreSQL，运行时零依赖。
 
 ```bash
-git clone https://github.com/chu0119/ARTEX.git
-cd ARTEX
-sudo ./deploy-linux.sh                 # 安装/升级
-sudo ./deploy-linux.sh --with-tools   # 顺装常用渗透工具集(nmap/sqlmap/hydra/nuclei 等)
+# 已 clone 仓库
+sudo ./install.sh                      # 交互选择部署形态（默认二进制）
+
+# 或直接指定
+sudo ./install.sh --mode=binary        # 二进制（推荐）
+sudo ./install.sh --mode=docker        # Docker Compose
 ```
 
-指定版本 `sudo VER=v0.3.18 ./deploy-linux.sh`,自定义目录 `sudo ARTX_DIR=/opt/artex ./deploy-linux.sh`。详见脚本头部注释。
+也可以不 clone，直接跑 Release 上的脚本：
+
+```bash
+curl -fsSL https://github.com/chu0119/ARTEX/releases/latest/download/install.sh \
+  | sudo bash -s -- --mode=binary
+```
+
+常用选项：
+
+| 选项 | 说明 |
+|---|---|
+| `--mode=binary\|docker` | 部署形态；不给则交互选择 |
+| `--with-tools` | 顺装常用渗透工具（nmap/sqlmap/hydra/gobuster/nuclei/httpx…） |
+| `--install-proxy=URL` | **装机代理**：apt 与 GitHub 下载走它（与 Agent 目标流量代理无关） |
+| `--version=VER` | 指定版本，默认 latest |
+| `--dir=PATH` | 安装目录，默认 `/opt/artex` |
+| `--no-installer` | 不装特权助手，关掉 Web 端一键安装能力 |
+| `-y, --yes` | 非交互，全部用默认值 |
+
+**幂等**：重复执行 = 原地升级程序；`config.json` / `jwt.key` / `data/` / 数据库 / `.env` 都不动。
+
+**卸载**：
+- 二进制 `systemctl disable --now artex artex-hostd && rm -rf /opt/artex`
+- Docker `cd /opt/artex && docker compose down -v && rm -rf /opt/artex`
+
+#### 二进制形态：宿主工具与「一键安装」
+
+二进制形态下**宿主装了什么工具，Agent 就能经 Bash 直接调用什么**。Web「系统 → 宿主环境」页给出家底清单，缺失项可**一键安装**：
+
+- 安装由随包发布的特权助手 `artex-hostd` 执行（root 常驻，只监听一个 Unix socket）。
+  主服务单元带 `NoNewPrivileges` + `ProtectSystem=strict`，**本身没有提权能力**，所以
+  安装动作必须落在助手侧；
+- 助手**只认内置白名单里的工具 id**，不接受自由命令；socket 权限 0660 且归运行用户；
+- 装 `nuclei` / `httpx` / `subfinder` 这类走 GitHub Release 的工具，国内通常需要代理——
+  在宿主环境页填「装机代理」，或用 `--install-proxy=` 一步到位。
+
+不想要 Web 端具备装包能力，用 `--no-installer` 关掉即可，体检/查看不受影响。
+
+`--with-tools` 会装一批系统源内的常用工具，再补 Go 系工具（有 Go 工具链时用 `go install`，
+否则跳过；缺的都能在宿主环境页一键补装）。
 
 ### 方式二：下载预编译二进制（Releases）
 
@@ -98,44 +139,19 @@ cp config.example.json config.json   # 填好 database 连接
 ./start.sh                           # → http://localhost:8787
 ```
 
-> 请用 `start.sh` / `start.bat` 启动，而不是直接跑 `./artex`。它是个守护脚本：程序退出后按退出码决定是否重新拉起，**页面上的[一键更新](#方式一页面一键更新推荐)靠它完成换装**。直接运行 `./artex` 时更新完就不会被拉起了。
+> 请用 `start.sh` / `start.bat` 启动，而不是直接跑 `./artex`。它是个守护脚本：程序退出后按退出码决定是否重新拉起，**页面上的「一键更新」靠它完成换装**。直接运行 `./artex` 时更新完就不会被拉起了。
 > 后台常驻：`nohup ./start.sh >artex.log 2>&1 &`。
+>
+> Linux 服务器上更推荐**方式一**：它会一并处理好 systemd 常驻、PostgreSQL 建库与开机自启。
+> 只想手写 compose 的话，仓库根目录的 `docker-compose.yml` + `.env.example` 仍可直接用
+> （`cp .env.example .env` 填 `POSTGRES_PASSWORD`，再 `docker compose up -d`），
+> 镜像取自 `ghcr.io/chu0119/artex`。
 
-### 方式三：Docker Compose（开箱全家桶）
+> **远程 MCP** 可在系统设置里选择 `http`（Streamable HTTP）或 `sse`（旧版 SSE）。
+> 旧版 SSE 服务通常用 `GET /sse` 建立事件流，再通过它返回的 `/message?sessionId=...`
+> 接收 JSON-RPC 请求；配置时 URL 填 `/sse`，请求头按 `Authorization=Bearer <token>` 填。
 
-零配置体验:镜像内置常用工具(nuclei 等),数据卷持久化:
-
-```bash
-git clone https://github.com/chu0119/ARTEX.git
-cd ARTEX
-cp .env.example .env          # 填 POSTGRES_PASSWORD、可选 ANTHROPIC_API_KEY
-docker compose up -d          # 拉取 xingchuan1314/artex 镜像 + postgres
-# → http://localhost:8787
-```
-
-镜像已含常用工具（ripgrep/curl/vim/npm/nmap…）；`./skills` 与 `./data` 以绑定挂载持久化。
-
-远程 MCP 可在系统设置中选择 `http`（Streamable HTTP）或 `sse`（旧版 SSE）。
-旧版 SSE 服务通常使用 `GET /sse` 建立事件流，再通过服务返回的
-`/message?sessionId=...` 接收 JSON-RPC 请求；配置时将 URL 填为 `/sse`，请求头按
-`Authorization=Bearer <token>` 填写。
-
-### 方式四：一键安装脚本（源码/Docker 交互选择）
-
-```bash
-git clone https://github.com/chu0119/ARTEX.git
-cd ARTEX
-./install.sh
-```
-
-脚本会：检测 / 自动安装 Docker → 让你选 **① 全部 Docker** 或 **② 本地编译运行**：
-
-- **① 全部 Docker**：填一个 Postgres 密码（可回车随机）→ 自动写 `.env` → `docker compose up -d`。
-- **② 本地运行**：选数据库（连已有 / 用 Docker 起一个）→ 生成 `config.json` → `go` 编译内嵌单二进制 → 启动。
-
-装好后打开 **http://localhost:8787**（首次进入 `/setup` 设置管理员密码）。
-
-### 方式五：从源码编译单二进制
+### 方式三：从源码编译单二进制
 
 ```bash
 # 1) 前端静态导出
@@ -144,10 +160,14 @@ cd web && npm ci && npm run build:static && cd ..
 cp -r web/out server/webui/dist
 # 3) 编译（-tags embedui 才内嵌前端）
 CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
+# 4) 可选：特权安装助手（提供 Web 端「一键安装」，Linux 专用）
+CGO_ENABLED=0 go build -o artex-hostd ./cmd/artex-hostd
 ./start.sh
 ```
 
-### 方式六：构建跨平台 Release 压缩包
+> 只想快速出包就 `./build.sh`——它会把上面这几步（含 hostd 助手，Linux 目标）一次做完。
+
+### 方式四：构建跨平台 Release 压缩包
 
 `build.sh` 会先构建并嵌入前端，再使用 Go linker 去除调试信息，并将发布文件压缩为 zip。Release 模式默认生成 Linux amd64/arm64、macOS amd64/arm64 和 Windows amd64 的 zip 包：
 
@@ -180,48 +200,48 @@ ARTEX_TARGETS=linux/amd64,windows/amd64 ./build.sh --release
 - **更新会中断正在运行的任务**——更新即重启，请在空闲时进行。
 - **开发构建不给更新**：版本号是 `dev` 或 `git describe` 带后缀时禁用，避免正式版覆盖掉本地调试的二进制。
 - **Docker 下只换程序、不换镜像**：镜像里的 playwright / nmap 等工具链不会跟着升级，且 `docker compose up -d` 重建容器后会退回镜像自带的版本。要连镜像一起升级仍请用 `docker compose pull artex && docker compose up -d artex`。
-- 访问 GitHub 需要代理时，在同一页面配置**全局代理**即可，更新链路会走它。更新只从 GitHub 域名下载并强制 HTTPS。
+- 访问 GitHub 需要代理时，在**宿主环境页**配置**装机代理**即可，更新链路会走它（没配置时回落到全局代理）。更新只从 GitHub 域名下载并强制 HTTPS。
 
-### 方式二：一键更新脚本
+### 方式二：重跑部署脚本
+
+`install.sh` 是幂等的——重复执行就是升级：换程序、保留 `config.json` / `jwt.key` / `data/` / 数据库 / `.env`。
 
 ```bash
-cd ARTEX
-./update.sh
+sudo ./install.sh --mode=binary        # 升到最新 Release（或 --version=vX.Y.Z 指定版本）
+sudo ./install.sh --mode=docker        # 拉新镜像并重建容器
 ```
 
-脚本先可选 `git pull` 拉取最新代码，再让你选 **① Docker 更新** 或 **② 本地编译更新**（与 `install.sh` 对应）：
-
-- **① Docker**：可指定目标镜像 tag（回车沿用 `.env` 的 `ARTEX_TAG`，缺省 `latest`）→ `docker compose pull` → `docker compose up -d`（换新镜像重启即自动迁移）。
-- **② 本地**：重建前端静态产物 → 重新编译 `./artex`（完成后重启进程生效）。
-
-### 方式三：Docker Compose（手动）
+Docker 手动部署（用仓库自带 compose）的升级：
 
 ```bash
 cd ARTEX
 git pull                       # 更新 compose / 脚本（可选）
-# 指定版本：在 .env 设 ARTEX_TAG=v0.2.0；不设则用 latest
+# 指定版本：在 .env 设 ARTEX_TAG=v0.3.20；不设则用 latest
 docker compose pull artex
 docker compose up -d artex     # 换新镜像重启 → 自动迁移 schema
 docker image prune -f          # 清理旧镜像（可选）
 ```
 
-### 方式四：预编译二进制（Releases）
+### 方式三：预编译二进制（Releases）
 
-到 [Releases](https://github.com/chu0119/ARTEX/releases) 下载新版本 zip，停掉旧进程后覆盖 `artex` 与 `skills/`（保留你的 `config.json` 与 `data/`），重启即可：
+到 [Releases](https://github.com/chu0119/ARTEX/releases) 下载新版本 zip，停掉旧进程后覆盖 `artex`（Linux 还含 `artex-hostd`）与 `skills/`（保留你的 `config.json` 与 `data/`），重启即可：
 
 ```bash
 cp -r <解压目录>/skills ./ && cp <解压目录>/artex ./
+# Linux 且装了安装助手的，连它一起换：
+# sudo install -m 0755 <解压目录>/artex-hostd /usr/local/bin/artex-hostd && sudo systemctl restart artex-hostd
 ./start.sh
 ```
 
-### 方式五：从源码编译
+### 方式四：从源码编译
 
 ```bash
 git pull
 cd web && npm ci && npm run build:static && cd ..
 cp -r web/out server/webui/dist
 CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
-# 重启 ./start.sh
+CGO_ENABLED=0 go build -o artex-hostd ./cmd/artex-hostd   # 可选：一键安装助手
+# 重启 ./start.sh（装了助手的话再 sudo systemctl restart artex-hostd）
 ```
 
 ---
