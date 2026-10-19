@@ -922,6 +922,11 @@ func (m *Manager) maintenanceProxy() string {
 	if v, _, _ := m.pg.GetSetting(settingInstallProxy); strings.TrimSpace(v) != "" {
 		return strings.TrimSpace(v)
 	}
+	// 环境变量兜底：Docker 形态没有 config.json，install.sh 只能通过 compose
+	// 传进来；这里让它与数据库 setting 同等生效（数据库优先，可被页面改写）。
+	if v := strings.TrimSpace(os.Getenv("ARTEX_INSTALL_PROXY")); v != "" {
+		return v
+	}
 	if p := m.GlobalProxy(); p != "" {
 		return p
 	}

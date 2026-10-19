@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [0.3.40] - 2026-10-20
+
+> 装机代理交互式配置 + 全链路生效；SOCKS5 代理此前是坏的；宿主工具扩容。
+
+### 修复的问题
+
+- **SOCKS5 代理在「一键安装」里根本不工作**：`hostd` 的下载器用 `http.ProxyURL` 设置代理，而 `net/http` 的 ProxyURL 只懂 HTTP CONNECT 代理——喂它 `socks5://` 会得到 `unsupported protocol scheme`。表现是「填了 socks 代理但下载照样失败」，而报错完全指不到「协议不匹配」这个真因。改为按协议分流：`socks5://`/`socks5h://` 走 `golang.org/x/net/proxy` 的 SOCKS5 dialer，其余照旧。
+- **install.sh 装 PostGIS/PostgreSQL 那处 apt 没走代理**：`apt-get install -y postgresql` 是硬依赖，apt 源在国内机器上常常要代理才拉得到，代理不通时整条装机流程断在这一步。改为与其他 apt 调用一样带 Acquire 代理选项（dnf 同理，且只在确实有代理时才加 `--setopt=proxy=`，避免把空串当成无效代理）。
+- **install.sh 里的 curl 不认 `socks5://` URL**：curl 的 `-x` 接受不了这种 URL 形式（同样是 `unsupported protocol scheme`），它要的是 `--socks5-hostname host:port`。现在按协议构造 curl 参数，并在填了认证时补 `--socks5-basic -U`。
+- **代理只在装机期生效，运行期各走各的**：装机时代理只作用于脚本自身，Web「宿主环境」页的「一键安装」和后台情报同步读的是数据库里的 `install_proxy` 设置，两者不联动——用户装完机器还得再手填一遍代理。现在 install.sh 会把代理写进数据库 setting（Docker 形态写 `.env` 并通过 `ARTEX_INSTALL_PROXY` 透传），并在主服务与 hostd 两个 systemd 单元里都带上代理环境。
+
+### 新增
+
+- **install.sh 交互式代理配置**：跑脚本时询问「是否配置出网代理」，支持 `http://` / `https://` / `socks5://` / `socks5h://`（可带 `user:pass@`），裸 `host:port` 自动按 http 处理。填完自动验证（真实请求 GitHub API，与装机用途同源），通了才继续；不通会问要不要坚持。给了 `--install-proxy=` 也会走同一套校验与验证。
+- **代理自测 API + 设置页「测试」按钮**：`POST /api/hostenv/proxy-check` 拿当前生效的代理做一次真实请求，返回可用性、延迟、出口 IP 与**可执行的修复建议**（协议不匹配/认证缺失/超时/DNS 失败分别给不同话术）。代理会失效，改完点一下就能知道，不用等装工具失败才发现。判定口径与 install.sh 装机期一致（统一走新的 `proxyprobe` 包）。
+- **宿主工具扩容**：新增 ProjectDiscovery 系的 `naabu`（快速端口扫描）、`dnsx`（DNS 解析/爆破）、`katana`（Web 爬虫）、`tlsx`（TLS 证书提取），加上 `impacket`（SMB/NTLM 工具集，apt 包 `python3-impacket`）、`seclists`（通用字典集）、`gitleaks`（密钥扫描）。install.sh 的 `--with-tools` 现在一次装齐：apt 系工具 → GitHub Release 系（nuclei/httpx/subfinder/naabu/dnsx/katana/tlsx 走同一套发布格式，一个循环搞定）→ SecLists 浅克隆 → pip 工具 → Playwright MCP + chromium 预置。hostd 的「一键安装」页同步能装这些。
+- **Playwright chromium 预置到 `/opt/ms-playwright`**：装到 `~/.cache` 的话，服务以 `artex` 用户运行时看不见（root 家目录里的缓存它读不到），首次启动 MCP 仍要联网下载。
+
 ## [0.3.39] - 2026-10-20
 
 > 观察期实测：三处能力缺失导致 agent 大量无效调用，以及「一堆子任务中断但看不出原因」。

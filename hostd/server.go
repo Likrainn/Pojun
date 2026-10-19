@@ -12,7 +12,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/user"
@@ -25,6 +24,7 @@ import (
 	"time"
 
 	"github.com/chu0119/artex/hosttools"
+	"github.com/chu0119/artex/proxyprobe"
 )
 
 // State 任务状态。
@@ -377,14 +377,23 @@ func firstWord(argv []string) string {
 	return argv[0]
 }
 
+// httpClient 构造带代理的 HTTP 客户端。
+//
+// socks5 必须走 golang.org/x/net/proxy 的 SOCKS5 dialer：
+// http.ProxyURL 只懂 HTTP CONNECT 代理，喂它 socks5:// 会得到
+// "unsupported protocol scheme" —— 表现为「填了 socks 代理但下载照样失败」，
+// 而用户完全看不出是协议不匹配。
+//
+// 客户端构造统一走 proxyprobe 包：运行期的自测 API 用的是同一套逻辑，
+// 避免出现「装机说代理通了、运行期却连不上」的口径割裂。
 func httpClient(proxy string) *http.Client {
-	tr := &http.Transport{Proxy: http.ProxyFromEnvironment}
-	if proxy != "" {
-		if pu, err := url.Parse(proxy); err == nil {
-			tr.Proxy = http.ProxyURL(pu)
-		}
+	c, err := proxyprobe.ClientFor(proxy, 10*time.Minute)
+	if err != nil {
+		// 代理串不合法时退回直连：让安装继续，错误由调用方在日志里报出来，
+		// 而不是整个客户端建不起来。
+		return &http.Client{Timeout: 10 * time.Minute, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}}
 	}
-	return &http.Client{Timeout: 10 * time.Minute, Transport: tr}
+	return c
 }
 
 func latestTag(ctx context.Context, client *http.Client, apiURL string) (string, error) {

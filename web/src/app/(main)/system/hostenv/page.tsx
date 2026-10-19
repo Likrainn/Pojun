@@ -1,7 +1,15 @@
 "use client";
 
 import * as React from "react";
-import { DownloadIcon, Loader2Icon, MonitorCog, RefreshCwIcon, TerminalIcon, XIcon } from "lucide-react";
+import {
+  DownloadIcon,
+  Loader2Icon,
+  MonitorCog,
+  PlugIcon,
+  RefreshCwIcon,
+  TerminalIcon,
+  XIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -25,7 +33,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { api } from "@/lib/api";
-import type { HostTool, HostenvStatus, InstallJob } from "@/lib/types";
+import type { HostTool, HostenvStatus, InstallJob, ProxyCheckResult } from "@/lib/types";
 
 const TERMINAL_STATES = new Set(["done", "failed", "cancelled"]);
 
@@ -43,6 +51,8 @@ export default function HostEnvPage() {
   const [loaded, setLoaded] = React.useState(false);
   const [proxyInput, setProxyInput] = React.useState("");
   const [savingProxy, setSavingProxy] = React.useState(false);
+  const [testingProxy, setTestingProxy] = React.useState(false);
+  const [proxyCheck, setProxyCheck] = React.useState<ProxyCheckResult | null>(null);
   const [job, setJob] = React.useState<InstallJob | null>(null);
   const [busyTool, setBusyTool] = React.useState<string | null>(null);
   const logRef = React.useRef<HTMLPreElement | null>(null);
@@ -97,6 +107,23 @@ export default function HostEnvPage() {
       toast.error(e instanceof Error ? e.message : "保存失败");
     } finally {
       setSavingProxy(false);
+    }
+  };
+
+  // 代理会失效，所以改完必须能立刻验证通路——否则只能等装工具失败才发现。
+  // 测的是输入框里的值（还没保存），保存与否都能先看清楚对不对。
+  const testProxy = async () => {
+    setTestingProxy(true);
+    setProxyCheck(null);
+    try {
+      const r = await api.hostenvProxyCheck(proxyInput.trim());
+      setProxyCheck(r);
+      if (r.ok) toast.success(`代理可用${r.exit_ip ? `（出口 ${r.exit_ip}）` : ""}`);
+      else toast.error(`代理不可用：${r.error || r.hint || "未知原因"}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "测试失败");
+    } finally {
+      setTestingProxy(false);
     }
   };
 
@@ -163,9 +190,21 @@ export default function HostEnvPage() {
                   <Label htmlFor="install-proxy" className="text-sm">
                     装机代理
                   </Label>
-                  <span className="text-muted-foreground text-xs">
-                    {installerReady ? "装东西时走它（apt / GitHub 下载）" : "宿主助手未运行，暂不可用"}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {proxyCheck && (
+                      <Badge
+                        variant={proxyCheck.ok ? "default" : "destructive"}
+                        title={proxyCheck.hint || proxyCheck.error || ""}
+                      >
+                        {proxyCheck.ok
+                          ? `可用${proxyCheck.latency_ms ? ` · ${proxyCheck.latency_ms}ms` : ""}`
+                          : "不可用"}
+                      </Badge>
+                    )}
+                    <span className="text-muted-foreground text-xs">
+                      {installerReady ? "装东西时走它（apt / GitHub 下载）" : "宿主助手未运行，暂不可用"}
+                    </span>
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <Input
@@ -175,8 +214,21 @@ export default function HostEnvPage() {
                     placeholder="http://10.0.0.14:7897 或 socks5://host:1080（留空=直连）"
                     value={proxyInput}
                     disabled={!loaded || savingProxy}
-                    onChange={(e) => setProxyInput(e.target.value)}
+                    onChange={(e) => {
+                      setProxyInput(e.target.value);
+                      setProxyCheck(null);
+                    }}
                   />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={testProxy}
+                    disabled={!loaded || testingProxy}
+                  >
+                    {testingProxy ? <Loader2Icon className="animate-spin" /> : <PlugIcon />}
+                    测试
+                  </Button>
                   <Button
                     type="button"
                     size="sm"
@@ -187,9 +239,21 @@ export default function HostEnvPage() {
                     保存
                   </Button>
                 </div>
+                {proxyCheck && !proxyCheck.ok && (
+                  <p className="text-destructive text-xs">
+                    {proxyCheck.error || "代理不可用"}
+                    {proxyCheck.hint ? ` — ${proxyCheck.hint}` : ""}
+                  </p>
+                )}
+                {proxyCheck?.ok && proxyCheck.exit_ip && (
+                  <p className="text-muted-foreground text-xs">
+                    出口 IP: <span className="font-mono">{proxyCheck.exit_ip}</span>
+                  </p>
+                )}
                 <p className="text-muted-foreground text-xs">
                   国内环境装 nuclei 这类走 GitHub Release 的工具通常需要它；与「全局代理」（Agent
-                  目标流量）互不影响。
+                  目标流量）互不影响。代理随时可改，改完点「测试」确认通路——代理会失效，
+                  装工具失败时先来这里看。
                 </p>
               </div>
 

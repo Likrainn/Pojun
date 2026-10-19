@@ -134,3 +134,27 @@ func TestManualToolNotInstallable(t *testing.T) {
 		t.Errorf("msfconsole kind 应为 manual,得到 %q", msf.Kind)
 	}
 }
+
+// 新增的 ProjectDiscovery 系工具（naabu/dnsx/katana/tlsx）必须与既有三个
+// 同构：资产名 {tool}_{ver}_linux_{arch}.zip（不带 v 前缀）。
+// 模板写错的症状是「下载 404」，而用户只看到安装失败，看不出是资产名拼错。
+func TestAssetURLForProjectDiscoveryFamily(t *testing.T) {
+	for _, id := range []string{"nuclei", "httpx", "subfinder", "naabu", "dnsx", "katana", "tlsx"} {
+		tool, ok := hosttools.Lookup(id)
+		if !ok {
+			t.Fatalf("%s 不在 catalog 里", id)
+		}
+		if tool.Kind != hosttools.KindGitHub {
+			t.Errorf("%s kind 应为 github，得到 %q", id, tool.Kind)
+		}
+		u := GitHubAssetURL(tool, "v1.2.3")
+		want := "https://github.com/projectdiscovery/" + id +
+			"/releases/download/v1.2.3/" + id + "_1.2.3_linux_"
+		if !strings.HasPrefix(u, want) {
+			t.Errorf("%s URL 不对: %s", id, u)
+		}
+		if !strings.HasSuffix(u, ".zip") {
+			t.Errorf("%s URL 后缀不对: %s", id, u)
+		}
+	}
+}

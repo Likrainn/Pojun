@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/chu0119/artex/hosttools"
+	"github.com/chu0119/artex/proxyprobe"
 	"github.com/chu0119/artex/selfupdate"
 )
 
@@ -66,12 +67,18 @@ func (s *Server) hostdProbe(ctx context.Context) (bool, string) {
 
 // installProxy 读「安装期出网代理」设置。与运行期的目标代理/LLM 代理无关:
 // 它只作用于 apt/curl/GitHub 下载。
+//
+// 环境变量 ARTEX_INSTALL_PROXY 是兜底：Docker 形态没有 config.json，
+// install.sh 只能通过 compose 传进来。数据库 setting 优先（可被页面改写），
+// 环境变量只在没配 setting 时生效。
 func (s *Server) installProxy() string {
-	if s.m == nil || s.m.pg == nil {
-		return ""
+	if s.m != nil && s.m.pg != nil {
+		v, _, _ := s.m.pg.GetSetting(settingInstallProxy)
+		if t := strings.TrimSpace(v); t != "" {
+			return t
+		}
 	}
-	v, _, _ := s.m.pg.GetSetting(settingInstallProxy)
-	return strings.TrimSpace(v)
+	return strings.TrimSpace(os.Getenv("ARTEX_INSTALL_PROXY"))
 }
 
 // maintenanceProxy 维护类出网（检查/下载更新、安装宿主工具）走哪个代理。
@@ -142,6 +149,48 @@ func (s *Server) hostenvInstall(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_, _ = w.Write(body)
+}
+
+// hostenvProxyCheck 测试一个代理是否真的可用。
+//
+// 用户要的是「代理随时能改」——代理会失效，所以改完必须能立刻验证，
+// 而不是装工具时才发现连不上。不传 proxy 时测当前生效的代理。
+//
+// 判定口径与 install.sh 装机期一致（都走 proxyprobe 包）：两边说"通"，
+// 就真的是同一条链路。
+func (s *Server) hostenvProxyCheck(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Proxy string `json:"proxy"`
+		// UseCurrent = true 时测当前生效的代理（忽略 body 里的 proxy）。
+		UseCurrent bool `json:"use_current"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	raw := strings.TrimSpace(req.Proxy)
+	if req.UseCurrent || raw == "" {
+		raw = s.installProxy()
+	}
+	raw = proxyprobe.Normalize(raw)
+
+	clean, err := proxyprobe.Validate(raw)
+	if err != nil {
+		writeJSON(w, 400, map[string]any{
+			"ok":    false,
+			"proxy": raw,
+			"error": err.Error(),
+			"hint":  "格式应为 http://host:port、https://host:port、socks5://host:port 或 socks5h://host:port（可带 user:pass@）",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	res := proxyprobe.Probe(ctx, clean, "", "https://api.ipify.org?format=json")
+
+	// 200 带 ok:false 是「测了，不通」——不是接口错误，前端要能区分。
+	writeJSON(w, 200, res)
 }
 
 // hostenvJob 查询安装任务进度(前端轮询)。

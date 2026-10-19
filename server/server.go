@@ -843,6 +843,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/hostenv/install", s.hostenvInstall)
 	mux.HandleFunc("GET /api/hostenv/jobs/{id}", s.hostenvJob)
 	mux.HandleFunc("POST /api/hostenv/jobs/{id}/cancel", s.hostenvCancel)
+	mux.HandleFunc("POST /api/hostenv/proxy-check", s.hostenvProxyCheck)
 	mux.HandleFunc("GET /api/chat/mentions", s.searchChatMentions)
 	mux.HandleFunc("POST /api/chat", s.chat)
 	mux.HandleFunc("POST /api/chat/upload", s.chatUpload) // 方式1 文件上传:落到会话/任务工作目录 uploads/

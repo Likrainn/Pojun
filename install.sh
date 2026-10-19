@@ -112,8 +112,204 @@ if ! command -v curl >/dev/null 2>&1; then
 fi
 command -v curl >/dev/null 2>&1 || die "curl 安装失败，请手动安装"
 
+# ── 出网代理：交互式配置 + 自动验证 ────────────────
+#
+# 为什么交互式：装机最常卡住的就是「这台机器连不上 GitHub / apt 源」。
+# 让用户现场填一个标准格式的代理（http / https / socks5 / socks5h），
+# 脚本自己验证通不通，验证过了再走流程——比让人事后自己去翻日志找
+# "curl: (7) Failed to connect" 快得多。
+#
+# 填了代理后所有出网路径统一走它：apt / curl / npm / git / pip / go install。
+# 验证不过时可以选择重填或跳过（跳过=直连，后面该失败的会失败）。
+normalize_proxy(){
+  local p="$1"
+  p="$(printf '%s' "$p" | tr -d ' \t"'"'"'' | sed 's|/*$||')"
+  [ -z "$p" ] && return 0
+  # 裸 host:port → 默认按 http 处理（绝大多数本地代理是 http 混合端口）
+  case "$p" in
+    *://*) : ;;
+    *) p="http://$p" ;;
+  esac
+  printf '%s' "$p"
+}
+
+# proxy_scheme_ok 校验协议：只有 http/https/socks5/socks5h 有效。
+proxy_scheme_ok(){
+  case "$1" in
+    http://*|https://*|socks5://*|socks5h://*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# proxy_has_hostport 校验 host:port 齐全。
+proxy_has_hostport(){
+  local rest="${1#*://}"
+  rest="${rest%%/*}"
+  case "$rest" in
+    *@*) rest="${rest#*@}" ;;
+  esac
+  case "$rest" in
+    *:*) [ -n "${rest%%:*}" ] && [ -n "${rest##*:}" ] ;;
+    *) return 1 ;;
+  esac
+}
+
+# proxy_curl_args 按协议拼出 curl 的代理参数。
+# socks5:// 这种 URL 形式 curl 的 -x 不认（会报 "unsupported protocol
+# scheme"），它要的是 --socks5-hostname host:port。硬塞 URL 的表现是
+# 「填了 socks 代理但所有下载都失败」，而报错完全指不到真因。
+#
+# --socks5-hostname vs --socks5：前者把域名也交给代理解析（= socks5h），
+# 后者在本地解析 DNS。国内环境里本地 DNS 常常解析不了境外域名，所以用前者。
+proxy_curl_args(){
+  local p="$1"
+  case "$p" in
+    socks5://*|socks5h://*)
+      local _p="${p#*://}" _auth=""
+      case "$_p" in
+        *@*) _auth="${_p%%@*}"; _p="${_p#*@}" ;;
+      esac
+      _p="${_p%%/*}"
+      printf '%s\n' --socks5-hostname "$_p"
+      [ -n "$_auth" ] && printf '%s\n' --socks5-basic -U "$_auth"
+      ;;
+    *)
+      printf '%s\n' -x "$p"
+      ;;
+  esac
+}
+
+# verify_proxy 拿代理真的发一个请求验证可用性。
+# 用 GitHub API 做靶子：装机流程本来就要访问它，验证与用途一致。
+verify_proxy(){
+  local p="$1"
+  local -a pargs=()
+  while IFS= read -r line; do pargs+=("$line"); done < <(proxy_curl_args "$p")
+  local code
+  code="$(curl -fsSL "${pargs[@]}" -o /dev/null -w '%{http_code}' \
+        --connect-timeout 8 --max-time 20 \
+        https://api.github.com/repos/projectdiscovery/nuclei/releases/latest 2>/dev/null)" || code="000"
+  case "$code" in
+    200|301|302|403) return 0 ;;   # 403 = GitHub 限流，链路是通的
+    *) return 1 ;;
+  esac
+}
+
+# configure_proxy 交互式询问 + 规范化。
+# 只做「问」与「格式校验」，验证单独放在 CURL 构造之后（verify_proxy 需要
+# 按协议拼 curl 参数，而那依赖 INSTALL_PROXY 已定型）。
+#
+# 显式给了 --install-proxy 也走同一套校验：填错协议/端口是最常见的失败原因。
+configure_proxy(){
+  if [ -n "$INSTALL_PROXY" ]; then
+    INSTALL_PROXY="$(normalize_proxy "$INSTALL_PROXY")"
+    if ! proxy_scheme_ok "$INSTALL_PROXY"; then
+      die "代理协议不支持: $INSTALL_PROXY（支持 http/https/socks5/socks5h）"
+    fi
+    if ! proxy_has_hostport "$INSTALL_PROXY"; then
+      die "代理缺少 host:port: $INSTALL_PROXY"
+    fi
+    return 0
+  fi
+
+  # 非交互场景不打扰：直连。
+  [ "$ASSUME_YES" = "1" ] && return 0
+  [ ! -t 0 ] && return 0
+
+  printf '\n'
+  printf '是否配置出网代理？\n'
+  printf '  装机要访问 apt 源 / GitHub / npm / pypi；直连不通时在这里填一个代理最省事。\n'
+  printf '  支持格式：http://host:port 、https://host:port 、socks5://host:port 、socks5h://host:port\n'
+  printf '  带认证：http://user:pass@host:port ；留空 = 直连\n'
+  printf '代理地址（留空直连）: '
+  local ans=""
+  read -r ans || ans=""
+  ans="$(printf '%s' "$ans" | tr -d ' \t"'"'"'')"
+  [ -z "$ans" ] && { info "使用直连"; return 0; }
+
+  ans="$(normalize_proxy "$ans")"
+  if ! proxy_scheme_ok "$ans"; then
+    warn "协议不支持: $ans"
+    warn "支持 http/https/socks5/socks5h"
+    return 0
+  fi
+  if ! proxy_has_hostport "$ans"; then
+    warn "缺少 host:port: $ans"
+    return 0
+  fi
+  INSTALL_PROXY="$ans"
+  return 0
+}
+
+configure_proxy
+
+# ── curl 的代理参数：按协议分发 ───────────────────
+#
+# curl 不接受 socks5:// 这种 URL 形式的 -x（会报 "unsupported protocol
+# scheme"），它要的是 --socks5-hostname host:port。照 URL 形式硬塞进去的
+# 表现是「填了 socks 代理但所有下载都失败」，而报错完全指不到真因。
+#
+# --socks5-hostname vs --socks5：前者把域名也交给代理解析（= socks5h），
+# 后者在本地解析 DNS。国内环境里本地 DNS 常常解析不了境外域名，所以用前者。
 CURL=(curl -fsSL --retry 3)
-[ -n "$INSTALL_PROXY" ] && { CURL+=(-x "$INSTALL_PROXY"); info "安装期使用代理: $INSTALL_PROXY"; }
+if [ -n "$INSTALL_PROXY" ]; then
+  while IFS= read -r _parg; do
+    [ -n "$_parg" ] && CURL+=("$_parg")
+  done < <(proxy_curl_args "$INSTALL_PROXY")
+  info "安装期使用代理: $INSTALL_PROXY"
+
+  # 代理必须验证过才能往下走：装机流程后面全靠它拉 GitHub 资产，
+  # 代理不通时每一处下载都会失败并刷一堆看不懂的报错。
+  printf '验证代理 ... '
+  if verify_proxy "$INSTALL_PROXY"; then
+    ok "代理可用"
+  else
+    printf '\n'
+    warn "代理验证失败（GitHub API 不可达）"
+    if [ "$ASSUME_YES" = "1" ] || [ ! -t 0 ]; then
+      die "代理不可用，中止安装（用 --install-proxy= 修正，或不传该参数走直连）"
+    fi
+    printf '仍然使用这个代理继续？(y/N) '
+    local _ans=""; read -r _ans || _ans=""
+    case "$_ans" in
+      y|Y|yes|YES) : ;;
+      *) die "已中止" ;;
+    esac
+  fi
+fi
+
+# 统一代理环境：git / npm / go / pip 这类工具只认 HTTP_PROXY/HTTPS_PROXY/
+# ALL_PROXY，不认 curl 的 -x。导出后它们自动走同一个代理。
+# socks5 用 ALL_PROXY（curl 那条路已单独处理，ALL_PROXY 给 git/npm 用）。
+if [ -n "$INSTALL_PROXY" ]; then
+  case "$INSTALL_PROXY" in
+    socks5://*|socks5h://*)
+      export ALL_PROXY="$INSTALL_PROXY"
+      export all_proxy="$INSTALL_PROXY"
+      ;;
+    *)
+      export HTTP_PROXY="$INSTALL_PROXY"  HTTPS_PROXY="$INSTALL_PROXY"
+      export http_proxy="$INSTALL_PROXY"  https_proxy="$INSTALL_PROXY"
+      ;;
+  esac
+  export NO_PROXY="localhost,127.0.0.1,::1"
+  export no_proxy="$NO_PROXY"
+fi
+
+# systemd 单元里的代理环境行。hostd 是独立进程，不共享主服务环境，
+# 所以主服务与 hostd 两个单元都要带这一行。
+INSTALL_PROXY_ENV=""
+if [ -n "$INSTALL_PROXY" ]; then
+  case "$INSTALL_PROXY" in
+    socks5://*|socks5h://*)
+      INSTALL_PROXY_ENV="Environment=ALL_PROXY=${INSTALL_PROXY}"
+      ;;
+    *)
+      INSTALL_PROXY_ENV="Environment=HTTP_PROXY=${INSTALL_PROXY}
+Environment=HTTPS_PROXY=${INSTALL_PROXY}"
+      ;;
+  esac
+fi
 
 # ── 选择部署形态 ─────────────────────────────────
 choose_mode(){
@@ -215,10 +411,18 @@ deploy_binary(){
   if [ ! -f "$INSTALL_DIR/config.json" ]; then
     info "配置 PostgreSQL..."
     if ! command -v psql >/dev/null 2>&1; then
+      # 这处 apt 必须走代理：apt 源在国内机器上常常要代理才拉得到，
+      # 而 postgres 是硬依赖，装不上整条流程就断了。
       if command -v apt-get >/dev/null 2>&1; then
-        apt-get update -qq && apt-get install -y postgresql
+        local PP=()
+        [ -n "$INSTALL_PROXY" ] && PP=(-o "Acquire::http::Proxy=$INSTALL_PROXY" -o "Acquire::https::Proxy=$INSTALL_PROXY")
+        apt-get "${PP[@]}" update -qq && apt-get "${PP[@]}" install -y postgresql
       elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y postgresql-server && postgresql-setup --initdb
+        # dnf --setopt=proxy="" 会被当成"代理指向空地址"而不是"不设代理"，
+        # 所以只在确实有代理时才加这个参数。
+        local DP=()
+        [ -n "$INSTALL_PROXY" ] && DP=(--setopt=proxy="$INSTALL_PROXY")
+        dnf "${DP[@]}" install -y postgresql-server && postgresql-setup --initdb
       else
         die "未识别的包管理器，请手动安装 PostgreSQL"
       fi
@@ -281,6 +485,9 @@ User=${RUN_USER}
 WorkingDirectory=${INSTALL_DIR}
 Environment=HOME=${INSTALL_DIR}
 ExecStart=${INSTALL_DIR}/start.sh -addr ${LISTEN_ADDR} -proxy ${PROXY_ADDR}
+# 装机代理：宿主环境页的「一键安装」和后台情报同步用。hostd 是独立进程，
+# 不共享主服务环境，所以它自己的单元也要带（见下方 hostd 单元）。
+${INSTALL_PROXY_ENV}
 Restart=always
 RestartSec=5
 # 安全加固
@@ -318,6 +525,60 @@ UNIT
   if [ "$WITH_INSTALLER" = "1" ]; then install_hostd; fi
 }
 
+# ── 把代理写进运行期设置 ─────────────────────────
+# 装机时代理只作用于脚本自身；Web「系统 → 宿主环境」页的「一键安装」和
+# 后台的情报同步走的是数据库里的 install_proxy 设置。两者不联动的话，
+# 用户装完机器后还得再手填一遍代理——正是用户说的「所有该走代理的就走代理」。
+#
+# 走数据库而不是 HTTP API：设置接口要 JWT，而管理员密码是用户首次访问
+# 时自己设的，install.sh 拿不到。settings 表结构简单（key/value），
+# 直接 UPSERT 最省事。
+persist_install_proxy(){
+  [ -n "$INSTALL_PROXY" ] || return 0
+  [ -f "$INSTALL_DIR/config.json" ] || { warn "找不到 config.json，跳过写入运行期代理"; return 0; }
+  command -v psql >/dev/null 2>&1 || { warn "没有 psql，跳过写入运行期代理"; return 0; }
+
+  # 从 config.json 取连接参数（python3 或 grep 都能解，优先 python3）
+  local db_host db_port db_user db_pass db_name
+  if command -v python3 >/dev/null 2>&1; then
+    eval "$(python3 - "$INSTALL_DIR/config.json" <<'PYEOF'
+import json, shlex, sys
+try:
+    d = json.load(open(sys.argv[1])).get("database", {})
+except Exception:
+    d = {}
+for k in ("host", "port", "user", "password", "dbname"):
+    v = str(d.get(k, ""))
+    print(f"db_{k}={shlex.quote(v)}")
+PYEOF
+)"
+  fi
+  db_host="${db_host:-127.0.0.1}"
+  db_port="${db_port:-5432}"
+  db_user="${db_user:-artex}"
+  db_pass="${db_pass:-}"
+  db_name="${db_name:-artex}"
+
+  # 等服务把 schema 建好（settings 表是 migration 建的）
+  local i
+  for i in $(seq 1 30); do
+    if PGPASSWORD="$db_pass" psql -h "$db_host" -p "$db_port" -U "$db_user" -d "$db_name" \
+         -tAc "SELECT 1 FROM settings LIMIT 1" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+
+  if PGPASSWORD="$db_pass" psql -h "$db_host" -p "$db_port" -U "$db_user" -d "$db_name" \
+       -v ON_ERROR_STOP=1 -c \
+       "INSERT INTO settings(key, value) VALUES ('install_proxy', :'proxy') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()" \
+       -v proxy="$INSTALL_PROXY" >/dev/null 2>&1; then
+    ok "运行期装机代理已写入（宿主环境页的一键安装会沿用）"
+  else
+    warn "写入运行期装机代理失败，可在 Web「系统 → 宿主环境」页手动填一次"
+  fi
+}
+
 # ── 特权安装助手 artex-hostd ─────────────────────
 # 主服务单元带 NoNewPrivileges + ProtectSystem=strict,进程无法提权、/usr 只读,
 # 所以「一键安装」做不了——必须在外面用一个 root 助手。它只监听一个 Unix socket,
@@ -341,6 +602,7 @@ Wants=network-online.target
 Type=simple
 User=root
 ExecStart=/usr/local/bin/artex-hostd -socket /run/artex/hostd.sock -socket-group ${RUN_USER}
+${INSTALL_PROXY_ENV}
 Restart=always
 RestartSec=5
 # /run/artex 由 systemd 建好并随停止清理;socket 本身被助手下调成 0660 root:${RUN_USER}
@@ -411,11 +673,22 @@ POSTGRES_PASSWORD=$PG_PASS
 POSTGRES_DB=artex
 ARTEX_IMAGE=$IMAGE
 ARTEX_TAG=$VERSION
+ARTEX_INSTALL_PROXY=$INSTALL_PROXY
 ENV
     chmod 600 "$INSTALL_DIR/.env"
     ok "已生成 $INSTALL_DIR/.env（含随机数据库密码，权限 600）"
   else
     ok "沿用既有 .env（升级不覆盖）"
+    # 但代理要跟着本次安装走：它不是"首次生成"的密钥，升级时也该同步，
+    # 否则用户改了代理后重跑安装，旧 .env 里的旧代理还在生效。
+    if [ -n "$INSTALL_PROXY" ]; then
+      if grep -q '^ARTEX_INSTALL_PROXY=' "$INSTALL_DIR/.env"; then
+        sed -i "s|^ARTEX_INSTALL_PROXY=.*|ARTEX_INSTALL_PROXY=$INSTALL_PROXY|" "$INSTALL_DIR/.env"
+      else
+        printf 'ARTEX_INSTALL_PROXY=%s\n' "$INSTALL_PROXY" >> "$INSTALL_DIR/.env"
+      fi
+      ok "已同步 .env 里的装机代理"
+    fi
   fi
 
   local PORT="${LISTEN_ADDR##*:}" PROXY_PORT="${PROXY_ADDR##*:}"
@@ -450,6 +723,9 @@ services:
       ARTEX_LLM_MODEL: \${ARTEX_LLM_MODEL:-}
       ARTEX_LLM_BASE_URL: \${ARTEX_LLM_BASE_URL:-}
       ARTEX_LLM_PROXY: \${ARTEX_LLM_PROXY:-}
+      # 装机代理：宿主环境页的「一键安装」和后台情报同步用。Docker 形态没有
+      # config.json，只能走环境变量；服务端读它作为数据库 setting 的兜底。
+      ARTEX_INSTALL_PROXY: \${ARTEX_INSTALL_PROXY:-}
     ports:
       - "${PORT}:8787"
       - "127.0.0.1:${PROXY_PORT}:8788"
@@ -488,13 +764,18 @@ install_tools(){
   if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get "${APT_PROXY[@]}" update -qq || warn "apt update 失败，继续尝试"
-    apt-get "${APT_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto gobuster john \
-      netcat-openbsd dnsutils whois unzip seclists >/dev/null 2>&1 \
-      || apt-get "${APT_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto gobuster john \
-           netcat-openbsd dnsutils whois unzip >/dev/null \
+    # seclists 在 apt 源里没有稳定包名，单独克隆（见 install_wordlists）；
+    # 其余一次装齐，缺的包不阻断整体（不同发行版源里包名有出入）。
+    apt-get "${APT_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto gobuster ffuf john \
+      netcat-openbsd dnsutils whois unzip nodejs npm python3-impacket gitleaks \
+      >/dev/null 2>&1 \
+      || apt-get "${APT_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto gobuster ffuf john \
+           netcat-openbsd dnsutils whois unzip nodejs npm python3-impacket \
+           >/dev/null \
       || warn "部分 apt 工具未装上"
   elif command -v dnf >/dev/null 2>&1; then
     dnf "${DNF_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto john nmap-ncat bind-utils unzip \
+      nodejs python3-impacket \
       || warn "dnf 部分包缺失，已装可用项"
   else
     warn "未识别的包管理器，跳过系统源工具安装"
@@ -502,52 +783,128 @@ install_tools(){
   ok "系统源工具安装完成"
 
   # 非系统源工具（Go 系 / GitHub Release），装不上的在 Web「系统 → 宿主环境」页按需装
-  install_go_tools
+  install_github_tools
+  install_wordlists
+  install_pip_tools
+  install_browser_mcp
 }
 
-# Go 系工具优先用 `go install`（有 Go 工具链时），否则回退到 GitHub Release 单文件。
-install_go_tools(){
+# ── GitHub Release 单文件工具 ───────────────────
+# nuclei / httpx / subfinder / naabu / dnsx / katana / tlsx 都是
+# ProjectDiscovery 系的同一套发布格式：{tool}_{ver}_linux_{arch}.zip，
+# 所以一个循环搞定，新增工具只要往列表里加一行。
+#
+# 不用 `go install`：宿主未必有 Go 工具链，而且 go install 每次都要下模块。
+# 不用 apt 源：这些工具的 apt 包要么没有要么版本极旧。
+install_github_tools(){
   local GOBIN_DIR="/usr/local/bin"
-  if command -v go >/dev/null 2>&1; then
-    local GOENV=()
-    [ -n "$INSTALL_PROXY" ] && GOENV=(HTTPS_PROXY="$INSTALL_PROXY" HTTP_PROXY="$INSTALL_PROXY")
-    info "检测到 Go 工具链，安装 httpx / subfinder ..."
-    for pkg in "github.com/projectdiscovery/httpx/cmd/httpx@latest" \
-               "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"; do
-      env "${GOENV[@]}" GOBIN="$GOBIN_DIR" go install "$pkg" >/dev/null 2>&1 \
-        && ok "  $(basename "${pkg%%@*}") ✓" || warn "  $(basename "${pkg%%@*}") 安装失败"
-    done
-  else
-    warn "未检测到 Go 工具链，httpx / subfinder 未安装（可在 Web「宿主环境」页装，或装 Go 后重跑）"
-  fi
+  local arch="amd64"
+  [ "$ARCH" = "aarch64" ] && arch="arm64"
 
-  # nuclei 不在系统源，用 GitHub Release 单文件（带版本号资产名）
-  if ! command -v nuclei >/dev/null 2>&1; then
-    info "安装 nuclei（projectdiscovery）..."
-    local NTAG=""
-    NTAG="$("${CURL[@]}" https://api.github.com/repos/projectdiscovery/nuclei/releases/latest \
-      | grep -oE '"tag_name": *"[^"]+"' | head -1 | cut -d'"' -f4)" || NTAG=""
-    if [ -n "$NTAG" ]; then
-      local NURL=""
-      case "$ARCH" in
-        x86_64)  NURL="https://github.com/projectdiscovery/nuclei/releases/download/${NTAG}/nuclei_${NTAG#v}_linux_amd64.zip" ;;
-        aarch64) NURL="https://github.com/projectdiscovery/nuclei/releases/download/${NTAG}/nuclei_${NTAG#v}_linux_arm64.zip" ;;
-      esac
-      if "${CURL[@]}" "$NURL" -o "$TMP/nuclei.zip" \
-         && unzip -oq "$TMP/nuclei.zip" -d "$TMP/nuclei" && [ -x "$TMP/nuclei/nuclei" ]; then
-        mv "$TMP/nuclei/nuclei" /usr/local/bin/nuclei && chmod +x /usr/local/bin/nuclei
-        ok "nuclei $NTAG → /usr/local/bin/nuclei"
-      else
-        warn "nuclei 下载失败（可加 --install-proxy 走代理）"
-      fi
+  local tools="nuclei httpx subfinder naabu dnsx katana tlsx"
+  for n in $tools; do
+    if command -v "$n" >/dev/null 2>&1; then
+      ok "  $n 已存在"
+      continue
+    fi
+    local tag ver url zip tmpd
+    tag="$("${CURL[@]}" "https://api.github.com/repos/projectdiscovery/$n/releases/latest" \
+      | grep -oE '"tag_name": *"[^"]+"' | head -1 | cut -d'"' -f4)" || tag=""
+    if [ -z "$tag" ]; then
+      warn "  $n 无法解析最新版本（GitHub API 受限，可加 --install-proxy）"
+      continue
+    fi
+    ver="${tag#v}"
+    url="https://github.com/projectdiscovery/$n/releases/download/${tag}/${n}_${ver}_linux_${arch}.zip"
+    zip="$TMP/${n}.zip"
+    tmpd="$TMP/${n}"
+    if "${CURL[@]}" "$url" -o "$zip" && unzip -oq "$zip" -d "$tmpd" && [ -x "$tmpd/$n" ]; then
+      mv "$tmpd/$n" "$GOBIN_DIR/$n" && chmod +x "$GOBIN_DIR/$n"
+      ok "  $n $tag → $GOBIN_DIR/$n"
     else
-      warn "无法解析 nuclei 最新版本（GitHub API 受限，可加 --install-proxy）"
+      warn "  $n 下载失败（可加 --install-proxy 走代理）"
+    fi
+    rm -rf "$zip" "$tmpd"
+  done
+}
+
+# SecLists：通用字典集(目录/参数/用户名爆破语料)。apt 源里没有稳定包名，
+# 只能克隆。它有 2.5G，用 --depth 1 浅克隆。
+install_wordlists(){
+  local dir="/opt/SecLists"
+  if [ -d "$dir" ] && [ -d "$dir/Discovery" ]; then
+    ok "  SecLists 已存在 → $dir"
+    return 0
+  fi
+  info "克隆 SecLists 字典集（浅克隆，约 2.5G）..."
+  if command -v git >/dev/null 2>&1; then
+    if git clone --depth 1 https://github.com/danielmiessler/SecLists.git "$dir" >/dev/null 2>&1; then
+      ok "  SecLists → $dir"
+    else
+      warn "  SecLists 克隆失败（可加 --install-proxy 走代理）"
     fi
   else
-    ok "nuclei 已存在"
+    warn "  未装 git，SecLists 跳过"
+  fi
+}
+
+# pip 工具：wafw00f(WAF 识别)、impacket 的部分脚本。
+# 优先 pipx（隔离环境，不污染系统 Python，也不撞 PEP668 externally-managed），
+# 没有 pipx 就退回 python3 -m pip --break-system-packages。
+install_pip_tools(){
+  command -v python3 >/dev/null 2>&1 || { warn "  没有 python3，pip 工具跳过"; return 0; }
+  local PIPX=()
+  if command -v pipx >/dev/null 2>&1; then
+    PIPX=(pipx install)
+  else
+    PIPX=(python3 -m pip install --break-system-packages)
+  fi
+  local proxy_args=()
+  [ -n "$INSTALL_PROXY" ] && proxy_args=(--proxy "$INSTALL_PROXY")
+  local pkg
+  for pkg in wafw00f; do
+    if "${PIPX[@]}" "${proxy_args[@]}" "$pkg" >/dev/null 2>&1; then
+      ok "  $pkg ✓"
+    else
+      warn "  $pkg 安装失败"
+    fi
+  done
+}
+
+# Playwright MCP：browser MCP 用 `npx @playwright/mcp` 启动，需要 node+npx；
+# 再预置 chromium 浏览器，否则首次启动还要联网下载。
+#
+# 浏览器装到 /opt/ms-playwright 而不是 ~/.cache/ms-playwright：
+# 服务以 artex 用户跑，root 家目录里的缓存它看不见。
+install_browser_mcp(){
+  command -v node >/dev/null 2>&1 || { warn "  没有 node，browser MCP 跳过"; return 0; }
+  command -v npm >/dev/null 2>&1 || { warn "  没有 npm，browser MCP 跳过"; return 0; }
+
+  # NPMENV 必须在两个分支外定义：set -u 下未定义变量会直接终止脚本。
+  local NPMENV=()
+  [ -n "$INSTALL_PROXY" ] && NPMENV=(HTTP_PROXY="$INSTALL_PROXY" HTTPS_PROXY="$INSTALL_PROXY")
+
+  if ! npm ls -g @playwright/mcp >/dev/null 2>&1; then
+    info "  安装 Playwright MCP（全局 npm）..."
+    if env "${NPMENV[@]}" npm install -g @playwright/mcp@latest >/dev/null 2>&1; then
+      ok "  @playwright/mcp ✓"
+    else
+      warn "  @playwright/mcp 安装失败"
+    fi
   fi
 
-  info "其余缺项见 Web「系统 → 宿主环境」页，可一键安装"
+  local BROWSER_DIR="/opt/ms-playwright"
+  if [ -d "$BROWSER_DIR" ]; then
+    ok "  chromium 已预置 → $BROWSER_DIR"
+    return 0
+  fi
+  info "  预置 chromium 浏览器（首次约 150MB）..."
+  if env "${NPMENV[@]}" PLAYWRIGHT_BROWSERS_PATH="$BROWSER_DIR" \
+       npx --yes playwright@latest install --with-deps chromium >/dev/null 2>&1; then
+    ok "  chromium → $BROWSER_DIR"
+  else
+    warn "  chromium 预置失败（首次启动 MCP 时仍可自动下载）"
+  fi
 }
 
 # ── 执行部署 ─────────────────────────────────────
@@ -558,6 +915,10 @@ case "$MODE" in
 esac
 
 if [ "$WITH_TOOLS" = "1" ]; then install_tools; fi
+
+# 代理要落地到运行期设置，宿主环境页的「一键安装」才用同一个代理。
+# 放在最后：此时服务已起、schema 已建。
+persist_install_proxy
 
 # ── 健康检查 ─────────────────────────────────────
 PORT="${LISTEN_ADDR##*:}"

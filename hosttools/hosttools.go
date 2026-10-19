@@ -86,8 +86,28 @@ var catalog = []Tool{
 		Repo: "projectdiscovery/httpx", AssetTmpl: "httpx_{ver}_linux_{arch}.zip"},
 	{Name: "subfinder", Purpose: "子域名枚举", Kind: KindGitHub,
 		Repo: "projectdiscovery/subfinder", AssetTmpl: "subfinder_{ver}_linux_{arch}.zip"},
+	// ProjectDiscovery 系另外三个：naabu(端口扫)、dnsx(DNS 解析/爆破)、
+	// katana(爬虫)、tlsx(TLS 证书探测)。资产命名与上面三个同构
+	// （{tool}_{ver}_linux_{arch}.zip），所以一个 AssetTmpl 模板就够。
+	{Name: "naabu", Purpose: "快速端口扫描(与 httpx 联动筛存活)", Kind: KindGitHub,
+		Repo: "projectdiscovery/naabu", AssetTmpl: "naabu_{ver}_linux_{arch}.zip"},
+	{Name: "dnsx", Purpose: "DNS 解析/爆破/记录提取", Kind: KindGitHub,
+		Repo: "projectdiscovery/dnsx", AssetTmpl: "dnsx_{ver}_linux_{arch}.zip"},
+	{Name: "katana", Purpose: "Web 爬虫(爬深层路径与参数)", Kind: KindGitHub,
+		Repo: "projectdiscovery/katana", AssetTmpl: "katana_{ver}_linux_{arch}.zip"},
+	{Name: "tlsx", Purpose: "TLS 证书信息提取(证书/ SAN / 过期)", Kind: KindGitHub,
+		Repo: "projectdiscovery/tlsx", AssetTmpl: "tlsx_{ver}_linux_{arch}.zip"},
 
 	{Name: "wafw00f", Purpose: "WAF 识别", Kind: KindPip, Pip: "wafw00f"},
+	// impacket 是 SMB/NTLM/票据的 Python 库(提供 msmfmap、ntlmrelay、secretsdump
+	// 等脚本)。apt 源里的包名是 python3-impacket,Debian/Ubuntu 都有。
+	{Name: "impacket", Purpose: "SMB/NTLM 协议工具集(secretsdump/ntlmrelay 等)", Kind: KindApt,
+		Apt: "python3-impacket", Dnf: "python3-impacket"},
+	// SecLists 是最大的通用字典集(目录爆破/参数 fuzz 的语料)。apt 源里没有
+	// 稳定包名,只能从 GitHub 克隆——但它是目录而非单文件,GitHub 配方装不了,
+	// 所以走 KindManual 并在 install.sh 里单独克隆。
+	{Name: "seclists", Purpose: "通用字典集(目录/参数/用户名爆破语料)", Kind: KindManual,
+		Install: "git clone --depth 1 https://github.com/danielmiessler/SecLists.git /opt/SecLists"},
 
 	{Name: "msfconsole", Purpose: "Metasploit 框架(exploit/encoder)", Kind: KindManual,
 		Install: "官方安装包(需交互): https://docs.rapid7.com/metasploit/installing-the-metasploit-framework/"},

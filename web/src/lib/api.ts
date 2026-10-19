@@ -48,6 +48,7 @@ import type {
   FindingTrafficDetail,
   HostenvStatus,
   InstallJob,
+  ProxyCheckResult,
   IntentAsset,
   InterceptApprovalFilter,
   InterceptApprovalRow,
@@ -871,6 +872,12 @@ export const api = {
   hostenvInstall: (id: string) => post<InstallJob>(`/hostenv/install`, { id }),
   hostenvJob: (jobId: string) => get<InstallJob>(`/hostenv/jobs/${jobId}`),
   hostenvCancel: (jobId: string) => post<{ ok: boolean }>(`/hostenv/jobs/${jobId}/cancel`, {}),
+  // 代理自测：proxy 传空串 + use_current=true 则测当前生效的代理
+  hostenvProxyCheck: (proxy?: string, useCurrent?: boolean) =>
+    post<ProxyCheckResult>(`/hostenv/proxy-check`, {
+      proxy: proxy ?? "",
+      use_current: useCurrent ?? false,
+    }),
   notifyChannels: () =>
     get<{ channels: NotificationChannel[] }>(`/notify/channels`).then((r) => arr(r.channels)),
   notifyCreateChannel: (payload: {

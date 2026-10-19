@@ -1651,6 +1651,22 @@ export interface HostenvStatus {
   installer: HostenvInstaller;
 }
 
+/**
+ * 代理自测结果。ok=false 表示「测了，不通」——不是接口错误。
+ * hint 是可执行的修复建议（协议不匹配/认证缺失/超时等）。
+ */
+export interface ProxyCheckResult {
+  ok: boolean;
+  proxy: string;
+  scheme?: string;
+  latency_ms: number;
+  status: number;
+  /** 出口 IP；用于确认流量确实走了代理。 */
+  exit_ip?: string;
+  error?: string;
+  hint?: string;
+}
+
 /** 一次安装任务。log 是累积输出，随轮询增长。 */
 export interface InstallJob {
   id: string;
