@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/chu0119/artex/db"
+	"github.com/chu0119/artex/hosttools"
 	"github.com/chu0119/artex/intercept"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/llm"
@@ -102,7 +103,13 @@ const mainAgentDefaultTmpl = `你是一个授权渗透测试系统的"主 agent"
 
 func mainAgentSystem(goal, dataDir, workDir string) string {
 	body := renderSystem("mainagent", mainAgentDefaultTmpl, MainVars{Goal: goal, DataDir: dataDir, Now: nowStr()})
-	return body + artifactSpec(workDir)
+	// mainagent 也有 Bash 工具（基础默认工具集），会自己动手查证，
+	// 所以宿主工具清单同样要给它——不然它只能凭想象回答人。
+	out := body + artifactSpec(workDir)
+	if t := hosttools.SummaryText(); t != "" {
+		out += "\n\n【本机可用工具】\n" + t
+	}
+	return out
 }
 
 // Chat handles one human message and returns the assistant reply. emit, if

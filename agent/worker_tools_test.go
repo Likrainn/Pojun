@@ -38,3 +38,11 @@ func TestWorkerToolListStaysCompact(t *testing.T) {
 		}
 	}
 }
+
+// mainagent 也有 Bash 工具、会自己动手查证，所以同样需要工具清单。
+func TestMainAgentSystemIncludesHostTools(t *testing.T) {
+	sys := mainAgentSystem("拿下目标", "/opt/artex/data", "/tmp/run")
+	if !strings.Contains(sys, "本机可用工具") {
+		t.Fatal("mainagent 的 system prompt 里应注入宿主工具清单")
+	}
+}
