@@ -58,14 +58,20 @@ type Compactor struct {
 	mu      sync.Mutex
 	running map[int64]bool
 	lastRun map[int64]time.Time
+	// consecFails 记录每个探索连续几轮压缩失败,用于失败退避(见 cooldownForLocked)。
+	consecFails map[int64]int
 }
 
 // defaultCompactionTokens 是压缩调用的默认输出预算。
 //
-// 32768 的由来:实测 adaptive thinking 模型在长输入总结任务上的思考量在
-// 2000~8000 token 量级(且随 max_tokens 预算线性膨胀),1500/2048/4096/8192
-// 全部实测为「思考烧光、正文为空」。32768 留足了思考+正文的冗余。
-const defaultCompactionTokens = 32768
+// 65536 的由来:实测 6 节点/块在 65536 预算下 124 秒就正常收尾(用 11733
+// token);9 节点/块在 32768 预算下 3 块里有 1 块烧光预算失败。预算给足
+// 能显著提高成功率——思考型模型会按 max_tokens 预算持续思考,预算越大它
+// 思考得越久,但也因此更可能想到能收尾。
+//
+// 65536 仍是"思考+正文共用"的额度,给小了模型会一直想、正文轮不到
+// (见 outTokens 字段的注释)。
+const defaultCompactionTokens = 65536
 
 // defaultCompactionDuration 是单次后台压缩的墙钟上限。
 //
@@ -76,10 +82,14 @@ const defaultCompactionDuration = 20 * time.Minute
 
 // defaultCompactionMaxMembers 是单次压缩请求的成员节点数上限。
 //
-// 12 的由来:实测 3 个节点(743 prompt token)在 32768 预算下正常收尾;
-// 26 个节点(3084 prompt token)把 32768 预算烧光也不出正文。12 落在两者之间,
-// 既能正常收尾,又不会把一次压缩拆得太碎(拆太碎会让摘要失去「综合」的意义)。
-const defaultCompactionMaxMembers = 12
+// 6 的由来（实测同一份 26 节点真实输入，逐档切分）：
+//   - 26 节点/块：max_tokens 给到 65536 也把预算烧光，10 分钟不出正文。
+//   -  9 节点/块：3 块里 2 成功（194s / 324s）、1 失败（烧光 32768）。
+//   -  6 节点/块：124 秒就正常收尾，用 11733 token。
+//
+// 也就是说切得越碎，模型越容易收尾、耗时也越短。6 是「成功率」与
+// 「别把摘要切得太碎（碎了就失去『综合』的意义）」之间的平衡点。
+const defaultCompactionMaxMembers = 6
 
 // NewCompactor builds a compactor. prov/model are used for the §4 body LLM call
 // (same model the agent runs on, per §4). A nil Compactor is a safe no-op.
@@ -97,6 +107,7 @@ func NewCompactor(prov llm.Provider, model string) *Compactor {
 		maxBlockMembers: defaultCompactionMaxMembers,
 		running:         map[int64]bool{},
 		lastRun:         map[int64]time.Time{},
+		consecFails:     map[int64]int{},
 	}
 }
 
@@ -253,9 +264,13 @@ func (c *Compactor) minor(ctx context.Context, ts *db.ExplorationStore) {
 	if len(blocks) == 0 {
 		return // this batch has no ≥2 connected/shared-parent block — nothing to fold (§7)
 	}
+	allOK := true
 	for _, b := range blocks {
-		c.foldBlock(ctx, ts, g, b, nodeByID, cvers, c.generationFor(b, nil))
+		if !c.foldBlock(ctx, ts, g, b, nodeByID, cvers, c.generationFor(b, nil)) {
+			allOK = false
+		}
 	}
+	c.recordResult(ts.ID(), allOK)
 	// A minor may have pushed the segment count over M → merge in the same run.
 	if ad, e := ts.ActiveDigests(); e == nil && len(ad) >= c.m {
 		c.major(ctx, ts)
@@ -319,28 +334,34 @@ func (c *Compactor) major(ctx context.Context, ts *db.ExplorationStore) {
 	if err := ts.SupersedeDigests(stale); err != nil {
 		log.Printf("[compaction] supersede exp=%d: %v", ts.ID(), err)
 	}
+	allOK := true
 	for _, b := range toCreate {
-		c.foldBlock(ctx, ts, g, b, nodeByID, cvers, c.generationFor(b, active))
+		if !c.foldBlock(ctx, ts, g, b, nodeByID, cvers, c.generationFor(b, active)) {
+			allOK = false
+		}
 	}
+	c.recordResult(ts.ID(), allOK)
 }
 
 // foldBlock compresses one block and writes its digest — with a commit-time
 // liveness recheck (§ concurrency): between grouping and write the graph may have
 // changed, so any member that has since gone hot (revived) is dropped from the
 // covers set. If the block dissolves below K it is skipped.
-func (c *Compactor) foldBlock(ctx context.Context, ts *db.ExplorationStore, g *coldGraph, b block, nodeByID map[int64]*db.Node, cvers map[int64]int, generation int) {
+//
+// 返回是否成功(压缩+写 digest 都没出错),供上层做失败退避。
+func (c *Compactor) foldBlock(ctx context.Context, ts *db.ExplorationStore, g *coldGraph, b block, nodeByID map[int64]*db.Node, cvers map[int64]int, generation int) bool {
 	// 超大块会被切成若干子块分别压缩(见 compressChunked 的注释:思考型模型能否
 	// 收尾取决于单次输入规模)。多段 body 拼成一段,语义与原来的一段等价。
 	bodies, err := c.compressChunked(ctx, g, b, nodeByID)
 	if err != nil {
 		log.Printf("[compaction] compress exp=%d block=%v: %v", ts.ID(), b.Members, err)
-		return
+		return false
 	}
 	body := strings.Join(bodies, "\n\n")
 	// Re-read fresh state and drop any member that revived while we compressed.
 	fresh, _, err := loadColdGraph(ts)
 	if err != nil {
-		return
+		return false
 	}
 	freshHot := fresh.hotSet()
 	members := make([]int64, 0, len(b.Members))
@@ -350,13 +371,15 @@ func (c *Compactor) foldBlock(ctx context.Context, ts *db.ExplorationStore, g *c
 		}
 	}
 	if len(members) < c.params.K {
-		return // block revived out from under us — leave those nodes hot, don't fold
+		return true // block revived out from under us — leave those nodes hot, don't fold
 	}
 	final := block{Members: members, Anchors: b.Anchors}
 	payload := digestPayload(body, final, nodeByID, generation, blockSignature(final, cvers))
 	if _, err := ts.AddDigest(payload, members); err != nil {
 		log.Printf("[compaction] add digest exp=%d: %v", ts.ID(), err)
+		return false
 	}
+	return true
 }
 
 // generationFor computes a digest's重摘代次 (§1): 1 for a fresh fold; for a major
@@ -386,17 +409,46 @@ func (c *Compactor) generationFor(b block, active []*db.Node) int {
 }
 
 // tryStart acquires the per-task compaction lock, honoring the cooldown.
+//
+// 失败退避：连续失败时该探索的冷却时间指数增长。理由很实际——一次失败的
+// 压缩要烧掉几百秒的 LLM 时间(实测思考型模型在长输入上会思考 300 秒以上
+// 才放弃),而冷却只有 60 秒的话,就会变成「每分钟烧一次 5 分钟」的无谓循环。
+// 压缩失败不阻塞主流程(没有 digest 时 planner 直接看原始节点),所以退避
+// 只是省资源,不是保功能。
 func (c *Compactor) tryStart(expID int64) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.running[expID] {
 		return false
 	}
-	if t, ok := c.lastRun[expID]; ok && time.Since(t) < c.cooldown {
+	if t, ok := c.lastRun[expID]; ok && time.Since(t) < c.cooldownFor(expID) {
 		return false
 	}
 	c.running[expID] = true
 	return true
+}
+
+// cooldownFor 返回该探索当前的冷却时长(成功=基础值,连续失败则指数退避)。
+func (c *Compactor) cooldownFor(expID int64) time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cooldownForLocked(expID)
+}
+
+func (c *Compactor) cooldownForLocked(expID int64) time.Duration {
+	fails := c.consecFails[expID]
+	if fails <= 0 {
+		return c.cooldown
+	}
+	// 指数退避,封顶 30 分钟。
+	d := c.cooldown
+	for i := 0; i < fails && d < 30*time.Minute; i++ {
+		d *= 2
+	}
+	if d > 30*time.Minute {
+		d = 30 * time.Minute
+	}
+	return d
 }
 
 func (c *Compactor) finish(expID int64) {
@@ -404,6 +456,17 @@ func (c *Compactor) finish(expID int64) {
 	defer c.mu.Unlock()
 	c.running[expID] = false
 	c.lastRun[expID] = time.Now()
+}
+
+// recordResult 记录一轮压缩的结果:成功则清零连续失败计数,失败则累加。
+func (c *Compactor) recordResult(expID int64, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ok {
+		delete(c.consecFails, expID)
+		return
+	}
+	c.consecFails[expID]++
 }
 
 // --- helpers: db ↔ coldgraph ---

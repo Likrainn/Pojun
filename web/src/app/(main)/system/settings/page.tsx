@@ -39,7 +39,7 @@ export default function SystemSettingsPage() {
   const [pyInterp, setPyInterp] = React.useState("");
   const [workers, setWorkers] = React.useState("3");
   const [savingWorkers, setSavingWorkers] = React.useState(false);
-  // 冷节点压缩的输出预算与墙钟上限。0=用默认值(32768 token / 20 分钟)。
+  // 冷节点压缩的输出预算与墙钟上限。0=用默认值(65536 token / 20 分钟)。
   const [compactionTokens, setCompactionTokens] = React.useState("0");
   const [compactionTimeout, setCompactionTimeout] = React.useState("0");
   const [compactionMembers, setCompactionMembers] = React.useState("0");
@@ -729,11 +729,10 @@ export default function SystemSettingsPage() {
               <br />
               <b>输出预算</b>是「思考 + 正文」共用的额度：思考型模型（强制 adaptive thinking
               的那些）的思考长度随这个额度线性膨胀，额度给小了它会一直想、正文一个字都吐不出来
-              —— 实测 1500 / 2048 / 4096 / 8192 全部得到空正文。默认 32768。
+              —— 实测 1500 / 2048 / 4096 / 8192 全部得到空正文。默认 65536。
               <br />
-              <b>单块节点数上限</b>决定一次请求里塞多少个节点：实测 9 个节点能正常收尾，
-              26 个节点即使给满 32768 预算也会把预算烧光、跑 200 秒不出正文。所以超大连通块
-              必须切分。默认 12。
+              <b>单块节点数上限</b>决定一次请求里塞多少个节点：实测 9 个节点 3 块里仍有 1 块失败，
+              6 个节点能稳定收尾。所以超大连通块必须切分。默认 6。
               <br />
               两项填 0 即使用默认值。修改后<b>对之后启动的任务生效</b>。
             </CardDescription>
@@ -749,7 +748,7 @@ export default function SystemSettingsPage() {
                 min={0}
                 step={1024}
                 className="w-40 font-mono text-sm"
-                placeholder="0 = 默认 32768"
+                placeholder="0 = 默认 65536"
                 value={compactionTokens}
                 disabled={!loaded || savingCompaction}
                 onChange={(e) => setCompactionTokens(e.target.value)}
@@ -776,7 +775,7 @@ export default function SystemSettingsPage() {
                 type="number"
                 min={0}
                 className="w-40 font-mono text-sm"
-                placeholder="0 = 默认 12"
+                placeholder="0 = 默认 6"
                 value={compactionMembers}
                 disabled={!loaded || savingCompaction}
                 onChange={(e) => setCompactionMembers(e.target.value)}

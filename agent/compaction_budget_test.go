@@ -63,11 +63,16 @@ func TestCompressOutputBudgetIsGenerous(t *testing.T) {
 	prov := &fakeProvider{reply: func(int, int, string) string { return "摘要正文" }}
 	c := NewCompactor(prov, "test-model")
 
-	if c.outTokens < 16384 {
+	if c.outTokens < 32768 {
 		t.Errorf("默认输出预算太小: %d（思考型模型需要足够冗余）", c.outTokens)
 	}
 	if c.maxDur < 10*time.Minute {
 		t.Errorf("默认墙钟上限太小: %v（长输入的思考型模型要跑很久）", c.maxDur)
+	}
+	// 单块上限必须够小:实测 26 节点一块必失败、9 节点一块 3 块里失败 1 块、
+	// 6 节点一块稳定成功。默认取实测最稳的值。
+	if c.maxBlockMembers != 6 {
+		t.Errorf("默认单块上限 %d，应为 6（实测最稳）", c.maxBlockMembers)
 	}
 }
 
