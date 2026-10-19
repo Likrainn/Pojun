@@ -307,8 +307,15 @@ RestartSec=5
 RuntimeDirectory=artex
 RuntimeDirectoryMode=0755
 # 助手要调 apt/dnf、写 /usr/local/bin,所以不能像主服务那样把根挂成只读。
-# 其余收紧:无原始套接字(只要 AF_INET/INET6/UNIX)、无新特权、私有 /tmp。
-NoNewPrivileges=true
+#
+# 这里**刻意不设 NoNewPrivileges**:实测它会连带把 CAP_SETUID/CAP_SETGID 从进程的
+# 有效能力集里摘掉(CapEff 末位由 ff 变 7f),而 apt 下载时要降权到 _apt 用户,
+# 于是必然报 "seteuid 42 failed - Operation not permitted",所有 apt 类工具都装不上。
+# 助手的真实安全边界是「socket 权限 + 代码里的工具白名单」,不是这条开关。
+#
+# CapabilityBoundingSet 显式列出 apt/dpkg/维护脚本需要的项(顺带挡掉 CAP_SYS_ADMIN、
+# CAP_SYS_PTRACE、CAP_NET_ADMIN 等安装用不到的)。若将来某个包的 postinst 需要更多,
+# 按报错往里加即可。
 PrivateTmp=true
 ProtectHome=true
 ProtectClock=true
@@ -321,6 +328,7 @@ RestrictRealtime=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 LockPersonality=true
 SystemCallFilter=@system-service
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_FSETID CAP_KILL CAP_SETGID CAP_SETUID CAP_SETPCAP CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SYS_CHROOT CAP_MKNOD CAP_AUDIT_WRITE CAP_SETFCAP
 LimitNOFILE=65536
 
 [Install]
