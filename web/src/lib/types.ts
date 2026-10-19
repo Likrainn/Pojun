@@ -1635,6 +1635,10 @@ export interface HostTool {
 export interface HostenvInstaller {
   available: boolean;
   reason: string;
+  /** 助手版本；空串=老版本不支持上报（0.3.22 之前）。 */
+  version?: string;
+  /** 老助手既不上报版本也无法自我换装，需要重跑一次 install.sh 引导。 */
+  upgrade_required?: boolean;
   socket: string;
   proxy: string;
 }

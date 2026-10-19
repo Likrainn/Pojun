@@ -205,6 +205,14 @@ export default function HostEnvPage() {
                 </div>
               )}
 
+              {installerReady && inv?.installer.upgrade_required && (
+                <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                  助手版本较旧，不具备自我换装能力，因此无法随主程序自动升级。
+                  在服务器上重跑一次 <code className="font-mono">install.sh</code> 完成引导后，
+                  之后每次发版助手都会自动跟随。
+                </div>
+              )}
+
               <p className="text-muted-foreground text-sm">
                 可用 <span className="font-medium text-foreground">{available.length}</span> /{" "}
                 {inv?.tools.length ?? 0}

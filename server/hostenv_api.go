@@ -91,18 +91,25 @@ func (s *Server) maintenanceProxy() string {
 
 // hostenvStatus 体检页的总入口:工具清单 + 是否支持一键安装。
 func (s *Server) hostenvStatus(w http.ResponseWriter, r *http.Request) {
-	available, reason := s.hostdProbe(r.Context())
-	out := map[string]any{
+	ver, present := s.hostdVersion(r.Context())
+	reason := ""
+	if !present {
+		reason = "宿主助手未运行（未安装 artex-hostd，或当前是 Docker 部署）"
+	}
+	writeJSON(w, 200, map[string]any{
 		"tools": hosttools.Inventory(),
 		"deploy_mode": deployMode(),
 		"installer": map[string]any{
-			"available": available,
+			"available": present,
 			"reason":    reason,
-			"socket":    hostdSocket(),
-			"proxy":     s.installProxy(), // 回显当前安装代理,前端可编辑
+			"version":   ver,
+			// 老助手（0.3.22 之前）既不上报版本也没有 /self-upgrade，自己换不了装，
+			// 需要运维重跑一次 install.sh 引导；之后就能自动跟随主程序升级。
+			"upgrade_required": present && ver == "",
+			"socket":           hostdSocket(),
+			"proxy":            s.installProxy(), // 回显当前安装代理,前端可编辑
 		},
-	}
-	writeJSON(w, 200, out)
+	})
 }
 
 // hostenvInstall 请求安装一个工具,转发给助手。
@@ -193,19 +200,26 @@ func errConnectHostd(err error) error {
 	return hostdUnavailable{"宿主助手不可用（未安装 artex-hostd，或当前是 Docker 部署）: " + err.Error()}
 }
 
-// hostdVersion 查询助手版本。ok=false 表示助手不在（Docker 部署 / 未安装 / 未启动）。
-func (s *Server) hostdVersion(ctx context.Context) (string, bool) {
-	body, code, err := s.hostdCall(ctx, http.MethodGet, "/version", nil)
-	if err != nil || code != http.StatusOK {
-		return "", false
+// hostdVersion 查询助手版本。
+//
+// present=false 表示助手不在（Docker 部署 / 未安装 / 未启动）。
+// version="" 且 present=true 表示助手能应答但不具备版本上报能力——`/version` 是
+// 0.3.22 才加的，所以这种助手必然早于 0.3.22，也就**没有 /self-upgrade**，
+// 无法自我换装，只能由运维重跑一次 install.sh 引导上来。
+func (s *Server) hostdVersion(ctx context.Context) (version string, present bool) {
+	if body, code, err := s.hostdCall(ctx, http.MethodGet, "/version", nil); err == nil && code == http.StatusOK {
+		var v struct {
+			Version string `json:"version"`
+		}
+		if json.Unmarshal(body, &v) == nil && strings.TrimSpace(v.Version) != "" {
+			return strings.TrimSpace(v.Version), true
+		}
 	}
-	var v struct {
-		Version string `json:"version"`
+	// 回退 /healthz：老版本有它、没有 /version。能应答就说明助手在。
+	if _, code, err := s.hostdCall(ctx, http.MethodGet, "/healthz", nil); err == nil && code == http.StatusOK {
+		return "", true
 	}
-	if json.Unmarshal(body, &v) != nil || strings.TrimSpace(v.Version) == "" {
-		return "", false
-	}
-	return strings.TrimSpace(v.Version), true
+	return "", false
 }
 
 // StartHostdReconcile 在后台把助手版本对齐到主程序版本。
@@ -246,11 +260,18 @@ func (s *Server) reconcileHostdOnce() bool {
 	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
 	defer cancel()
 
-	got, ok := s.hostdVersion(ctx)
-	if !ok {
+	got, present := s.hostdVersion(ctx)
+	if !present {
 		return false // 助手还没起来，稍后重试
 	}
 	if got == want {
+		return true
+	}
+	if got == "" {
+		// 老助手既不上报版本，也没有 /self-upgrade —— 它自己换不了装。
+		// 这是一次性的引导窗口：重跑一次 install.sh 换上带自换装能力的新助手后，
+		// 之后每次发版就都能自动跟随了。
+		log.Printf("[hostd] 助手版本过旧（不支持版本上报与自换装），需重跑一次 install.sh 完成引导")
 		return true
 	}
 	log.Printf("[hostd] 版本不一致（助手 %s / 主程序 %s），请求助手自我换装", got, want)
