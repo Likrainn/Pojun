@@ -1043,7 +1043,7 @@ CREATE TABLE IF NOT EXISTS intercept_rules (
     match_target    TEXT NOT NULL CHECK (match_target IN ('tool_name', 'tool_input')),
     match_type      TEXT NOT NULL CHECK (match_type IN ('string', 'regex')),
     pattern         TEXT NOT NULL,
-    action          TEXT NOT NULL CHECK (action IN ('allow', 'deny', 'ask')),
+    action          TEXT NOT NULL CHECK (action IN ('allow', 'deny', 'ask', 'judge')),
     message         TEXT NOT NULL DEFAULT '',
     timeout_enabled BOOLEAN NOT NULL DEFAULT true,
     timeout_seconds INTEGER NOT NULL DEFAULT 60,
@@ -1054,6 +1054,10 @@ CREATE TABLE IF NOT EXISTS intercept_rules (
 DROP TRIGGER IF EXISTS trg_intercept_rules_upd ON intercept_rules;
 CREATE TRIGGER trg_intercept_rules_upd BEFORE UPDATE ON intercept_rules
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+-- 已发版库的 action CHECK 里没有 'judge'（规则命中后交给模型裁决）。幂等重建约束。
+ALTER TABLE intercept_rules DROP CONSTRAINT IF EXISTS intercept_rules_action_check;
+ALTER TABLE intercept_rules ADD CONSTRAINT intercept_rules_action_check
+    CHECK (action IN ('allow', 'deny', 'ask', 'judge'));
 
 CREATE TABLE IF NOT EXISTS intercept_pending (
     id              BIGSERIAL PRIMARY KEY,

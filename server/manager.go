@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chu0119/artex/agent"
@@ -226,6 +227,16 @@ type Manager struct {
 	interceptor *intercept.Interceptor // user-configured tool-call interception rules
 	vulnintel   *vulnintel.Store       // public CVE/KEV intel store (agent search_vulns reads it)
 	nucleiDir   string                 // local nuclei-templates checkout (synced by vulnintel goroutine)
+	// 漏洞情报同步的互斥与状态：定时循环与页面「立即同步」共用一把锁，保证同一时刻
+	// 只有一轮，避免并发写 vuln_sync_state、抢 NVD 限速。
+	vulnSyncMu        sync.Mutex
+	vulnSyncRunning   atomic.Bool
+	vulnSyncStartedAt atomic.Int64
+	// 代理池主动健康检查的开关与节流状态（proxypool_health_* settings）。
+	proxyCheckInFlight atomic.Bool
+	// proxyCheckMu 保护代理池「最近一次验证」的快照(页面回显用)。
+	proxyCheckMu   sync.Mutex
+	proxyCheckLast map[string]any
 
 	companyMu sync.Mutex // serializes task/company-scope commits with live handle registration
 	// taskStateMu preserves commit order between PostgreSQL lifecycle writes and
@@ -482,6 +493,9 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	} else {
 		log.Printf("[vulnintel] 同步已关闭（settings.%s=false），agent 工具将返回未启用", settingVulnIntelOn)
 	}
+	// 代理池主动健康检查：定时探测已启用上游，不通的立刻熔断。
+	// 间隔为 0 时关闭（设置项 proxypool_health_minutes）。
+	m.StartProxyPoolHealthCheck()
 	return m, nil
 }
 
@@ -870,40 +884,22 @@ func (m *Manager) runVulnIntelSync() {
 	time.Sleep(90 * time.Second) // 避开启动风暴（LLM 链接、traffic proxy 起动期）
 	for {
 		if !m.pg.GetBool(settingVulnIntelOn, true) {
-			log.Printf("[vulnintel] 同步已关闭，进入待机")
+			log.Printf("[vulnintel] 同步已关闭，进入待机（仍刷新 nuclei 模板树）")
+			// 模板树与情报同步解耦：scan_with_nuclei 是独立功能，开关关掉也不该让它烂在原地。
+			// 仍拿同一把锁，避免与页面「立即同步」并发跑 git。
+			if m.vulnSyncMu.TryLock() {
+				m.refreshNucleiTemplates(m.vulnIntelProxy())
+				m.vulnSyncMu.Unlock()
+			}
 		} else {
-			key := strings.TrimSpace(os.Getenv("NVD_API_KEY"))
-			if v, ok, _ := m.pg.GetSetting(settingNvdApiKey); ok && strings.TrimSpace(v) != "" {
-				key = strings.TrimSpace(v)
-			}
-			// 同步出网代理回退链:装机代理 → 全局代理 → 搜索代理(常见配置组合,搜索代理本来就
-			// 是"对外网可达"语义)→ 直连。被墙环境(如校园网)直连 cisa.gov/github.com 会吃
-			// 404 拦截页或超时,KEV 与模板树一起失败——实测教训。装机代理排第一是因为它本来
-			// 就是为"连 GitHub 拉东西"配置的。
-			proxyURL := m.maintenanceProxy()
-			cfg := vulnintel.Config{
-				NvdAPIKey: key,
-				ProxyURL:  proxyURL,
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
-			if err := vulnintel.Run(ctx, m.vulnintel, cfg); err != nil {
-				log.Printf("[vulnintel] 本轮同步未完整完成: %v（游标已保留，下轮续跑）", err)
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+			// TryLock 保证与页面「立即同步」不并发：同一时刻只允许一轮。
+			if err := m.runVulnIntelPass(ctx); err != nil {
+				log.Printf("[vulnintel] 本轮跳过: %v", err)
 			}
 			cancel()
-			// 资产联动:新同步的 CVE 反向匹配 service 资产指纹,受影响任务挂 hint。
-			// 同步没完整完成也照跑——KEV stub 与已 upsert 的记录都已可查。
-			m.linkVulnIntelAssets()
 		}
-		// nuclei 模板树:clone(首轮)/pull(后续)。**刻意放在情报同步开关之外**——
-		// scan_with_nuclei 是独立功能,关掉漏洞情报同步不该让模板树烂在原地。
-		// 失败不阻塞主流程,scan_with_nuclei 会报"模板树不可用"。走维护出网代理:
-		// 模板树在 github.com,直连拉不下来的环境会一直卡在"模板树不可用"。
-		tplCtx, tplCancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		if err := vulnintel.EnsureTemplates(tplCtx, m.nucleiDir, m.maintenanceProxy()); err != nil {
-			log.Printf("[vulnintel] nuclei 模板树更新失败: %v", err)
-		}
-		tplCancel()
-		time.Sleep(6 * time.Hour)
+		time.Sleep(defaultVulnIntelInterval)
 	}
 }
 

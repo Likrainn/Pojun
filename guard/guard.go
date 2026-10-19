@@ -97,6 +97,17 @@ func (g *Guard) applyIntercept(ctx context.Context, ev hook.Event) hook.Result {
 			return hook.Result{}
 		}
 		dec = d
+	} else if dec.Action == "judge" {
+		// 规则显式要求「Agent 研判」：不再取固定动作，交给模型裁决；裁决结果仍按
+		// allow/deny/ask 走原有分支。保留触发它的 rule_id，审计里能看出是哪条规则
+		// 把这次调用交给了模型。
+		ruleID := dec.RuleID
+		d, judged := g.interceptor.JudgeRule(ctx, ev.ToolName, ev.Input)
+		if !judged {
+			return hook.Result{}
+		}
+		d.RuleID = ruleID
+		dec = d
 	}
 	switch dec.Action {
 	case "deny":

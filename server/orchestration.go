@@ -42,6 +42,7 @@ func (s *Server) hostTools() ([]actool.CoreTool, map[string][]string) {
 	tools = append(tools, s.orchestrationTools()...)
 	tools = append(tools, s.findingRetestTools()...)
 	tools = append(tools, s.platformTools()...) // 平台操作工具(建改 skill/工具/MCP，给 Auto 用)
+	tools = append(tools, s.proxyTools()...)     // 代理池：状态查询 + 坏出口上报
 	custom, err := s.customTools()
 	if err != nil {
 		log.Printf("[custom-tool] 加载失败: %v", err)
@@ -488,6 +489,13 @@ func (s *Server) seedOrchestrationTools() {
 	for _, t := range s.platformTools() {
 		schema, _ := json.Marshal(t.InputSchema())
 		_ = s.m.PG().SeedTool(t.Name(), t.Description(), schema, autoAgents)
+	}
+	// 代理池工具默认绑 worker + planner：执行者遇到「目标连不通」时需要能查池状态
+	// 并上报坏出口；规划者读态势时也用得上。
+	proxyAgents, _ := json.Marshal([]string{"worker", "planner"})
+	for _, t := range s.proxyTools() {
+		schema, _ := json.Marshal(t.InputSchema())
+		_ = s.m.PG().SeedTool(t.Name(), t.Description(), schema, proxyAgents)
 	}
 	s.refreshBuiltinToolSchemas()
 	s.seedAutoDefaultBindings()

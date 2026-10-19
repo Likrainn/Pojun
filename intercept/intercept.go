@@ -335,6 +335,19 @@ type JudgeConfig struct {
 // missing/invalid keys. Read fresh on each fallback judgement — the LLM call that
 // follows dwarfs a few KV reads, and freshness avoids a cache-invalidation path.
 func (i *Interceptor) judgeConfig() JudgeConfig {
+	// nil db（server 尚未接上数据库时）：全部走默认值。别在这里 panic——
+	// 裁决在工具调用的同步路径上，一崩就是整个 agent 进程死掉。
+	if i == nil || i.db == nil {
+		return JudgeConfig{
+			Enabled:           false,
+			ProfileID:         0,
+			Prompt:            DefaultJudgePrompt,
+			TimeoutSeconds:    defaultJudgeTimeoutSecs,
+			FailAction:        defaultJudgeFailAction,
+			AskTimeoutSeconds: defaultJudgeAskTimeoutSecs,
+			AskTimeoutAction:  defaultJudgeAskTimeoutAction,
+		}
+	}
 	c := JudgeConfig{
 		Enabled:           i.db.GetBool(settingJudgeEnabled, false),
 		ProfileID:         int64(i.getSettingInt(settingJudgeProfileID, 0)),
@@ -428,12 +441,29 @@ func (i *Interceptor) SetJudgeConfig(c JudgeConfig) error {
 // falls back to the configured FailAction. Ask verdicts carry the human-approval
 // timeout so the existing HandleAsk consumes them unchanged.
 func (i *Interceptor) Judge(ctx context.Context, tool string, arguments json.RawMessage) (Decision, bool) {
+	return i.judge(ctx, tool, arguments, false)
+}
+
+// JudgeRule is Judge for a rule whose action is "judge": the rule itself asks
+// for a model verdict, so the global llm_judge_enabled switch is ignored (a rule
+// that silently did nothing would be worse than either fixed action). The
+// configured fail action / timeout still apply.
+func (i *Interceptor) JudgeRule(ctx context.Context, tool string, arguments json.RawMessage) (Decision, bool) {
+	return i.judge(ctx, tool, arguments, true)
+}
+
+func (i *Interceptor) judge(ctx context.Context, tool string, arguments json.RawMessage, forced bool) (Decision, bool) {
 	cfg := i.judgeConfig()
 	i.mu.RLock()
 	rv := i.reviewer
 	i.mu.RUnlock()
-	if !cfg.Enabled || rv == nil {
+	if !forced && (!cfg.Enabled || rv == nil) {
 		return Decision{}, false
+	}
+	if rv == nil {
+		// 规则显式要求研判，但 server 没接上 reviewer（例如测试环境/初始化早期）：
+		// 按配置的失败策略处理，而不是让规则变成无动作。
+		return Decision{Action: cfg.FailAction, ModelFallback: true, Message: "[模型] 裁决未接线,按失败策略处理"}, true
 	}
 
 	cctx := ctx

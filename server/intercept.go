@@ -496,9 +496,9 @@ func validateInterceptRuleReq(req interceptRuleReq) error {
 		return fmt.Errorf("pattern 不能为空")
 	}
 	switch req.Action {
-	case "allow", "deny", "ask":
+	case "allow", "deny", "ask", "judge":
 	default:
-		return fmt.Errorf("action 必须是 allow、deny 或 ask")
+		return fmt.Errorf("action 必须是 allow、deny、ask 或 judge")
 	}
 	if req.MatchType == "regex" {
 		if _, err := regexp.Compile(req.Pattern); err != nil {

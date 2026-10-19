@@ -177,6 +177,7 @@ const defaultForm = (): RuleForm => ({
 function ActionBadge({ action }: { action: InterceptAction }) {
   if (action === "allow") return <Badge variant="secondary">允许</Badge>;
   if (action === "deny")  return <Badge variant="destructive">禁止</Badge>;
+  if (action === "judge") return <Badge variant="default">Agent 研判</Badge>;
   return <Badge variant="outline" className="border-amber-400 text-amber-600">申请</Badge>;
 }
 
@@ -841,11 +842,23 @@ export default function InterceptPage() {
                   <SelectItem value="allow">允许 — 直接放行，跳过后续规则</SelectItem>
                   <SelectItem value="deny">禁止 — 阻断，返回拒绝消息给模型</SelectItem>
                   <SelectItem value="ask">向用户申请 — 等待审批</SelectItem>
+                  <SelectItem value="judge">Agent 研判 — 命中后由模型判断风险再决定</SelectItem>
                 </SelectContent>
               </Select>
             </Field>
 
-            {form.action !== "allow" && (
+            {form.action === "judge" && (
+              <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-3 text-xs">
+                <p className="mb-1 font-medium text-blue-600 dark:text-blue-400">Agent 研判</p>
+                <p className="text-muted-foreground">
+                  命中后调用「模型配置」里的裁决模型：只读/正常渗透动作放行，直接破坏真实资产的动作拦截，
+                  判不准才转人工。会多一次 LLM 调用（超时、失败策略、用量统计都走「模型配置」）。
+                  即使全局兜底审批开关关闭，本规则仍会生效。
+                </p>
+              </div>
+            )}
+
+            {form.action !== "allow" && form.action !== "judge" && (
               <Field label={form.action === "deny" ? "拒绝消息（返回给模型）" : "审批说明（可选）"}>
                 <Textarea
                   placeholder={form.action === "deny" ? "操作被安全策略阻止" : ""}

@@ -1257,7 +1257,7 @@ export interface Stats {
 }
 
 // ---- Intercept Rules ----
-export type InterceptAction = "allow" | "deny" | "ask";
+export type InterceptAction = "allow" | "deny" | "ask" | "judge";
 export type InterceptMatchTarget = "tool_name" | "tool_input";
 export type InterceptMatchType = "string" | "regex";
 
@@ -1661,4 +1661,89 @@ export interface InstallJob {
   started_at: string;
   ended_at?: string;
   log: string;
+}
+
+/** 代理池：一个上游代理的持久化条目。 */
+export interface ProxyPoolEntry {
+  url: string;
+  name: string;
+  enabled: boolean;
+  weight: number;
+}
+
+/** 代理池运行态：熔断计数、最近成功/失败时间、熔断剩余秒数。 */
+export interface ProxyPoolRunning {
+  url: string;
+  name: string;
+  failures: number;
+  weight?: number;
+  last_ok?: string;
+  last_fail?: string;
+  break_remaining?: number;
+}
+
+export interface ProxyPoolState {
+  entries: ProxyPoolEntry[];
+  strategy: string;
+  running: ProxyPoolRunning[];
+  capturing: boolean;
+  check_target?: string;
+  health_minutes?: number;
+  health_cooldown?: number;
+  last_check?: { at: string; target: string; count: number; ok_count: number; auto?: boolean } | null;
+}
+
+/** 漏洞情报同步配置（读取时凭据已掩码，只回 *_set 布尔）。 */
+export interface VulnIntelConfig {
+  enabled: boolean;
+  nvd_api_key: string;
+  nvd_key_set: boolean;
+  github_token: string;
+  github_token_set: boolean;
+  proxy: string;
+  poc_enabled: boolean;
+  backfill_days: number;
+  max_runtime_minutes: number;
+  maintenance_proxy: string;
+}
+
+/** 保存漏洞情报配置：凭据字段省略=保持不变，传 "-" 清除。 */
+export interface VulnIntelConfigPatch {
+  enabled?: boolean;
+  nvd_api_key?: string;
+  github_token?: string;
+  proxy?: string;
+  poc_enabled?: boolean;
+  backfill_days?: number;
+  max_runtime_minutes?: number;
+}
+
+export interface VulnIntelSource {
+  source: string;
+  last_sync_at?: string;
+  cursor: string;
+  total_synced: number;
+  last_error: string;
+  enabled: boolean;
+  error_hint?: string;
+  ok?: boolean;
+}
+
+export interface VulnIntelStatus {
+  enabled: boolean;
+  nuclei_templates_dir: string;
+  sources: VulnIntelSource[];
+  counts: { cves: number; kev: number; pocs: number };
+  config?: VulnIntelConfig;
+  sync_running?: boolean;
+  sync_started_at?: number;
+  next_tick_hint?: string;
+  nuclei?: {
+    dir: string;
+    exists: boolean;
+    is_git: boolean;
+    templates: number;
+    updated_at?: string;
+    hint: string;
+  };
 }

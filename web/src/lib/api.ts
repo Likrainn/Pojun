@@ -102,8 +102,11 @@ import type {
   TrafficEvidenceRole,
   TrafficHost,
   TrafficResp,
+  ProxyPoolState,
   UpdateCheck,
   UsageStats,
+  VulnIntelConfigPatch,
+  VulnIntelStatus,
   WorkspaceFile,
   WorkspaceListing,
 } from "@/lib/types";
@@ -827,24 +830,35 @@ export const api = {
   // 渠道是多实例资源（同一类型可配多个机器人、各有过滤规则），因此独立成组，
   // 不塞进扁平的 settings 键值里。
   notifyMeta: () => get<NotificationMeta>(`/notify/meta`),
-  proxyPoolGet: () =>
-    get<{
-      entries: { url: string; name: string; enabled: boolean; weight: number }[];
-      strategy: string;
-      running: { url: string; name: string; failures: number }[];
-      capturing: boolean;
-    }>(`/proxypool`),
+  proxyPoolGet: () => get<ProxyPoolState>(`/proxypool`),
   proxyPoolPut: (payload: {
     entries: { url: string; name: string; enabled: boolean; weight: number }[];
     strategy: string;
-  }) => put<{ entries: []; strategy: string; running: []; capturing: boolean }>(`/proxypool`, payload),
-  vulnintelStatus: () =>
-    get<{
-      enabled: boolean;
-      nuclei_templates_dir: string;
-      sources: { source: string; last_sync_at?: string; cursor: string; total_synced: number; last_error: string; enabled: boolean }[];
-      counts: { cves: number; kev: number; pocs: number };
-    }>(`/vulnintel/status`),
+  }) => put<ProxyPoolState>(`/proxypool`, payload),
+  // 批量导入：一行一个代理，自动识别 host:port / http(s):// / socks5:// / host:port:user:pass
+  proxyPoolBulk: (payload: { text: string; mode?: "append" | "replace"; strategy?: string; weight?: number }) =>
+    post<{
+      ok: boolean;
+      added: number;
+      updated: number;
+      total: number;
+      invalid: { line: number; raw: string; reason: string }[];
+    }>(`/proxypool/bulk`, payload),
+  // 连通性验证：urls 为空 = 全部已启用条目
+  proxyPoolCheck: (payload: { urls?: string[]; target?: string; timeout_seconds?: number; break_on_fail?: boolean }) =>
+    post<{
+      target: string;
+      results: { index: number; url: string; ok: boolean; latency_ms: number; exit_ip?: string; error?: string; checked_at: string }[];
+    }>(`/proxypool/check`, payload),
+  vulnintelStatus: () => get<VulnIntelStatus>(`/vulnintel/status`),
+  vulnintelSaveConfig: (payload: VulnIntelConfigPatch) => put<{ ok: boolean }>(`/vulnintel/config`, payload),
+  vulnintelSyncNow: () => post<{ accepted: boolean }>(`/vulnintel/sync`, {}),
+  vulnintelProbe: (payload?: { proxy?: string }) =>
+    post<{
+      proxy: string;
+      effective: boolean;
+      results: { source: string; target: string; ok: boolean; status: number; latency_ms: number; error?: string; hint?: string }[];
+    }>(`/vulnintel/probe`, payload ?? {}),
   // 宿主工具体检:本机 PATH 里的渗透工具可用性(二进制部署形态的家底)
   toolsInventory: () =>
     get<{
