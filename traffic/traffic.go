@@ -366,7 +366,51 @@ func ValidateProxyURL(raw string) (*url.URL, error) {
 	if u.Host == "" {
 		return nil, fmt.Errorf("代理 %q 缺少主机地址", raw)
 	}
+	// url.Parse 对「坏行这不是地址」这类不含空格的垃圾串几乎不报错（它当成
+	// 一个 path），于是批量导入会把明显的乱码当成合法代理收进来。补一道
+	// 主机名形状检查：必须是 host[:port]，主机名只允许字母数字点横线下划线。
+	host := u.Hostname()
+	if host == "" {
+		return nil, fmt.Errorf("代理 %q 缺少主机地址", raw)
+	}
+	if strings.ContainsAny(host, " \t\r\n") {
+		return nil, fmt.Errorf("代理 %q 的主机名含非法字符", raw)
+	}
+	if !isProxyHost(host) {
+		return nil, fmt.Errorf("代理 %q 的主机名 %q 不是合法的 IP 或域名", raw, host)
+	}
+	if p := u.Port(); p != "" {
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				return nil, fmt.Errorf("代理 %q 的端口 %q 不是数字", raw, p)
+			}
+		}
+	}
 	return u, nil
+}
+
+// isProxyHost reports whether host looks like an IPv4/IPv6 literal or a DNS
+// name. It rejects prose and paths (spaces, non-ASCII letters, slashes), but
+// deliberately accepts single-label names like "proxy" — intranet setups do
+// use them, and a wrong host is caught later by the connectivity check rather
+// than at import time.
+func isProxyHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	if strings.Contains(host, ":") {
+		// IPv6 literal
+		return net.ParseIP(host) != nil
+	}
+	for _, c := range host {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '.', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // CACertPath returns the PEM CA cert clients must trust to verify HTTPS through
