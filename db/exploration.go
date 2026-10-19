@@ -270,6 +270,23 @@ func (s *ExplorationStore) SetNodeState(id int64, state string) error {
 	return err
 }
 
+// MarkGoalUnverified 给目标打上「未经逐条证据证明」的标记。
+//
+// planner 的 goal_met 允许在没有逐个 prove_goal 的情况下整体收官（避免空转烧
+// token，有实测依据），但那本质是"声称达成"而不是"被证据证明"。把区别写进
+// payload 的合并字段里，报告与界面才能如实呈现，而不是让一次偷懒的收官看起来
+// 和验证过的达成一样。
+func (s *ExplorationStore) MarkGoalUnverified(id int64, reason string) error {
+	raw, _ := json.Marshal(map[string]any{
+		"unverified":        true,
+		"unverified_reason": reason,
+	})
+	_, err := s.db.Exec(`UPDATE exploration_nodes
+SET payload = COALESCE(payload,'{}'::jsonb) || $1::jsonb
+WHERE id=$2 AND exploration_id=$3 AND kind='goal'`, string(raw), id, s.expID)
+	return err
+}
+
 // UpdateGoalPayload rewrites a goal node's payload text (and optional vulnclass);
 // scoped to kind='goal' so it can never mutate an intent/fact by id. Returns an
 // error if no such goal exists in this exploration.
@@ -816,6 +833,59 @@ func (s *ExplorationStore) CountOpenIntents() (int, error) {
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM exploration_nodes
 WHERE exploration_id=$1 AND kind='intent' AND state='open'`, s.expID).Scan(&n)
 	return n, err
+}
+
+// FindSimilarOpenIntent 在同任务的 open/running 意图里找与 summary 高度相似的一条，
+// 用于派发去重：planner 偶尔会把同一方向重复下发，两条并行跑纯属浪费。
+//
+// 判重刻意保守——只有【归一化后完全相同】或【互相包含且都足够长】才算相似，
+// 避免误杀"同一资产上的不同路线"这类合法细分意图。
+func (s *ExplorationStore) FindSimilarOpenIntent(summary string) (id int64, existing string, ok bool, err error) {
+	norm := normalizeIntentText(summary)
+	if len([]rune(norm)) < 6 {
+		return 0, "", false, nil // 太短的描述没有判重意义
+	}
+	rows, err := s.db.Query(`SELECT id, COALESCE(payload->>'summary','') FROM exploration_nodes
+WHERE exploration_id=$1 AND kind='intent' AND state IN ('open','running')
+ORDER BY id DESC LIMIT 200`, s.expID)
+	if err != nil {
+		return 0, "", false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var nid int64
+		var sum string
+		if err := rows.Scan(&nid, &sum); err != nil {
+			return 0, "", false, err
+		}
+		n := normalizeIntentText(sum)
+		if n == "" {
+			continue
+		}
+		if n == norm {
+			return nid, sum, true, nil
+		}
+		// 包含关系：都够长才认，短串包含太容易误判。
+		if len([]rune(n)) >= 12 && len([]rune(norm)) >= 12 &&
+			(strings.Contains(n, norm) || strings.Contains(norm, n)) {
+			return nid, sum, true, nil
+		}
+	}
+	return 0, "", false, rows.Err()
+}
+
+// normalizeIntentText 归一化意图描述用于判重：小写、去掉空白与常见中英文标点。
+func normalizeIntentText(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		switch r {
+		case ' ', '\t', '\n', '\r', '，', '。', '、', '；', '：', '！', '？', '“', '”', '‘', '’',
+			',', '.', ';', ':', '!', '?', '"', '\'', '(', ')', '（', '）', '[', ']', '【', '】', '-', '_', '/':
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // GetNode returns one node of this exploration by id (nil, nil if not found).

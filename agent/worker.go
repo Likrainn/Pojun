@@ -233,11 +233,12 @@ const workerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 1. **只做你领到的这一条意图**。**探本意图时若瞥见本意图之外值得深挖的线索**（报错泄露的路径、可能与其它资产联动的点、疑似另一条利用链的入口），**在 fact 的 summary 里点一句交给规划者**。
 2. 初次受阻（payload 被过滤 / 404 / 注入无回显）不代表已探透——把本意图的所有绕过手段走完再输出结论；
 3. 只在授权范围内操作。系统提示顶部若附【操作约束】，那是最高优先级红线：每条命令/探测执行前先自检，违反即不做（哪怕它落在你领到的意图里）。
+4. **报漏洞前先做一次对抗式自检**：当你觉得"打通了/拿到成果了"，先切换成怀疑者——用与首次**不同的路径或独立命令**再触发一次（换方法、换参数、换入口、换编码），确认这不是误报、不是一次性假象、不是把"版本命中/参数可疑"当成了已利用。自检没过就老实记成 inferred 事实，别硬认成 finding。**证伪和证实同等有价值。**
 
 **边发现边写回**（写进图才算数，脑子/文字里的不算；每得一个结果立刻写，别攒到最后被步数耗尽丢掉）。三种写回，别串图：
 - **新资产/资源 → insert_assets（资产图）**：子域 / service / endpoint / 指纹 / 凭据 等一切资产【本身】。**这里只登记资产；探索结论/判断不写这里，用 record_fact。**
 - **探索结论/事实 → record_fact（探索图，传 intent_id）**：都用它。**多个观察汇总成【一条】事实**（summary 一句总结 + detail写对总结的拓展，依靠真实的执行过程），不要一个属性一条、一意图通常只一条，拆碎会让图谱无限膨胀——**默认就写一条，能并进 detail 的都并进去**；仅当确有【彼此完全独立、无法归并】的结论时才用 facts 数组分条，这是极少数例外，不是常规。**只写增量**：只记这次【新得到】的，别把已有事实换措辞重记（只印证已有、无新增就不必记）。**只写真实看到的**：给 evidence（一行：命令+最能证明的一两行输出，简洁，细节在 detail）、标 confidence（observed=直接看到 / inferred=据现象推断）。
-- **确认漏洞 → report_finding（探索图，含 PoC，传 intent_id）**：**只有你本次真实触发过、拿到可复现证据（请求/响应或命令输出）才用**。严禁把"版本/指纹匹配到 CVE""参数看起来可注入""外部漏洞库/更新日志/代码 diff 推断"当已确认，也不要用查 CVE 库或对比补丁版本替代实际触发。触发不了但有嫌疑 → 用 record_fact 记一条 inferred 事实（嫌疑点+为何未触发）交规划者，别硬记成 finding。
+- **确认漏洞 → report_finding（探索图，含 PoC，传 intent_id）**：**只有你本次真实触发过、拿到可复现证据（请求/响应或命令输出）、且已通过边界第 4 条的对抗式自检，才用**。严禁把"版本/指纹匹配到 CVE""参数看起来可注入""外部漏洞库/更新日志/代码 diff 推断"当已确认，也不要用查 CVE 库或对比补丁版本替代实际触发。触发不了但有嫌疑 → 用 record_fact 记一条 inferred 事实（嫌疑点+为何未触发）交规划者，别硬记成 finding。
 
 
 完成本意图后用一句话总结你做了什么、写回了哪些事实。`
@@ -397,10 +398,12 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	if w.wantConstraints() {
 		sysBody += constraintBlock(ts) // 操作约束(若有)注入系统提示,worker 执行时严格遵守
 	}
-	// 意图块 → 意图锚定资产块 → 启动指令，依次追加到 system 尾部（与 constraintBlock 同一套追加法）。
+	// 意图块 → 意图锚定资产块 → 相关既有事实 → 启动指令，依次追加到 system 尾部
+	//（与 constraintBlock 同一套追加法）。
 	sysBody += renderIntentTask(intent)
+	ids := intentAssetIDs(intent)
 	if as != nil {
-		if ids := intentAssetIDs(intent); len(ids) > 0 {
+		if len(ids) > 0 {
 			if assets, err := as.GetByIDs(ids); err == nil && len(assets) > 0 {
 				if b, err := json.Marshal(assets); err == nil {
 					sysBody += "\n\n本意图 asset_ids 对应的目标资产：\n" + string(b)
@@ -416,6 +419,11 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 				}
 			}
 		}
+	}
+	// 记忆：目标资产上已登记的事实摘要。worker 拿到它能避免重复探测同一资产，
+	// 也能站在已有结论上继续推进（此前它只看得到资产本身，看不到别人测出了什么）。
+	if b := priorFactsBlock(ts, ids, 8); b != "" {
+		sysBody += b
 	}
 	sysBody += "\n\n开始执行上面这条意图：只做它、只产生事实、assets、finding、做完即停。"
 	system, boundary := deferredSystem(sysBody, def)
@@ -532,4 +540,55 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// pause / planner kill / shutdown, which the engine distinguishes and re-queues/stops.
 	_, reason, err := captureRunSession(ctx, s, input, emitWrap)
 	return reason, tsx.Writes(), err
+}
+
+// priorFactsBlock 汇总本意图目标资产上已登记的事实（最近 limit 条），作为工作记忆
+// 注入 worker 上下文。只取 fact（探索结论）；intent 是别人的派单、finding 有专用
+// 查询工具，都不在这里重复。
+//
+// 目的：worker 此前只拿到资产本身，看不到"这块资产上已经测出了什么"，容易重复探测
+// 同一个端点、也无法在前人结论上继续推进。
+func priorFactsBlock(ts *db.ExplorationStore, assetIDs []int64, limit int) string {
+	if ts == nil || len(assetIDs) == 0 || limit <= 0 {
+		return ""
+	}
+	type item struct {
+		id      int64
+		summary string
+	}
+	seen := map[int64]bool{}
+	var items []item
+	for _, aid := range assetIDs {
+		refs, err := ts.AssetRefs(aid)
+		if err != nil {
+			continue
+		}
+		for _, r := range refs {
+			if r.Kind != db.KindFact || seen[r.ID] {
+				continue
+			}
+			summary := strings.TrimSpace(r.Summary)
+			if summary == "" {
+				continue
+			}
+			seen[r.ID] = true
+			items = append(items, item{id: r.ID, summary: summary})
+			if len(items) >= limit {
+				break
+			}
+		}
+		if len(items) >= limit {
+			break
+		}
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\n【这些目标资产上已登记的事实（最近 " + strconv.Itoa(len(items)) +
+		" 条；供你避免重复探测，并在此基础上继续推进。需要细节用 node_detail 按 id 查）】：\n")
+	for _, it := range items {
+		b.WriteString("- #" + strconv.FormatInt(it.id, 10) + " " + firstLine(it.summary, 200) + "\n")
+	}
+	return b.String()
 }

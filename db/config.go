@@ -740,6 +740,7 @@ func (d *DB) CurrentPrompt(agentID int64) (string, error) {
 // version ONLY when it has none yet (current_prompt_id IS NULL). Mirrors
 // SeedTool's first-insert-only philosophy: a user's edited prompt is never
 // clobbered on restart. Idempotent — a no-op once any version exists.
+// SeedPromptIfEmpty 只在 agent 还没有当前提示词时写入内置默认。
 func (d *DB) SeedPromptIfEmpty(agentID int64, tmpl string) error {
 	var cur sql.NullInt64
 	if err := d.QueryRow(`SELECT current_prompt_id FROM agents WHERE id=$1`, agentID).Scan(&cur); err != nil {
@@ -750,6 +751,43 @@ func (d *DB) SeedPromptIfEmpty(agentID int64, tmpl string) error {
 	}
 	_, err := d.SavePrompt(agentID, tmpl, "内置默认", "system")
 	return err
+}
+
+// SeedPromptVersioned 播种/升级内置提示词，并返回是否发生了升级。
+//
+// 与 SeedPromptIfEmpty 的区别：后者只填空白，导致**代码里的提示词改进永远到不了
+// 已部署的实例**。这里按 updated_by 判断归属：
+//   - 当前版本 updated_by='system'（代码播种，含"恢复默认"）→ 内容与代码默认不一致时
+//     追加一个新版本，让改进随升级下发；旧版本留在 history 里，可回溯。
+//   - 其它任何来源（'ui' 等）= 用户自己编辑过 → **绝不覆盖**。
+//
+// 依赖 updated_by 而不是内容比对，是因为内容比对无法区分"旧内置默认"与"用户手改"。
+func (d *DB) SeedPromptVersioned(agentID int64, tmpl string) (bool, error) {
+	var cur sql.NullInt64
+	if err := d.QueryRow(`SELECT current_prompt_id FROM agents WHERE id=$1`, agentID).Scan(&cur); err != nil {
+		return false, err
+	}
+	if !cur.Valid {
+		_, err := d.SavePrompt(agentID, tmpl, "内置默认", "system")
+		return true, err
+	}
+	var text string
+	var by sql.NullString
+	if err := d.QueryRow(`SELECT template_text, updated_by FROM agent_prompts WHERE id=$1`, cur.Int64).
+		Scan(&text, &by); err != nil {
+		return false, err
+	}
+	// 用户编辑过的一律不动。
+	if !by.Valid || by.String != "system" {
+		return false, nil
+	}
+	if text == tmpl {
+		return false, nil
+	}
+	if _, err := d.SavePrompt(agentID, tmpl, "内置默认（随版本更新）", "system"); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ResetPromptToDefault appends the code-default template as a new version and

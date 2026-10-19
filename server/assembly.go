@@ -198,8 +198,14 @@ func seedPrompts(pg *db.DB) {
 			log.Printf("[prompts] seed %s 跳过: agent 不存在 (%v)", key, err)
 			continue
 		}
-		if err := pg.SeedPromptIfEmpty(a.ID, tmpl); err != nil {
+		upgraded, err := pg.SeedPromptVersioned(a.ID, tmpl)
+		if err != nil {
 			log.Printf("[prompts] seed %s 失败: %v", key, err)
+			continue
+		}
+		if upgraded {
+			// 内置提示词的改进现在能随版本下发；用户手改过的（updated_by != system）不受影响。
+			log.Printf("[prompts] %s 内置提示词已同步到当前版本", key)
 		}
 	}
 }

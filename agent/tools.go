@@ -1078,6 +1078,12 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 	if len(anchors) > 0 {
 		payload["asset_ids"] = anchors
 	}
+	// 派发去重：同任务里已有高度相似的 open/running 意图就不再重复下发——两条并行
+	// worker 干同一件事纯属浪费；planner 能看到提示并改写差异。
+	if existID, existSum, similar, err := t.ts.FindSimilarOpenIntent(it.Summary); err == nil && similar {
+		return 0, fmt.Errorf("已存在高度相似的未完成意图 #%d「%s」，未重复下发；若确实要做不同的事，请在 summary 里写清区别",
+			existID, firstLine(existSum, 60))
+	}
 	id, err := t.ts.AddIntent(payload, priority, anchors, "planner")
 	if err != nil {
 		return 0, err
@@ -1220,7 +1226,19 @@ func (t *ToolSet) goalMet() actool.CoreTool {
 			_ = json.Unmarshal(in, &a)
 			t.GoalMet = true
 			t.Reason = a.Reason
-			return actool.Text("acknowledged: goal marked met"), nil
+			// 可审计：goal_met 是「整体声称达成」，没有走 prove_goal 的逐条证据链。
+			// 把仍未 met 的目标打上未验证标记，报告与界面才能区分「被证明」和「被声称」，
+			// 而不是让一次偷懒的收官看起来和验证过的达成一样。
+			unproven := 0
+			if goals, err := t.ts.ListByKind(db.KindGoal, 1000); err == nil {
+				for _, g := range goals {
+					if g.State != "met" {
+						unproven++
+						_ = t.ts.MarkGoalUnverified(g.ID, a.Reason)
+					}
+				}
+			}
+			return actool.Text(fmt.Sprintf("acknowledged: task marked complete（%d 个目标未经逐条证据证明，已留痕）", unproven)), nil
 		})
 }
 
