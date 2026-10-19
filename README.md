@@ -201,6 +201,9 @@ ARTEX_TARGETS=linux/amd64,windows/amd64 ./build.sh --release
 - **开发构建不给更新**：版本号是 `dev` 或 `git describe` 带后缀时禁用，避免正式版覆盖掉本地调试的二进制。
 - **Docker 下只换程序、不换镜像**：镜像里的 playwright / nmap 等工具链不会跟着升级，且 `docker compose up -d` 重建容器后会退回镜像自带的版本。要连镜像一起升级仍请用 `docker compose pull artex && docker compose up -d artex`。
 - 访问 GitHub 需要代理时，在**宿主环境页**配置**装机代理**即可，更新链路会走它（没配置时回落到全局代理）。更新只从 GitHub 域名下载并强制 HTTPS。
+- **特权安装助手会自动跟随**：主程序升级重启后，会把自己的版本号告诉 `artex-hostd`；助手版本落后就**自己**从同一个 Release 下载、按 `SHA256SUMS` 校验、冒烟测试后原子换装（旧版保留为 `artex-hostd.prev`），再由 systemd 拉起。
+  它必须自己做——助手以 root 运行且装在 `/usr/local/bin`，主服务受 `ProtectSystem=strict` 限制写不进去；也正因如此，主服务只能影响"装哪个**已发布**版本"，影响不到"装什么内容"。
+  0.3.22 之前装的老助手没有这个能力，重跑一次 `install.sh` 引导即可，之后就会一直自动跟随。
 
 ### 方式二：重跑部署脚本
 
