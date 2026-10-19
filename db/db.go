@@ -293,6 +293,12 @@ ON CONFLICT (name) DO NOTHING`,
 	if err := d.seedDefaultInterceptRulesV4(); err != nil {
 		return fmt.Errorf("seed intercept rules v4: %w", err)
 	}
+	if err := d.migrateListenerRuleTimeout(); err != nil {
+		return fmt.Errorf("migrate listener rule timeout: %w", err)
+	}
+	if err := d.migrateBuiltinRulePatterns(); err != nil {
+		return fmt.Errorf("migrate builtin rule patterns: %w", err)
+	}
 	if err := d.seedDefaultAssetInterceptRules(); err != nil {
 		return fmt.Errorf("seed asset intercept rules: %w", err)
 	}
@@ -387,9 +393,28 @@ func (d *DB) seedDefaultInterceptRules() error {
 			name:     "[内置] 删除系统关键目录",
 			target:   "tool_input",
 			typ:      "regex",
-			pattern:  `\brm\b[^"'\n]{0,60}["'\s](/|/etc|/bin|/usr|/boot|/var|/lib|/sys|/proc|/dev|/sbin|/root)`,
+			// 只拦「删掉整个关键目录」这一种不可逆动作：rm -rf /etc、rm -rf /etc/。
+			// 不拦「删关键目录下的单个文件」——agent 探测时大量出现
+			// rm -f /tmp_out.$$、rm -f /usr/share/nmap/scripts/_t.nse 这类正常清理；
+			// 上一版用 `["'\s](/|...)` 的裸 / 分支，把所有 rm -f <任意路径> 都拦了，
+			// 实测造成大量任务中断。
+			// 关键目录名后面必须是路径边界（引号/空白/行尾）或紧跟斜杠；
+			// /usr/share/x 里的 usr 只是路径中段，不算。
+			pattern:  `\brm\b[^"'\n]{0,60}["'\s](/(?:etc|bin|usr|boot|var|lib|sys|proc|dev|sbin|root)(?:["'\s]|$|/(?:["'\s]|$)))`,
 			action:   "deny",
-			message:  "禁止删除系统关键路径",
+			message:  "禁止删除系统关键目录",
+			priority: 100,
+		},
+		{
+			name:     "[内置] 清空系统关键目录",
+			target:   "tool_input",
+			typ:      "regex",
+			// 关键目录下的【通配】删除（rm -rf /var/lib/*、rm -rf /etc/*）：整棵
+			// 目录树被清空，性质与删整个目录相同。关键目录可能在任意路径段，
+			// 所以这里匹配「路径中某一段是关键目录 + 紧跟通配」。
+			pattern:  `\brm\b[^"'\n]{0,120}["'\s][^"'\n]{0,80}/(?:etc|bin|usr|boot|var|lib|sys|proc|dev|sbin|root)/\*`,
+			action:   "deny",
+			message:  "禁止清空系统关键目录下的内容",
 			priority: 100,
 		},
 		{
@@ -423,7 +448,11 @@ func (d *DB) seedDefaultInterceptRules() error {
 			name:     "[内置] 关机 / 重启",
 			target:   "tool_input",
 			typ:      "regex",
-			pattern:  `\b(?:shutdown|reboot|halt|poweroff|init\s+[06])\b`,
+			// 必须出现在【命令位置】（行首、或 ; && | 之后、或 sudo/doas 之后），
+			// 而不是任意位置。agent 探测设备管理接口时会枚举 /reboot /reset 这类
+			// 路径，裸 \b 匹配会把它们当成关机命令（实测误伤）。URL 里的 reboot
+			// 前面是 / 或 "，都不在命令位置。
+			pattern:  `(?:^|[;&|]\s*|\b(?:sudo|doas)\s+)(?:shutdown|reboot|halt|poweroff)\b|\binit\s+[06]\b`,
 			action:   "deny",
 			message:  "禁止执行关机或重启命令",
 			priority: 100,
@@ -679,7 +708,7 @@ func (d *DB) seedDefaultInterceptRulesV4() error {
 	}
 	if _, err := d.Exec(`
 INSERT INTO intercept_rules(name, enabled, priority, match_target, match_type, pattern, action, message, timeout_enabled, timeout_seconds, timeout_action)
-SELECT $1, true, 120, 'tool_name', 'regex', $2, 'ask', $3, true, 300, 'deny'
+SELECT $1, true, 120, 'tool_name', 'regex', $2, 'ask', $3, true, 180, 'allow'
 WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
 		name,
 		listenerLifecycleToolPattern,
@@ -687,7 +716,6 @@ WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
 	); err != nil {
 		return fmt.Errorf("rule %q: %w", name, err)
 	}
-
 	// No persisted list means Interceptor uses its code defaults (which already
 	// include both tools). Existing installations need a one-time append.
 	if raw, ok, err := d.GetSetting("intercept_enabled_tools"); err != nil {
@@ -698,6 +726,79 @@ WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
 				return err
 			}
 		}
+	}
+	return d.SetSetting(flag, "done")
+}
+
+// migrateBuiltinRulePatterns 把两条实测误报的内置规则换成收窄后的正则。
+//
+// 误报（全部来自生产环境的拦截历史，都是合法的渗透探测命令）：
+//   rm -f /tmp_out.$$                     → 命中「删除系统关键目录」（裸 / 分支）
+//   rm -f /usr/share/nmap/scripts/_t.nse  → 同上
+//   for p in /api/.../reboot ...          → 命中「关机 / 重启」（路径里的 reboot）
+//
+// 规则是 first-insert only 的 seed，改代码对已部署实例无效，所以用一次性迁移
+// 同步 pattern。**只改 pattern，不改 action/enabled/priority**——用户自己把
+// 规则改成 judge 或停用的实例，行为保持。
+func (d *DB) migrateBuiltinRulePatterns() error {
+	const flag = "intercept_builtin_rule_patterns_v2"
+	if v, _, _ := d.GetSetting(flag); v == "done" {
+		return nil
+	}
+	updates := []struct{ name, pattern string }{
+		{
+			"[内置] 删除系统关键目录",
+			`\brm\b[^"'\n]{0,60}["'\s](/(?:etc|bin|usr|boot|var|lib|sys|proc|dev|sbin|root)(?:["'\s]|$|/(?:["'\s]|$)))`,
+		},
+		{
+			"[内置] 关机 / 重启",
+			`(?:^|[;&|]\s*|\b(?:sudo|doas)\s+)(?:shutdown|reboot|halt|poweroff)\b|\binit\s+[06]\b`,
+		},
+	}
+	for _, u := range updates {
+		if _, err := d.Exec(`UPDATE intercept_rules SET pattern=$2 WHERE name=$1`, u.name, u.pattern); err != nil {
+			return fmt.Errorf("rule %q: %w", u.name, err)
+		}
+	}
+	// 新增「清空系统关键目录」这条（rm -rf /var/lib/* 整棵清空）。
+	// 旧的「删除系统关键目录」收窄后不再覆盖这个形态，需要单独一条。
+	const clearName = "[内置] 清空系统关键目录"
+	if _, err := d.Exec(`
+INSERT INTO intercept_rules(name, enabled, priority, match_target, match_type, pattern, action, message, timeout_enabled, timeout_seconds, timeout_action)
+SELECT $1, true, 100, 'tool_input', 'regex', $2, 'deny', $3, false, 60, 'allow'
+WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
+		clearName,
+		`\brm\b[^"'\n]{0,120}["'\s][^"'\n]{0,80}/(?:etc|bin|usr|boot|var|lib|sys|proc|dev|sbin|root)/\*`,
+		"禁止清空系统关键目录下的内容",
+	); err != nil {
+		return fmt.Errorf("rule %q: %w", clearName, err)
+	}
+	return d.SetSetting(flag, "done")
+}
+
+// migrateListenerRuleTimeout 把「启停回连接收器」这条 ask 规则的超时策略从
+// deny 改成 allow、时长从 300s 改成 180s。
+//
+// 起因：ask 会【同步阻塞】worker 等人批。操作员不在电脑前时 deny 等于把整条
+// 渗透链卡死在这条命令上。放行只影响这一条命令，事后仍可在「拦截审批」页看到
+// 记录并追认。
+//
+// seed 是 first-insert only（ON CONFLICT DO NOTHING），改 seed 对已部署实例
+// 无效，所以这里用一次性迁移补上。只改 timeout 字段，不碰 action——用户自己
+// 把规则改成 judge 的不受影响。
+func (d *DB) migrateListenerRuleTimeout() error {
+	const flag = "intercept_listener_rule_timeout_allow_v1"
+	if v, _, _ := d.GetSetting(flag); v == "done" {
+		return nil
+	}
+	if _, err := d.Exec(`
+UPDATE intercept_rules
+   SET timeout_enabled = true,
+       timeout_seconds = 180,
+       timeout_action = 'allow'
+ WHERE name = '[内置] 启停回连接收器'
+   AND timeout_action <> 'allow'`); err != nil {
+		return err
 	}
 	return d.SetSetting(flag, "done")
 }

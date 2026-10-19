@@ -159,6 +159,11 @@ func stripCodeFence(text string) string {
 // ParseVerdict requires a complete verdict and explanation for every action.
 // Never extract a decision keyword from prose, arguments, or a broken JSON
 // reply. Invalid/incomplete responses follow the configured model-failure path.
+//
+// 格式容错（normalizeComment）：模型偶尔会用半角冒号/分号、换行或多余空格。
+// 这些是**排版偏差**，不是「裁决无效」——原先一律判为无法解析、直接走失败
+// 策略，开着思考的模型尤其容易多几个换行，于是每次裁决都掉进兜底。
+// 这里只做排版归一（标点与空白），**不改写语义**：三段缺一段仍然判无效。
 func ParseVerdict(text string) Verdict {
 	d := json.NewDecoder(strings.NewReader(stripCodeFence(text)))
 	if tok, err := d.Token(); err != nil || tok != json.Delim('{') {
@@ -186,11 +191,11 @@ func ParseVerdict(text string) Verdict {
 	if _, err := d.Token(); err != io.EOF || len(fields) != 2 {
 		return Verdict{}
 	}
-	action, reason := fields["decision"], strings.TrimSpace(fields["comment"])
+	action, reason := fields["decision"], normalizeComment(fields["comment"])
 	if action != "allow" && action != "ask" && action != "deny" {
 		return Verdict{}
 	}
-	if len(reason) > 2400 || !strings.HasPrefix(reason, "实际操作：") {
+	if len(reason) > 2400 {
 		return Verdict{}
 	}
 	operation, rest, ok := strings.Cut(strings.TrimPrefix(reason, "实际操作："), "；成功后的后果：")
@@ -202,4 +207,58 @@ func ParseVerdict(text string) Verdict {
 		return Verdict{}
 	}
 	return Verdict{Action: action, Reason: reason}
+}
+
+// normalizeComment 把 comment 归一到协议要求的形态：半角冒号/分号换成全角、
+// 换行与连续空白压成单个空格。**只动排版，不动内容**——三段缺一段仍然无效。
+//
+// 分隔符有三种可能：全角「；」、半角「;」、以及换行（模型常把三段写成三行）。
+// 所以先把「换行/多空格」压成空格，再把两个分隔关键字**之前**的任意标点
+// （; ； , ， 、）统一换成「；」。
+func normalizeComment(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	// 折叠空白（含换行）为单个空格。
+	s = strings.Join(strings.Fields(s), " ")
+
+	// 关键字的冒号：半角 → 全角。
+	for _, k := range []string{"实际操作", "成功后的后果", "命中规则"} {
+		s = strings.ReplaceAll(s, k+":", k+"：")
+	}
+	// 分隔符：两个分隔关键字之前的标点统一成「；」。
+	// 用「查找关键字 → 回看它前面最近的标点」的方式，避免误伤句内标点。
+	s = normalizeSeparatorBefore(s, "成功后的后果", "；")
+	s = normalizeSeparatorBefore(s, "命中规则", "；")
+	return s
+}
+
+// normalizeSeparatorBefore 把 sep 之前（忽略空格）的那一个分隔标点换成 want。
+// 找不到标点时补一个 want（模型用换行分段时，压缩成空格后就丢了分隔符）。
+func normalizeSeparatorBefore(s, keyword, want string) string {
+	i := strings.Index(s, keyword)
+	if i < 0 {
+		return s
+	}
+	head := s[:i]
+	// 往前找最近的非空白字符。注意按 rune 处理：中文标点是多字节 UTF-8，
+	// 按 byte 比较会拿到尾字节而匹配不上。
+	runes := []rune(head)
+	k := len(runes) - 1
+	for k >= 0 && (runes[k] == ' ' || runes[k] == '\t') {
+		k--
+	}
+	if k >= 0 {
+		switch runes[k] {
+		case ';', '；', ',', '，', '、', '|':
+			runes[k] = []rune(want)[0]
+		default:
+			// 没有标点（换行分段被压成空格后就是这样）→ 补一个分隔符。
+			runes = append([]rune(strings.TrimRight(string(runes), " \t")), []rune(want)...)
+		}
+	} else {
+		runes = append([]rune(strings.TrimRight(string(runes), " \t")), []rune(want)...)
+	}
+	return string(runes) + s[i:]
 }

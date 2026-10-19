@@ -312,11 +312,26 @@ const (
 )
 
 // Judge default values.
+//
+// 这套默认值是按「人不在电脑前」的场景定的：
+//
+//   - 裁决超时 90s（不是 15s）：开启思考的模型（MiniMax-M3.1 / Claude extended
+//     thinking）思考本身就要十几秒，15s 会把「模型正在想」误判成失败，
+//     于是每次裁决都掉进兜底策略——开启思考的场景下裁决等于没开。
+//   - 裁决失败 → 转人工（不是 allow）：allow 意味着「模型挂了 → 关卡自动敞开」，
+//     而模型挂掉的原因往往正是配置问题（thinking 不兼容、额度耗尽、上游 5xx），
+//     这时自动放行等于让整套管控静默失效。
+//   - 人工审批超时 → 放行（不是 deny）：ask 会**同步阻塞** worker 等人。
+//     操作员不在电脑前时 deny 等于把任务卡死在这里，整条渗透链停摆；
+//     放行只是让这一次调用继续，事后仍可在「拦截审批」页看到记录并追认。
+//     真要防破坏，防线应该放在「规则命中 → 模型裁决」这一层，而不是
+//     「人没及时点确认」这一层。
+//   - 人工审批超时 180s：3 分钟，够操作员回来看一眼。
 const (
-	defaultJudgeTimeoutSecs      = 15
-	defaultJudgeFailAction       = "allow"
-	defaultJudgeAskTimeoutSecs   = 300
-	defaultJudgeAskTimeoutAction = "deny"
+	defaultJudgeTimeoutSecs      = 90
+	defaultJudgeFailAction       = "ask"
+	defaultJudgeAskTimeoutSecs   = 180
+	defaultJudgeAskTimeoutAction = "allow"
 )
 
 // JudgeConfig is the resolved LLM-fallback-judge configuration. Prompt is always

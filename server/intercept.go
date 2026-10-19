@@ -72,14 +72,25 @@ func reviewCompletion(ctx context.Context, prov llm.Provider, prompt string, inp
 // streamCollectText runs a single non-streaming-style completion (thinking off,
 // low temperature, bounded output) and returns the concatenated text. The
 // budget includes the explanation and complete closing JSON delimiters.
+//
+// thinking 的处理：原先这里硬编码 Thinking:"disabled"，对 MiniMax-M3.1 这类
+// **强制要求 adaptive thinking** 的模型会被上游直接拒（400 "requires adaptive
+// thinking; thinking.type=disabled is not allowed"）——裁决于是 100% 失败，而失败
+// 策略默认 allow，等于这道关卡完全失效。
+//
+// 现在默认【不发】thinking 字段（空串 = 让模型/网关按自己的默认走），
+// 由 profile 的 thinking_type 配置决定；只有显式配了才带上。
+//
+// max_tokens 也跟着调：开启思考的模型会把思考内容算进输出额度，1024 会被
+// 思考吃光、正文 JSON 反而被截断成不可解析。给到 2048，并在解析失败时
+// 明确区分「输出被截断」与「格式不对」。
 func streamCollectText(ctx context.Context, prov llm.Provider, system, user string) (string, error) {
 	temp := 0.0
 	req := llm.CompletionRequest{
 		System:      []string{system},
 		Messages:    []llm.Message{llm.UserText(user)},
-		MaxTokens:   1024,
+		MaxTokens:   2048,
 		Temperature: &temp,
-		Thinking:    "disabled",
 	}
 	var sb strings.Builder
 	for ev, err := range prov.Stream(ctx, req) {

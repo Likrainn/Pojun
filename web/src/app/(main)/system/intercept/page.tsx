@@ -168,8 +168,8 @@ const defaultForm = (): RuleForm => ({
   action: "deny",
   message: "",
   timeout_enabled: true,
-  timeout_seconds: 60,
-  timeout_action: "deny",
+  timeout_seconds: 180,
+  timeout_action: "allow",
 });
 
 // ---- small components ----
@@ -200,10 +200,10 @@ const defaultJudge = (): JudgeConfig => ({
   enabled: false,
   profile_id: 0,
   prompt: "",
-  timeout_seconds: 15,
-  fail_action: "allow",
-  ask_timeout_seconds: 300,
-  ask_timeout_action: "deny",
+  timeout_seconds: 90,
+  fail_action: "ask",
+  ask_timeout_seconds: 180,
+  ask_timeout_action: "allow",
 });
 
 function JudgeCard() {
@@ -391,11 +391,15 @@ function JudgeCard() {
                   <Select value={cfg.fail_action} onValueChange={(v) => patch({ fail_action: v as JudgeConfig["fail_action"] })}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="ask">转人工审批（推荐）</SelectItem>
                       <SelectItem value="allow">放行</SelectItem>
-                      <SelectItem value="ask">转人工审批</SelectItem>
                       <SelectItem value="deny">拦截</SelectItem>
                     </SelectContent>
                   </Select>
+                  <span className="text-muted-foreground text-xs">
+                    模型挂掉时「放行」等于关卡自动敞开（多半是配置问题：thinking 不兼容、额度耗尽、上游 5xx），
+                    推荐转人工——至少会留下一条待办记录。
+                  </span>
                 </Field>
               </div>
 
@@ -418,10 +422,15 @@ function JudgeCard() {
                   <Select value={cfg.ask_timeout_action} onValueChange={(v) => patch({ ask_timeout_action: v as JudgeConfig["ask_timeout_action"] })}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="allow">放行（推荐 · 人不在时不卡死）</SelectItem>
                       <SelectItem value="deny">拦截</SelectItem>
-                      <SelectItem value="allow">放行</SelectItem>
                     </SelectContent>
                   </Select>
+                  <span className="text-muted-foreground text-xs">
+                    人工审批会【同步阻塞】执行它的 worker。选「拦截」时，你人不在电脑前
+                    整条渗透链就停在这一条命令上；选「放行」则继续跑，事后仍可在
+                    「拦截审批」页看到记录并追认。
+                  </span>
                 </Field>
               </div>
             </CardContent>
