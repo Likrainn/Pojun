@@ -293,6 +293,20 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 				out = append(out, resolve(inst, row))
 			}
 		}
+		// 该 agent 的运行配置：本地执行开关 + 交互式 shell。两者都在这里取一次。
+		ag, _ := pg.GetAgentByKey(agentKey)
+		// localExec 默认 true：取不到 agent 行时按「不禁」处理，绝不因为一次查询失败就把
+		// worker/planner 的 Bash 摘掉（那会让整个任务跑不动）。
+		localExec := ag == nil || ag.LocalExec
+		// 关掉本地执行 = 摘掉执行类工具。Bash/Write/Edit 这些是 SDK DefaultTools，**没有
+		// tools 表行**，ToolResolve 那条「未绑定即丢弃」管不到它们（rows 里查不到 → 直接
+		// 放行），所以只能在这里显式摘。摘完剩下只读检查类（Read/LS/Glob/Grep）+ 平台工具，
+		// 于是 auto 这类编排 agent 想把事情做成，只剩「派任务」一条路——这正是设计意图：
+		// 实测给 Auto 留着 Bash 时，它在对话里直接写 Python 扫描器把网段扫穿了，一个任务
+		// 都没建（用户反馈的「他不派发任务、一直自己执行」就是这个）。
+		if !localExec {
+			out = agent.DropLocalExecTools(out)
+		}
 		// shell hints: user-defined kind="shell" tools are not callable — they are
 		// environment declarations that tell the model which command-line tools are
 		// installed. Collect the ones bound to this agent and append to Bash's description.
@@ -302,11 +316,24 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 				shellHints = append(shellHints, "- "+row.Key+": "+row.Description)
 			}
 		}
-		if len(shellHints) > 0 {
-			note := "\n\n以下工具已安装在此 bash 环境中，可直接通过 Bash 调用：\n" + strings.Join(shellHints, "\n")
+		// 三段补丁都挂在 Bash 的 description 上：本机网络能力(按 euid/能力位实时判定)、
+		// 已装命令行工具、交互式 shell 指引。Bash 已被摘掉的 agent 自然什么都看不到——
+		// 否则描述会残留「你可以跑命令」的暗示，与工具集自相矛盾。
+		interactive := !actool.InteractiveShellDisabled() && ag != nil && ag.InteractiveShell
+		var bashNote string
+		if localExec {
+			bashNote = agent.EnvCapabilityNote()
+			if len(shellHints) > 0 {
+				bashNote += "\n\n以下工具已安装在此 bash 环境中，可直接通过 Bash 调用：\n" + strings.Join(shellHints, "\n")
+			}
+			if interactive {
+				bashNote += bashInteractiveShellNote
+			}
+		}
+		if bashNote != "" {
 			for i, t := range out {
 				if t.Name() == "Bash" {
-					out[i] = agent.DecorateTool(t, t.Description()+note, t.InputSchema())
+					out[i] = agent.DecorateTool(t, t.Description()+bashNote, t.InputSchema())
 					break
 				}
 			}
@@ -315,16 +342,9 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 		// web_search), NOT by tools-table binding. When on, inject the 5 shell_* tools
 		// and COUPLE the Bash description addendum so it points at shell_open — and never
 		// dangles when off. See docs/交互式shell设计.md §14.2.
-		if !actool.InteractiveShellDisabled() {
-			if a, err := pg.GetAgentByKey(agentKey); err == nil && a != nil && a.InteractiveShell {
-				out = append(out, actool.ShellSessionTools()...)
-				for i, t := range out {
-					if t.Name() == "Bash" {
-						out[i] = agent.DecorateTool(t, t.Description()+bashInteractiveShellNote, t.InputSchema())
-						break
-					}
-				}
-			}
+		// 本地执行关掉时也一并关掉：PTY 会话等价于给了一条不受管的命令执行通道。
+		if localExec && interactive {
+			out = append(out, actool.ShellSessionTools()...)
 		}
 		return out
 	}

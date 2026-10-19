@@ -1129,6 +1129,7 @@ export interface Agent {
   run_seconds?: number; // worker 单次运行墙钟上限(秒)；0 = 无限制
   web_search?: boolean; // 是否启用网络搜索(受系统全局开关门控)
   interactive_shell?: boolean; // 是否启用交互式 shell(持久 PTY 会话工具族)
+  local_exec?: boolean; // 是否可在本机执行命令/写文件(Bash/Write/Edit)；false = 只能经工具操作平台(如派任务)
   // P3 触发后处理策略(仅自定义 agent 有意义)
   trigger_run_mode?: "serial" | "parallel"; // 串行排队 / 每次触发各自并发一个会话
   trigger_merge_mode?: "by_task" | "all" | "none"; // 仅 serial：同任务合并 / 全部合并 / 不合并

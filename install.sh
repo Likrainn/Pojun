@@ -250,11 +250,24 @@ JSON
     ok "沿用既有 config.json（升级不覆盖）"
   fi
 
-  # systemd 单元（加固版）
-  # 注意 ProtectSystem=strict 与 ReadWritePaths 必须成对：strict 把整个文件系统挂成
-  # 只读，缺 ReadWritePaths 时服务写不了自己的 data 目录——流量索引(SQLite)、任务产物、
-  # 证据、transcripts 会全部静默失败（日志刷 "attempt to write a readonly database"），
-  # 页面「一键更新」也换不动二进制。
+  # systemd 单元（加固版：够安全，但不再打断渗透工具）
+  #
+  # ProtectSystem=strict 必须配 ReadWritePaths，否则整个文件系统只读、服务写不了自己的
+  # data 目录：流量索引(SQLite)、任务产物、证据、transcripts 会全部静默失败（日志刷
+  # "attempt to write a readonly database"），页面「一键更新」也换不动二进制。
+  #
+  # 下面这组指令是逐条实测出来的，改动前请先读注释——这里踩过的坑都是"配上了但工具跑不了"：
+  #   - MemoryDenyWriteExecute=true 会让 nuclei 启动即 panic（Go 的 sonic 加载器要做
+  #     mprotect(PROT_EXEC)）。硬化收益远小于"扫描器不能用"，故不设。
+  #   - 缺 CAP_NET_RAW 时 masscan 报 "PF_PACKET sockets not supported"、nmap -sS 报
+  #     "requires root privileges"，agent 只能退回 -sT connect 扫描；RestrictAddressFamilies
+  #     里也必须放行 AF_PACKET，否则连 raw socket 都建不出来。
+  #   - 指令名是 SystemCallErrorNumber。写成不存在的 SystemCallErrorAction 时 systemd
+  #     只会静默忽略（日志一行 "Unknown key ... ignoring"），超纲系统调用走默认动作
+  #     SIGSYS 直接杀进程，而不是这里要的"干净拒绝"。
+  #   - Environment=HOME 指到安装目录：ProtectHome + 家目录不可写会让 nuclei 的模板/缓存
+  #     目录(~/nuclei-templates 等)写不进去。
+  # 注：--dir 若指向 /home 或 /root 底下，ProtectHome=true 会把它整个藏起来，需自行去掉该项。
   cat > "/etc/systemd/system/${SERVICE}.service" <<UNIT
 [Unit]
 Description=ARTEX - AI Autonomous Penetration Testing System
@@ -266,6 +279,7 @@ Wants=network-online.target postgresql.service
 Type=simple
 User=${RUN_USER}
 WorkingDirectory=${INSTALL_DIR}
+Environment=HOME=${INSTALL_DIR}
 ExecStart=${INSTALL_DIR}/start.sh -addr ${LISTEN_ADDR} -proxy ${PROXY_ADDR}
 Restart=always
 RestartSec=5
@@ -280,16 +294,16 @@ ProtectKernelModules=true
 ProtectKernelTunables=true
 RestrictNamespaces=true
 RestrictRealtime=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 LockPersonality=true
-MemoryDenyWriteExecute=true
+# AF_PACKET/AF_NETLINK：masscan 与 nmap 的原始套接字要它们
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_PACKET AF_NETLINK
 SystemCallFilter=@system-service
-# 指令名是 SystemCallErrorNumber。原先写的 SystemCallErrorAction **根本不存在**，
-# systemd 只会静默忽略它（日志一行 "Unknown key ... ignoring"），于是超纲的系统调用
-# 走默认动作 SIGSYS 直接杀进程，而不是这里想要的"干净拒绝"。
 SystemCallErrorNumber=EPERM
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_DAC_OVERRIDE CAP_CHOWN
-AmbientCapabilities=CAP_NET_BIND_SERVICE
+# 不是 root，但给足原始套接字能力：masscan / ping / AF_PACKET 直接用；nmap 按 euid 判断，
+# 特权扫描需 --privileged（提示词里已写明）。CAP_NET_BIND_SERVICE 供 --listen 用低位端口。
+# 注：加了能力就不该再加 NoNewPrivileges 之外的提权面；这三项是渗透扫描的最小集。
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target

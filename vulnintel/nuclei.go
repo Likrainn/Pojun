@@ -26,11 +26,23 @@ func TemplatesDir(dataDir string) string {
 // EnsureTemplates clones or updates the template tree. Best-effort: returns
 // error but callers log it — scan_with_nuclei degrades to "templates
 // unavailable" messaging rather than failing the sync.
-func EnsureTemplates(ctx context.Context, dir string) error {
+//
+// proxy 是可选出网代理(http/https/socks5，空=直连)。模板树在 github.com，
+// 国内/校园网直连必然超时——不传代理时这里只能报 clone failed，所以调用方要用
+// 平台配置的「装机代理/全局代理」喂进来，跟拉更新走同一条出口。
+func EnsureTemplates(ctx context.Context, dir, proxy string) error {
+	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_HTTP_LOW_SPEED_LIMIT=1000", "GIT_HTTP_LOW_SPEED_TIME=30")
+	if proxy != "" {
+		// git 认的是 http_proxy/https_proxy（大小写都设一份，不同版本读的不一样），
+		// socks5 代理只有 ALL_PROXY 走得通。
+		env = append(env,
+			"http_proxy="+proxy, "https_proxy="+proxy, "HTTP_PROXY="+proxy, "HTTPS_PROXY="+proxy,
+			"ALL_PROXY="+proxy, "all_proxy="+proxy)
+	}
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 		// update: fetch + fast-forward only, ignore local drift
 		cmd := exec.CommandContext(ctx, "git", "-C", dir, "pull", "--ff-only", "--quiet")
-		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		cmd.Env = env
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("nuclei templates pull: %v: %s", err, strings.TrimSpace(string(out)))
@@ -42,7 +54,7 @@ func EnsureTemplates(ctx context.Context, dir string) error {
 	}
 	cmd := exec.CommandContext(ctx, "git", "clone", "--depth", "1", "--quiet",
 		"https://github.com/projectdiscovery/nuclei-templates.git", dir)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("nuclei templates clone: %v: %s", err, strings.TrimSpace(string(out)))

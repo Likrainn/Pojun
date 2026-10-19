@@ -57,6 +57,7 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
   const [llmProfiles, setLlmProfiles] = React.useState<NonNullable<AgentDetail["llm_profiles"]>>([]);
   const [webSearch, setWebSearch] = React.useState(false);
   const [interactiveShell, setInteractiveShell] = React.useState(false);
+  const [localExec, setLocalExec] = React.useState(true);
   const [wrapup, setWrapup] = React.useState("");
   const [wrapupDefault, setWrapupDefault] = React.useState("");
   const [wrapupTurns, setWrapupTurns] = React.useState("0");
@@ -95,6 +96,7 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
         setLlmProfiles(d.llm_profiles ?? []);
         setWebSearch(!!d.agent?.web_search);
         setInteractiveShell(!!d.agent?.interactive_shell);
+        setLocalExec(d.agent?.local_exec !== false);
         setWrapup(d.wrapup_prompt ?? "");
         setWrapupDefault(d.wrapup_default ?? "");
         setWrapupTurns(String(d.wrapup_max_turns ?? 0));
@@ -189,6 +191,7 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
       }
       if (showWebSearch) patch.web_search = webSearch;
       if (showInteractiveShell) patch.interactive_shell = interactiveShell;
+      if (showLocalExec) patch.local_exec = localExec;
       await api.saveAgentConfig(agentKey, patch);
       toast.success("已保存运行配置（立即生效）");
       reload();
@@ -262,6 +265,9 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
   const showWebSearch = agentKey !== "goals";
   // interactive shell (持久 PTY 会话工具族) 同样对除 goals 外的 agent 开放;无全局门控。
   const showInteractiveShell = agentKey !== "goals";
+  // 本地执行(Bash/写文件)：对除 goals(一次性拆解器、本就没有 Bash)外的所有 agent 开放。
+  // 关掉后该 agent 只剩只读检查工具 + 平台工具，必须把活派成任务——Auto 默认就是关的。
+  const showLocalExec = agentKey !== "goals";
   // 每个 agent(含 goals/mainagent)都跑在某个 LLM 上,故「默认模型」绑定对所有 agent 开放。
   const showLLM = true;
   // triggers (P3) only attach to custom agents.
@@ -281,7 +287,7 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
       {/* 配置 + 提示词 */}
       <TabsContent value="prompt" className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
         <div className="grid gap-4">
-          {(showLLM || showConfig || showWebSearch || showInteractiveShell) && (
+          {(showLLM || showConfig || showWebSearch || showInteractiveShell || showLocalExec) && (
             <div className="grid gap-3 rounded-md border p-3">
               {showLLM && (
                 <div className="grid gap-1.5">
@@ -343,17 +349,36 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
                   </div>
                 </div>
               )}
+              {showLocalExec && (
+                <div className="flex items-center gap-3 border-t pt-3">
+                  <Switch
+                    id="local-exec"
+                    checked={localExec}
+                    onCheckedChange={setLocalExec}
+                  />
+                  <div className="grid gap-0.5">
+                    <Label htmlFor="local-exec" className="text-sm">本地命令执行</Label>
+                    <span className="text-muted-foreground text-xs">
+                      关闭后（点上方保存生效）该 Agent 不再拥有 Bash / 写文件 / 交互式 Shell，只剩只读检查与平台工具——
+                      想干实事必须用 spawn_task 派成任务。平台操作助手 Auto 默认关闭。
+                    </span>
+                  </div>
+                </div>
+              )}
               {showInteractiveShell && (
                 <div className="flex items-center gap-3 border-t pt-3">
                   <Switch
                     id="interactive-shell"
                     checked={interactiveShell}
+                    disabled={!localExec}
                     onCheckedChange={setInteractiveShell}
                   />
                   <div className="grid gap-0.5">
                     <Label htmlFor="interactive-shell" className="text-sm">交互式 Shell</Label>
                     <span className="text-muted-foreground text-xs">
-                      为该 Agent 开启后（点上方保存生效），可用持久 PTY 会话工具（shell_open/send/read/close/list）驱动 msfconsole/ssh/REPL 等交互程序
+                      {localExec
+                        ? "为该 Agent 开启后（点上方保存生效），可用持久 PTY 会话工具（shell_open/send/read/close/list）驱动 msfconsole/ssh/REPL 等交互程序"
+                        : "需先开启「本地命令执行」：交互式 Shell 本身就是在本机跑命令"}
                     </span>
                   </div>
                 </div>

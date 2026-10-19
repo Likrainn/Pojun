@@ -1128,6 +1128,7 @@ export const api = {
       run_seconds?: number;
       web_search?: boolean;
       interactive_shell?: boolean;
+      local_exec?: boolean;
       trigger_run_mode?: "serial" | "parallel";
       trigger_merge_mode?: "by_task" | "all" | "none";
       trigger_max_parallel?: number;

@@ -253,6 +253,16 @@ ON CONFLICT (agent_id, var_name) DO UPDATE
 		}
 		_ = d.SetSetting("interactive_shell_default_v1", "true")
 	}
+	// Auto 天生是「平台操作助手」:它该用 spawn_task 把渗透需求派成任务,而不是自己拿
+	// Bash/Write 在机器上跑。给它 Bash 时模型几乎必然自己动手(实测:派任务后 Auto 直接
+	// 写了个 Python 扫描器扫穿 10.10.0.0/16,一个任务都没建)——所以默认关掉它的本地执行。
+	// 一次性 + flag 守卫:用户之后想给它开回来,重启不会再被强制关掉。
+	if v, _, _ := d.GetSetting("local_exec_default_v1"); v != "true" {
+		if _, err := d.Exec(`UPDATE agents SET local_exec=false WHERE key='auto'`); err != nil {
+			return fmt.Errorf("seed local_exec defaults: %w", err)
+		}
+		_ = d.SetSetting("local_exec_default_v1", "true")
+	}
 	// Seed the built-in browser (Playwright) MCP once — DISABLED by default (用户
 	// 需要时自行启用), no proxy by default. The traffic-capture toggle injects/strips
 	// the recording proxy + CA at runtime (server.Manager.syncBrowserMCPProxy).

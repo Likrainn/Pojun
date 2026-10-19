@@ -361,6 +361,7 @@ func (s *Server) pgSaveAgentConfig(w http.ResponseWriter, r *http.Request) {
 		RunSeconds       *int  `json:"run_seconds"`
 		WebSearch        *bool `json:"web_search"`
 		InteractiveShell *bool `json:"interactive_shell"`
+		LocalExec        *bool `json:"local_exec"`
 		// llm_profile_id 三态:字段缺省=不动;显式 null=解绑(跟随任务/全局);数字=绑定该 profile。
 		LLMProfileID json.RawMessage `json:"llm_profile_id"`
 		// P3 触发后处理策略(三者一起可选,提供任一即整体写入;未提供则不动)。
@@ -419,6 +420,12 @@ func (s *Server) pgSaveAgentConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.InteractiveShell != nil {
 		if err := pg.SetAgentInteractiveShell(a.Key, *req.InteractiveShell); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.LocalExec != nil {
+		if err := pg.SetAgentLocalExec(a.Key, *req.LocalExec); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}

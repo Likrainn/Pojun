@@ -777,6 +777,7 @@ CREATE TABLE IF NOT EXISTS agents (
     run_seconds       INTEGER NOT NULL DEFAULT 1200,
     web_search        BOOLEAN NOT NULL DEFAULT false,
     interactive_shell BOOLEAN NOT NULL DEFAULT false,
+    local_exec        BOOLEAN NOT NULL DEFAULT true,
     wrapup_prompt     TEXT NOT NULL DEFAULT '',
     wrapup_max_turns  INTEGER NOT NULL DEFAULT 0,
     task_timeout_wrapup_prompt    TEXT NOT NULL DEFAULT '',
@@ -792,6 +793,10 @@ CREATE TABLE IF NOT EXISTS agents (
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS trigger_run_mode     TEXT    NOT NULL DEFAULT 'serial';
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS trigger_merge_mode   TEXT    NOT NULL DEFAULT 'all';
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS trigger_max_parallel INTEGER NOT NULL DEFAULT 5;
+-- local_exec = 该 agent 能否在本机执行命令/写文件(Bash/Write/Edit/交互式 Shell)。
+-- 默认 true(保持既有行为);平台编排类 agent(auto)默认 false,只经工具操作平台、把
+-- 执行动作派成任务,而不是自己在机器上跑(net_context/report_finding 那套仍照常)。
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS local_exec BOOLEAN NOT NULL DEFAULT true;
 -- per-agent LLM 绑定(agent 级默认模型):列自初版即在上方 CREATE 中,此 ALTER 仅为极旧库兜底(幂等)。
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS llm_profile_id BIGINT REFERENCES llm_profiles(id) ON DELETE SET NULL;
 -- run_seconds 单次 run 墙钟默认 600→1200:只改列默认(影响将来新插入的行),不动旧库存量行。

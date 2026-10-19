@@ -876,15 +876,11 @@ func (m *Manager) runVulnIntelSync() {
 			if v, ok, _ := m.pg.GetSetting(settingNvdApiKey); ok && strings.TrimSpace(v) != "" {
 				key = strings.TrimSpace(v)
 			}
-			// 同步出网代理回退链:全局代理 → 搜索代理(常见配置组合,搜索代理本来就
-			// 是"对外网可达"语义)→ 直连。被墙环境(如校园网)直连 cisa.gov 会吃
-			// 404 拦截页,KEV 整体失败——实测教训。
-			proxyURL := m.GlobalProxy()
-			if proxyURL == "" {
-				if v, ok, _ := m.pg.GetSetting(settingWebSearchProxy); ok {
-					proxyURL = strings.TrimSpace(v)
-				}
-			}
+			// 同步出网代理回退链:装机代理 → 全局代理 → 搜索代理(常见配置组合,搜索代理本来就
+			// 是"对外网可达"语义)→ 直连。被墙环境(如校园网)直连 cisa.gov/github.com 会吃
+			// 404 拦截页或超时,KEV 与模板树一起失败——实测教训。装机代理排第一是因为它本来
+			// 就是为"连 GitHub 拉东西"配置的。
+			proxyURL := m.maintenanceProxy()
 			cfg := vulnintel.Config{
 				NvdAPIKey: key,
 				ProxyURL:  proxyURL,
@@ -897,14 +893,16 @@ func (m *Manager) runVulnIntelSync() {
 			// 资产联动:新同步的 CVE 反向匹配 service 资产指纹,受影响任务挂 hint。
 			// 同步没完整完成也照跑——KEV stub 与已 upsert 的记录都已可查。
 			m.linkVulnIntelAssets()
-			// nuclei 模板树:clone(首轮)/pull(后续)。失败不阻塞主流程,
-			// scan_with_nuclei 会报"模板树不可用"。
-			tplCtx, tplCancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			if err := vulnintel.EnsureTemplates(tplCtx, m.nucleiDir); err != nil {
-				log.Printf("[vulnintel] nuclei 模板树更新失败: %v", err)
-			}
-			tplCancel()
 		}
+		// nuclei 模板树:clone(首轮)/pull(后续)。**刻意放在情报同步开关之外**——
+		// scan_with_nuclei 是独立功能,关掉漏洞情报同步不该让模板树烂在原地。
+		// 失败不阻塞主流程,scan_with_nuclei 会报"模板树不可用"。走维护出网代理:
+		// 模板树在 github.com,直连拉不下来的环境会一直卡在"模板树不可用"。
+		tplCtx, tplCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		if err := vulnintel.EnsureTemplates(tplCtx, m.nucleiDir, m.maintenanceProxy()); err != nil {
+			log.Printf("[vulnintel] nuclei 模板树更新失败: %v", err)
+		}
+		tplCancel()
 		time.Sleep(6 * time.Hour)
 	}
 }
@@ -914,6 +912,27 @@ func (m *Manager) GlobalProxy() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.globalProxy
+}
+
+// maintenanceProxy resolves the egress proxy for MAINTENANCE traffic (CVE/KEV 同步、
+// nuclei 模板树、拉更新、装宿主工具): 装机代理 → 全局代理 → 搜索代理 → 直连。
+// 语义上装机代理最贴切(它本来就是为连 GitHub 拉东西配的),老部署没配过它时按原样
+// 回落到全局代理,行为不变。与 Server.maintenanceProxy 是同一套回退链——那里住的是
+// HTTP 侧的调用方,这里住的是后台同步协程。
+func (m *Manager) maintenanceProxy() string {
+	if m == nil || m.pg == nil {
+		return ""
+	}
+	if v, _, _ := m.pg.GetSetting(settingInstallProxy); strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	if p := m.GlobalProxy(); p != "" {
+		return p
+	}
+	if v, ok, _ := m.pg.GetSetting(settingWebSearchProxy); ok {
+		return strings.TrimSpace(v)
+	}
+	return ""
 }
 
 // SetGlobalProxy validates, persists and applies the global egress proxy

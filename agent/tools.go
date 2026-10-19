@@ -1229,12 +1229,16 @@ func (t *ToolSet) goalMet() actool.CoreTool {
 			// 可审计：goal_met 是「整体声称达成」，没有走 prove_goal 的逐条证据链。
 			// 把仍未 met 的目标打上未验证标记，报告与界面才能区分「被证明」和「被声称」，
 			// 而不是让一次偷懒的收官看起来和验证过的达成一样。
+			// t.ts 为 nil 时（无任务上下文的 ToolSet，如工具目录构造期）跳过：那条路径
+			// 本来就调不到这里，但 nil 解引用会直接把进程带走，不值得赌。
 			unproven := 0
-			if goals, err := t.ts.ListByKind(db.KindGoal, 1000); err == nil {
-				for _, g := range goals {
-					if g.State != "met" {
-						unproven++
-						_ = t.ts.MarkGoalUnverified(g.ID, a.Reason)
+			if t.ts != nil {
+				if goals, err := t.ts.ListByKind(db.KindGoal, 1000); err == nil {
+					for _, g := range goals {
+						if g.State != "met" {
+							unproven++
+							_ = t.ts.MarkGoalUnverified(g.ID, a.Reason)
+						}
 					}
 				}
 			}

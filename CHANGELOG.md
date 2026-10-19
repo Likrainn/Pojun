@@ -4,6 +4,39 @@
 
 ## [Unreleased]
 
+## [0.3.30] - 2026-10-19
+
+> 能力批次：让「对话里派活」真正走任务，并修好被加固挡死的渗透工具。
+
+### 新增的功能
+
+- **Agent「本地命令执行」开关（`local_exec`）**：关掉后该 Agent 不再拥有 Bash / Write / Edit / 交互式 Shell，只剩只读检查（Read/LS/Glob/Grep）与平台工具，**想把事情做成只能派任务**。Agent 配置页可开关；内置平台助手 **Auto 默认关闭**。此前 Auto 手里握着 Bash，用户一提渗透需求它就自己写脚本开扫（实测直接写了个 Python 扫描器扫穿 `10.10.0.0/16`，一个任务都没建），「用 spawn_task 派活」只是一句没人执行的提示词。
+- **Auto 提示词重写**：明确「涉及对目标的任何真实动作，第一个动作必须是 spawn_task」，并要求把范围、交付要求、深度限制逐条写进 goal（任务里的规划者只看得到写下来的东西）；只有纯平台操作才不用建任务。
+- **Bash 工具描述注入本机网络能力**：按运行时事实（euid + `CapEff`）说明 masscan / `nmap -sS` / ping / nuclei 能不能用、`nmap` 特权扫描要显式加 `--privileged`。此前 agent 为了搞清「masscan 为什么报 PF_PACKET not supported」「nmap -sS 为什么说需要 root」烧掉十几轮，最后退回自写脚本。
+- **nuclei 模板树走维护出网代理**：`git clone/pull` 现在带上装机代理（回退全局代理、搜索代理）。此前直连 github.com 拉不下来，`scan_with_nuclei` 永远停在「模板树不可用」。模板树同步也从「漏洞情报同步开关」里解耦——关掉情报同步不该让扫描模板烂在原地。
+
+### 修复的问题
+
+- **服务单元的能力位把渗透工具全挡死了**：`MemoryDenyWriteExecute=true` 让 nuclei 启动即 panic（Go 的 sonic 加载器要 `mprotect(PROT_EXEC)`）；缺 `CAP_NET_RAW` 时 masscan 报 `PF_PACKET sockets not supported`、`nmap -sS` 报 `requires root privileges`；`RestrictAddressFamilies` 没有 `AF_PACKET` 连 raw socket 都建不出来。改为授予 `CAP_NET_RAW CAP_NET_ADMIN CAP_NET_BIND_SERVICE` + 放行 `AF_PACKET/AF_NETLINK`，去掉 `MemoryDenyWriteExecute`，并把 `HOME` 指到安装目录（nuclei 的模板/缓存目录要可写）。其余加固（`ProtectSystem=strict` + `ReadWritePaths`、SystemCallErrorNumber=EPERM、`NoNewPrivileges`）保持不变，**仍然不是 root**。
+
+## [0.3.29] - 2026-10-19
+
+### 修复的问题
+
+- **`SystemCallErrorAction` 这个指令根本不存在**：systemd 只会静默忽略（日志一行 `Unknown key ... ignoring`），于是超纲的系统调用走默认动作 `SIGSYS` 直接杀进程，而不是想要的「干净拒绝」。改为 `SystemCallErrorNumber=EPERM`。
+
+## [0.3.28] - 2026-10-19
+
+### 修复的问题
+
+- **`net_context` 的回连说明只按容器写**：二进制部署下提示词仍在要求「用宿主/公网可达地址、端口必须已映射」，与实际相反。改为按 `selfupdate.InDocker()` 分两套说明：宿主部署直接用本机网卡 IP，端口随意绑。
+
+## [0.3.27] - 2026-10-19
+
+### 修复的问题
+
+- **系统配置页被改乱**：回退到原版单列 masonry 布局；移除「回连配置（reverse shell / MSF）」卡片——回连地址交给 Agent 自己按运行环境判断，不再要求人去系统配置里填。
+
 ## [0.3.26] - 2026-10-19
 
 > Agent 能力批次：提示词可随版本下发、worker 自检与记忆、意图去重、收官留痕。
