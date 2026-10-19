@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [0.3.33] - 2026-10-20
+
+### 修复的问题
+
+- **手机打开任务详情页整页报错（电脑正常）**：移动端浏览器 / 国产内置浏览器（微信、QQ 的 X5 内核）与部分旧 Android WebView 缺少几个较新的浏览器 API，调用时抛异常，而项目**没有错误边界**，于是整页只剩一句 `Application error: a client-side exception has occurred`。本次把所有这类调用降级到等价的老 API：
+  - `MediaQueryList.addEventListener/removeEventListener` → 不存在时回退 `addListener/removeListener`（任务详情页的会话/审批表格、侧边栏断点都走它）；
+  - `ResizeObserver` → 不存在时只做一次性测量（会话记录里的自动滚动/居中）；
+  - `Array.prototype.at`、`String.prototype.replaceAll`、`structuredClone` → 换成下标访问 / `split+join` / JSON 深拷贝。
+- **新增全局错误边界**：`app/error.tsx` 与 `app/global-error.tsx`。以后再出客户端异常，页面会直接显示错误名、message 与 stack 前几行（可直接截图反馈），不再是一句无信息的白屏；同时 `console.error` 保留完整错误。
+
 ## [0.3.32] - 2026-10-19
 
 ### 修复的问题

@@ -15,8 +15,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { TablePagination } from "@/components/table-pagination";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { TablePagination } from "@/components/table-pagination";import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -26,6 +25,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
+import { listenMedia } from "@/lib/media-query";
 import type {
   InterceptApprovalFilter,
   InterceptApprovalRow,
@@ -519,13 +519,15 @@ export function ApprovalDetail({
 // expansion cannot create empty columns and leave a gap in the selected row.
 const approvalBreakpoints = ["(min-width: 40rem)", "(min-width: 48rem)", "(min-width: 64rem)", "(min-width: 80rem)"];
 function subscribeColumns(onChange: () => void) {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => undefined;
   const queries = approvalBreakpoints.map((query) => window.matchMedia(query));
-  for (const query of queries) query.addEventListener("change", onChange);
+  const offs = queries.map((query) => listenMedia(query, onChange));
   return () => {
-    for (const query of queries) query.removeEventListener("change", onChange);
+    for (const off of offs) off();
   };
 }
 function visibleColumnCount() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return 3;
   const matches = approvalBreakpoints.map((query) => window.matchMedia(query).matches);
   return 3 + Number(matches[0]) + Number(matches[1]) + 2 * Number(matches[2]) + 2 * Number(matches[3]);
 }

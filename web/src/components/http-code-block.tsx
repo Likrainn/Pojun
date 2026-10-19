@@ -115,7 +115,9 @@ export function HttpCodeBlock({ raw }: { raw: string }) {
   const [wrapLines, setWrapLines] = React.useState(true);
   const [copied, setCopied] = React.useState(false);
   const value = raw || "（空）";
-  const lines = value.replaceAll("\r\n", "\n").split("\n");
+  // replaceAll 要 Chrome 85 / Safari 13.1；国产内置浏览器（X5）可能更旧，
+  // 用 split/join 做等价替换，零兼容风险。
+  const lines = value.split("\r\n").join("\n").split("\n");
   const separator = lines.indexOf("");
   const body = separator >= 0 ? lines.slice(separator + 1).join("\n") : "";
   const bodyFormat = detectBodyFormat(body);

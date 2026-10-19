@@ -35,6 +35,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { api } from "@/lib/api";
+import { cloneJson } from "@/lib/json";
 import type { Agent, Tool } from "@/lib/types";
 
 // Traffic tools are host tools gated by the global 流量捕获 switch: bindable, but
@@ -111,7 +112,7 @@ function coerceDefault(type: string, raw: string): unknown {
 // applyRows writes edited rows back into a deep-copied schema (structure untouched).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function applyRows(schema: Record<string, any>, rows: ParamRow[]): Record<string, any> {
-  const next = structuredClone(schema ?? {});
+  const next = cloneJson(schema ?? {});
   const props = (next.properties ?? {}) as Record<string, Record<string, unknown>>;
   for (const r of rows) {
     if (r.parentKey) {

@@ -431,10 +431,15 @@ function ToolBlock({
     };
     // User bubbles load their full text lazily. Allow their initial layout to
     // settle, but stop anchoring immediately if the user interacts or after 2s.
-    const observer = new ResizeObserver(center);
-    observer.observe(el.parentElement ?? el);
-    observer.observe(viewport);
-    const stop = () => observer.disconnect();
+    // ResizeObserver 在旧 WebView（部分微信 X5 内核）里可能不存在：没有它就只
+    // 做一次居中，别让 ReferenceError 把整页带崩。
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(center);
+      observer.observe(el.parentElement ?? el);
+      observer.observe(viewport);
+    }
+    const stop = () => observer?.disconnect();
     viewport.addEventListener("wheel", stop, { passive: true, once: true });
     viewport.addEventListener("touchstart", stop, { passive: true, once: true });
     viewport.addEventListener("pointerdown", stop, { once: true });
@@ -753,6 +758,8 @@ export function Transcript({
     if (!viewport) return;
     const measure = () => setFocusPadding(viewport.clientHeight / 2);
     measure();
+    // 同 434：旧 WebView 可能没有 ResizeObserver，只量一次即可。
+    if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
     observer.observe(viewport);
     return () => observer.disconnect();
