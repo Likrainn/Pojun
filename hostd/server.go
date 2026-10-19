@@ -1,8 +1,10 @@
 package hostd
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -318,11 +320,109 @@ func (s *Server) runGitHub(ctx context.Context, j *Job, tool hosttools.Tool, pro
 	}
 	j.append(fmt.Sprintf("[*] 已下载 %.1f MB,解压…\n", float64(len(blob))/(1<<20)))
 
-	zr, err := zip.NewReader(bytes.NewReader(blob), int64(len(blob)))
-	if err != nil {
-		return 1, fmt.Errorf("压缩包无法解析: %w", err)
+	// 归档格式各家不一：ProjectDiscovery 系是 .zip，gitleaks/chisel/amass 是
+	// .tar.gz 或 .gz，feroxbuster 是 .tar.gz。按内容嗅探决定走哪条解压路径，
+	// 而不是靠资产名的后缀猜（后缀拼错就直接装不上）。
+	return installFromArchive(j, blob, tool)
+}
+
+// installFromArchive 从归档里取出目标二进制装到 /usr/local/bin。
+// 支持 zip / tar(.gz) / 单文件 gz 三种形态。
+func installFromArchive(j *Job, blob []byte, tool hosttools.Tool) (int, error) {
+	want := tool.BinInZip
+	if want == "" {
+		want = tool.Bin
 	}
-	return installFromZip(j, zr, tool)
+	// zip: PK\x03\x04
+	if len(blob) > 4 && blob[0] == 'P' && blob[1] == 'K' {
+		zr, err := zip.NewReader(bytes.NewReader(blob), int64(len(blob)))
+		if err != nil {
+			return 1, fmt.Errorf("压缩包无法解析: %w", err)
+		}
+		return installFromZip(j, zr, tool)
+	}
+	// gzip: \x1f\x8b
+	if len(blob) > 2 && blob[0] == 0x1f && blob[1] == 0x8b {
+		gr, err := gzip.NewReader(bytes.NewReader(blob))
+		if err != nil {
+			return 1, fmt.Errorf("gzip 无法解析: %w", err)
+		}
+		defer gr.Close()
+		// 单文件 gz（内部就是那个二进制）或 tar.gz
+		raw, err := io.ReadAll(io.LimitReader(gr, 256<<20))
+		if err != nil {
+			return 1, err
+		}
+		// 可能是 tar.gz（多个条目），也可能是单文件 gz（内部就是那个二进制）。
+		// 用「能否在 tar 流里找到目标文件」区分：找到就装 tar 里的那个，
+		// 找不到就把解压结果整体当成那个二进制。
+		if data, ok := findInTar(raw, tool); ok {
+			return installBinary(j, tool, data)
+		}
+		return installBinary(j, tool, raw)
+	}
+	// 纯 tar
+	if data, ok := findInTar(blob, tool); ok {
+		return installBinary(j, tool, data)
+	}
+	return 1, fmt.Errorf("无法识别的归档格式")
+}
+
+// findInTar 在 tar（tar.gz 解压后）里找目标二进制的内容。
+// 找不到返回 ok=false——调用方据此回退到「整个文件就是那个二进制」。
+func findInTar(blob []byte, tool hosttools.Tool) ([]byte, bool) {
+	want := tool.BinInZip
+	if want == "" {
+		want = tool.Bin
+	}
+	tr := tar.NewReader(bytes.NewReader(blob))
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			return nil, false
+		}
+		if hdr.Typeflag != tar.TypeReg || path.Base(hdr.Name) != want {
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(tr, 256<<20))
+		if err != nil {
+			return nil, false
+		}
+		return data, true
+	}
+}
+
+// installBinary 把二进制内容原子地装到 /usr/local/bin。
+func installBinary(j *Job, tool hosttools.Tool, data []byte) (int, error) {
+	want := tool.BinInZip
+	if want == "" {
+		want = tool.Bin
+	}
+	dst := filepath.Join(binDir, tool.Bin)
+	tmp := dst + ".tmp"
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return 1, fmt.Errorf("写入 %s 失败: %w", tmp, err)
+	}
+	if _, err := out.Write(data); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return 1, err
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(tmp)
+		return 1, err
+	}
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		os.Remove(tmp)
+		return 1, err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		os.Remove(tmp)
+		return 1, err
+	}
+	j.append(fmt.Sprintf("[ok] %s → %s\n", want, dst))
+	return 0, nil
 }
 
 func installFromZip(j *Job, zr *zip.Reader, tool hosttools.Tool) (int, error) {

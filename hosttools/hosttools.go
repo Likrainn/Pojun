@@ -109,6 +109,42 @@ var catalog = []Tool{
 	{Name: "seclists", Purpose: "通用字典集(目录/参数/用户名爆破语料)", Kind: KindManual,
 		Install: "git clone --depth 1 https://github.com/danielmiessler/SecLists.git /opt/SecLists"},
 
+	// ── 资产命名与上面不同的项目 ──
+	// 各项目的 release 资产名规范很不统一（架构在前/后、版本带不带 v、
+	// 扩展名 .zip/.tar.gz/.gz），所以模板必须逐个按实测资产名写。
+	// 这些资产名都是 2026-10 实测 GitHub API 得到的，不是猜的。
+
+	// gitleaks：资产名用 x64（不是 x86_64），且是 .tar.gz。
+	{Name: "gitleaks", Purpose: "代码/配置里的密钥扫描(检测硬编码凭据)", Kind: KindGitHub,
+		Repo: "gitleaks/gitleaks", AssetTmpl: "gitleaks_{ver}_linux_{arch4}.tar.gz"},
+	// chisel：内网穿透/隧道工具（SOCKS 隧道、反向隧道都靠它）。
+	{Name: "chisel", Purpose: "内网穿透与隧道(TCP/UDP/SOCKS 隧道)", Kind: KindGitHub,
+		Repo: "jpillora/chisel", AssetTmpl: "chisel_{ver}_linux_{arch}.gz"},
+	// amass：子域名枚举（OWASP）。资产名里**没有版本号**，所以模板不带 {ver}。
+	{Name: "amass", Purpose: "子域名枚举(OWASP,主动+被动解析)", Kind: KindGitHub,
+		Repo: "OWASP/Amass", AssetTmpl: "amass_linux_{arch}.tar.gz"},
+	// dalfox：XSS 扫描与利用。资产名带 v 前缀、架构用 x86_64/aarch64。
+	{Name: "dalfox", Purpose: "XSS 扫描与利用(反射型/存储型/DOM)", Kind: KindGitHub,
+		Repo: "hahwul/dalfox", AssetTmpl: "dalfox-{verv}-linux-{arch2}.tar.gz"},
+	// feroxbuster：目录/文件爆破（Rust 版 gobuster 替代）。
+	// 注意它的资产名**架构在前**，且 amd64 用 x86_64、arm64 用 aarch64。
+	{Name: "feroxbuster", Purpose: "目录/文件爆破(Rust 版,支持多线程与递归)", Kind: KindGitHub,
+		Repo: "epi052/feroxbuster", AssetTmpl: "{arch2}-linux-feroxbuster.tar.gz"},
+	// notify：外带/回连数据接收（DNS/HTTP/TLS 多种通道）。
+	{Name: "notify", Purpose: "外带数据接收(DNS/HTTP/TLS 多通道)", Kind: KindGitHub,
+		Repo: "projectdiscovery/notify", AssetTmpl: "notify_{ver}_linux_{arch}.zip"},
+	// interactsh-client：OOB 交互式探测的客户端（配合 nuclei 的 oob 模板）。
+	{Name: "interactsh-client", Bin: "interactsh-client", Purpose: "OOB 回连客户端(配合 nuclei 的 oob 模板)", Kind: KindGitHub,
+		Repo: "projectdiscovery/interactsh", AssetTmpl: "interactsh-client_{ver}_linux_{arch}.zip"},
+	// netexec：SMB/Windows 协议横移（CrackMapExec 的现代替代）。
+	// 只在 PyPI 发版，没有 GitHub Release，所以走 pip 配方。
+	{Name: "netexec", Bin: "netexec", Purpose: "SMB/WinRM 横移与凭据喷洒(现代版 CrackMapExec)", Kind: KindPip,
+		Pip: "netexec"},
+	// semgrep：SAST 规则扫描（对下载到的源码做规则匹配）。
+	{Name: "semgrep", Purpose: "源码静态规则扫描(SAST)", Kind: KindPip, Pip: "semgrep"},
+	// pwntools：漏洞利用脚本框架（agent 写 exploit 时用）。
+	{Name: "pwntools", Bin: "pwntools", Purpose: "漏洞利用脚本框架(写 exploit 用)", Kind: KindPip, Pip: "pwntools"},
+
 	{Name: "msfconsole", Purpose: "Metasploit 框架(exploit/encoder)", Kind: KindManual,
 		Install: "官方安装包(需交互): https://docs.rapid7.com/metasploit/installing-the-metasploit-framework/"},
 }
@@ -225,6 +261,47 @@ func Arch() string {
 	switch runtime.GOARCH {
 	case "amd64", "arm64":
 		return runtime.GOARCH
+	default:
+		return runtime.GOARCH
+	}
+}
+
+// ArchAlt 返回另一种架构命名：amd64→x86_64、arm64→aarch64。
+//
+// GitHub 上各项目的资产命名不统一：ProjectDiscovery 系用 amd64/arm64，
+// gitleaks/amass 用 x86_64/aarch64，chisel 的部分资产用 x86/arm。
+// 模板里用 {arch}/{arch2}/{arch3} 分别对应这三套。
+func ArchAlt() string {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "x86_64"
+	case "arm64":
+		return "aarch64"
+	default:
+		return runtime.GOARCH
+	}
+}
+
+// ArchShort 返回更短的架构命名：amd64→x86、arm64→arm。
+func ArchShort() string {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "x86"
+	case "arm64":
+		return "arm"
+	default:
+		return runtime.GOARCH
+	}
+}
+
+// ArchX64 返回 gitleaks 用的命名：amd64→x64、arm64→arm64。
+//
+// 这是第四套命名——实测 gitleaks 的资产是 gitleaks_8.30.1_linux_x64.tar.gz
+// 与 ..._linux_arm64.tar.gz，即 amd64 叫 x64、arm64 叫 arm64。
+func ArchX64() string {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "x64"
 	default:
 		return runtime.GOARCH
 	}

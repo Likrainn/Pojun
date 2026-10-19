@@ -128,10 +128,25 @@ func pipArgv(tool hosttools.Tool, proxy string) []string {
 }
 
 // GitHubAssetURL 由资产模板拼出下载地址。tag 形如 v3.4.10,资产名里不带 v。
+//
+// 模板占位符：
+//   {ver}   版本号（不带 v），如 3.4.10
+//   {verv}  版本号（带 v），如 v3.4.10
+//   {arch}  架构，amd64 / arm64（Go 的 GOARCH 写法）
+//   {arch2} 架构，x86_64 / aarch64（部分项目用这套，如 gitleaks/amass）
+//   {arch3} 架构，x86 / arm（又一套，如 chisel 的部分资产）
+//   {arch4}  架构，x64 / arm64（gitleaks 用这套）
+//
+// 各项目的资产命名差异很大（架构在前/后、版本带不带 v、扩展名 .zip/.tar.gz/.gz），
+// 所以模板必须能覆盖这些差异，否则「一键安装」只能对着一半项目有效。
 func GitHubAssetURL(tool hosttools.Tool, tag string) string {
 	ver := strings.TrimPrefix(tag, "v")
 	asset := strings.ReplaceAll(tool.AssetTmpl, "{ver}", ver)
+	asset = strings.ReplaceAll(asset, "{verv}", tag)
 	asset = strings.ReplaceAll(asset, "{arch}", hosttools.Arch())
+	asset = strings.ReplaceAll(asset, "{arch2}", hosttools.ArchAlt())
+	asset = strings.ReplaceAll(asset, "{arch3}", hosttools.ArchShort())
+	asset = strings.ReplaceAll(asset, "{arch4}", hosttools.ArchX64())
 	return fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", tool.Repo, tag, asset)
 }
 

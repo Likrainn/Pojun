@@ -796,41 +796,92 @@ install_tools(){
 }
 
 # ── GitHub Release 单文件工具 ───────────────────
-# nuclei / httpx / subfinder / naabu / dnsx / katana / tlsx 都是
-# ProjectDiscovery 系的同一套发布格式：{tool}_{ver}_linux_{arch}.zip，
-# 所以一个循环搞定，新增工具只要往列表里加一行。
+# 表驱动：repo|资产名模板|二进制名。模板占位符 {ver}(不带v) {verv}(带v)
+# {arch}(amd64/arm64) {arch2}(x86_64/aarch64) {arch3}(x86/arm) {arch4}(x64/arm64)。
+#
+# 各项目的资产命名差异很大（架构在前/后、版本带不带 v、扩展名 .zip/.tar.gz/.gz），
+# 所以模板必须逐个按实测资产名写，不能指望一个通式。
 #
 # 不用 `go install`：宿主未必有 Go 工具链，而且 go install 每次都要下模块。
 # 不用 apt 源：这些工具的 apt 包要么没有要么版本极旧。
 install_github_tools(){
   local GOBIN_DIR="/usr/local/bin"
-  local arch="amd64"
-  [ "$ARCH" = "aarch64" ] && arch="arm64"
+  local arch="amd64" arch2="x86_64" arch3="x86" arch4="x64"
+  if [ "$ARCH" = "aarch64" ]; then
+    arch="arm64"; arch2="aarch64"; arch3="arm"; arch4="arm64"
+  fi
 
-  local tools="nuclei httpx subfinder naabu dnsx katana tlsx"
-  for n in $tools; do
-    if command -v "$n" >/dev/null 2>&1; then
-      ok "  $n 已存在"
+  # repo|资产模板|二进制名
+  local specs="
+projectdiscovery/nuclei|nuclei_{ver}_linux_{arch}.zip|nuclei
+projectdiscovery/httpx|httpx_{ver}_linux_{arch}.zip|httpx
+projectdiscovery/subfinder|subfinder_{ver}_linux_{arch}.zip|subfinder
+projectdiscovery/naabu|naabu_{ver}_linux_{arch}.zip|naabu
+projectdiscovery/dnsx|dnsx_{ver}_linux_{arch}.zip|dnsx
+projectdiscovery/katana|katana_{ver}_linux_{arch}.zip|katana
+projectdiscovery/tlsx|tlsx_{ver}_linux_{arch}.zip|tlsx
+projectdiscovery/notify|notify_{ver}_linux_{arch}.zip|notify
+projectdiscovery/interactsh|interactsh-client_{ver}_linux_{arch}.zip|interactsh-client
+gitleaks/gitleaks|gitleaks_{ver}_linux_{arch4}.tar.gz|gitleaks
+jpillora/chisel|chisel_{ver}_linux_{arch}.gz|chisel
+OWASP/Amass|amass_linux_{arch}.tar.gz|amass
+hahwul/dalfox|dalfox-{verv}-linux-{arch2}.tar.gz|dalfox
+epi052/feroxbuster|{arch2}-linux-feroxbuster.tar.gz|feroxbuster
+"
+  local spec repo tmpl bin tag ver url asset file tmpd
+  for spec in $specs; do
+    repo="$(printf '%s' "$spec" | cut -d'|' -f1)"
+    tmpl="$(printf '%s' "$spec" | cut -d'|' -f2)"
+    bin="$(printf '%s' "$spec" | cut -d'|' -f3)"
+    if command -v "$bin" >/dev/null 2>&1; then
+      ok "  $bin 已存在"
       continue
     fi
-    local tag ver url zip tmpd
-    tag="$("${CURL[@]}" "https://api.github.com/repos/projectdiscovery/$n/releases/latest" \
+    tag="$("${CURL[@]}" "https://api.github.com/repos/$repo/releases/latest" \
       | grep -oE '"tag_name": *"[^"]+"' | head -1 | cut -d'"' -f4)" || tag=""
     if [ -z "$tag" ]; then
-      warn "  $n 无法解析最新版本（GitHub API 受限，可加 --install-proxy）"
+      warn "  $bin 无法解析最新版本（GitHub API 受限，可加 --install-proxy）"
       continue
     fi
     ver="${tag#v}"
-    url="https://github.com/projectdiscovery/$n/releases/download/${tag}/${n}_${ver}_linux_${arch}.zip"
-    zip="$TMP/${n}.zip"
-    tmpd="$TMP/${n}"
-    if "${CURL[@]}" "$url" -o "$zip" && unzip -oq "$zip" -d "$tmpd" && [ -x "$tmpd/$n" ]; then
-      mv "$tmpd/$n" "$GOBIN_DIR/$n" && chmod +x "$GOBIN_DIR/$n"
-      ok "  $n $tag → $GOBIN_DIR/$n"
-    else
-      warn "  $n 下载失败（可加 --install-proxy 走代理）"
+    asset="$tmpl"
+    asset="${asset//\{ver\}/$ver}"
+    asset="${asset//\{verv\}/$tag}"
+    asset="${asset//\{arch\}/$arch}"
+    asset="${asset//\{arch2\}/$arch2}"
+    asset="${asset//\{arch3\}/$arch3}"
+    asset="${asset//\{arch4\}/$arch4}"
+    url="https://github.com/$repo/releases/download/${tag}/${asset}"
+    file="$TMP/$(basename "$asset")"
+    tmpd="$TMP/ghtool"
+    rm -rf "$tmpd"; mkdir -p "$tmpd"
+    if ! "${CURL[@]}" "$url" -o "$file"; then
+      warn "  $bin 下载失败（$url，可加 --install-proxy 走代理）"
+      rm -rf "$file" "$tmpd"
+      continue
     fi
-    rm -rf "$zip" "$tmpd"
+    # 三种归档形态：.zip / .tar.gz / 单文件 .gz
+    local extracted=""
+    case "$asset" in
+      *.zip)  unzip -oq "$file" -d "$tmpd" 2>/dev/null || true ;;
+      *.tar.gz|*.tgz) tar -xzf "$file" -C "$tmpd" 2>/dev/null || true ;;
+      *.gz)   gzip -dc "$file" > "$tmpd/$bin" 2>/dev/null || true ;;
+    esac
+    if [ -f "$tmpd/$bin" ]; then
+      extracted="$tmpd/$bin"
+    else
+      # 归档里可能带一层目录，用 find 兜底
+      local found
+      found="$(find "$tmpd" -type f -name "$bin" 2>/dev/null | head -1)"
+      [ -n "$found" ] && extracted="$found"
+    fi
+    if [ -n "$extracted" ] && [ -s "$extracted" ]; then
+      mv "$extracted" "$GOBIN_DIR/$bin" && chmod +x "$GOBIN_DIR/$bin"
+      ok "  $bin $tag → $GOBIN_DIR/$bin"
+    else
+      warn "  $bin 解压后找不到二进制（资产名可能变了：$url）"
+    fi
+    rm -rf "$file" "$tmpd"
   done
 }
 
