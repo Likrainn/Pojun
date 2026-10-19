@@ -5,18 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/chu0119/artex/selfupdate"
 )
 
-// versionTag 只接受纯净的三段式版本号。助手会按它去官方发布页取包，
-// 收窄形态可以挡掉路径穿越、URL 注入之类的花活（虽然最终仍由 SHA256SUMS 兜底）。
-var versionTag = regexp.MustCompile(`^v?\d+\.\d+\.\d+$`)
-
-// ValidVersionTag 报告 tag 是否是允许的版本号形态。
-func ValidVersionTag(tag string) bool { return versionTag.MatchString(strings.TrimSpace(tag)) }
+// ValidVersionTag 报告 tag 是否是允许的版本号形态。校验实现放在 selfupdate，
+// 与「按版本号取 Release」的逻辑待在一起，避免两处规则漂移。
+func ValidVersionTag(tag string) bool { return selfupdate.ValidVersionTag(tag) }
 
 // UpgradeSelf 把助手自己换装到指定 Release 版本。
 //

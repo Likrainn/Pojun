@@ -96,12 +96,31 @@ func FetchLatest(ctx context.Context, c *http.Client) (*Release, error) {
 }
 
 // FetchByTag 查询指定 tag 的 Release（伴随二进制自我换装时按主程序版本对齐用）。
+//
+// 版本号有两种写法：Release tag 带 v 前缀（v0.3.23），而二进制里注入的版本号不带
+// （build.sh 会 `${ARTEX_BUILD_VERSION#v}` 剥掉）。两种都试，避免因写法差异
+// 报"版本不存在"——实测 hostd 拿 0.3.23 去查就撞上了这个。
 func FetchByTag(ctx context.Context, c *http.Client, tag string) (*Release, error) {
 	tag = strings.TrimSpace(tag)
 	if tag == "" {
 		return nil, fmt.Errorf("缺少版本号")
 	}
-	return fetchRelease(ctx, c, tagURL(tag), tag)
+	rel, err := fetchRelease(ctx, c, tagURL(tag), tag)
+	if err == nil {
+		return rel, nil
+	}
+	if rel2, err2 := fetchRelease(ctx, c, tagURL(alternateTag(tag)), tag); err2 == nil {
+		return rel2, nil
+	}
+	return nil, err
+}
+
+// alternateTag 返回同一个版本的另一种写法（v0.3.23 ↔ 0.3.23）。
+func alternateTag(tag string) string {
+	if strings.HasPrefix(tag, "v") {
+		return strings.TrimPrefix(tag, "v")
+	}
+	return "v" + tag
 }
 
 func fetchRelease(ctx context.Context, c *http.Client, apiURL, what string) (*Release, error) {
