@@ -774,7 +774,11 @@ CREATE TABLE IF NOT EXISTS agents (
     llm_profile_id    BIGINT REFERENCES llm_profiles(id) ON DELETE SET NULL,
     current_prompt_id BIGINT,
     max_turns         INTEGER NOT NULL DEFAULT 0,
-    run_seconds       INTEGER NOT NULL DEFAULT 1200,
+    -- run_seconds 是**单条意图一次 run** 的墙钟上限。0 = 不限。
+    -- 3600(60 分钟)的由来:实测 1200(20 分钟)对一条渗透意图太短——挖一个目标的
+    -- 多个漏洞经常做不完,run 到点即判 exhausted,而 exhausted 是**终态**、不会
+    -- 被自动重新领取,这条线索就断了(已发现的事实/资产/漏洞仍会写回)。
+    run_seconds       INTEGER NOT NULL DEFAULT 3600,
     web_search        BOOLEAN NOT NULL DEFAULT false,
     interactive_shell BOOLEAN NOT NULL DEFAULT false,
     local_exec        BOOLEAN NOT NULL DEFAULT true,
@@ -799,8 +803,10 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS trigger_max_parallel INTEGER NOT NUL
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS local_exec BOOLEAN NOT NULL DEFAULT true;
 -- per-agent LLM 绑定(agent 级默认模型):列自初版即在上方 CREATE 中,此 ALTER 仅为极旧库兜底(幂等)。
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS llm_profile_id BIGINT REFERENCES llm_profiles(id) ON DELETE SET NULL;
--- run_seconds 单次 run 墙钟默认 600→1200:只改列默认(影响将来新插入的行),不动旧库存量行。
-ALTER TABLE agents ALTER COLUMN run_seconds SET DEFAULT 1200;
+-- run_seconds 单次 run 墙钟默认 600→1200→3600:
+-- 1200(20 分钟)对一条渗透意图太短——实测大量意图以 exhausted 收场,而 exhausted
+-- 是终态、不会被自动重新领取。只改列默认(影响将来新插入的行),不动旧库存量行。
+ALTER TABLE agents ALTER COLUMN run_seconds SET DEFAULT 3600;
 CREATE INDEX IF NOT EXISTS idx_agents_llm_profile ON agents(llm_profile_id) WHERE llm_profile_id IS NOT NULL;
 DROP TRIGGER IF EXISTS trg_agents_upd ON agents;
 CREATE TRIGGER trg_agents_upd BEFORE UPDATE ON agents

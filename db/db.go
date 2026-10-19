@@ -178,7 +178,7 @@ type builtinAgent struct {
 	key, name, role, desc string
 	vars                  []promptVar
 	interactiveShell      bool // 建行时的默认交互式 shell 开关；ON CONFLICT 不覆盖用户后续手动开关
-	runSeconds            *int // 建行时的单次 run 墙钟上限(秒)；nil=用种子默认(1200)，0=不限时
+	runSeconds            *int // 建行时的单次 run 墙钟上限(秒)；nil=用种子默认(3600)，0=不限时
 }
 
 type promptVar struct{ name, desc, example, source string }
@@ -220,7 +220,7 @@ func (d *DB) seedBuiltins() error {
 		var agentID int64
 		err := d.QueryRow(`
 INSERT INTO agents(key, name, description, role, builtin, enabled, interactive_shell, run_seconds)
-VALUES ($1, $2, NULLIF($3,''), $4, true, true, $5, COALESCE($6, 1200))
+VALUES ($1, $2, NULLIF($3,''), $4, true, true, $5, COALESCE($6, 3600))
 ON CONFLICT (key) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description
 RETURNING id`, a.key, a.name, a.desc, a.role, a.interactiveShell, a.runSeconds).Scan(&agentID)
 		if err != nil {
@@ -301,6 +301,12 @@ ON CONFLICT (name) DO NOTHING`,
 	}
 	if err := d.migrateJudgeTimeoutSeconds(); err != nil {
 		return fmt.Errorf("migrate judge timeout: %w", err)
+	}
+	if err := d.migrateAgentRunSeconds(); err != nil {
+		return fmt.Errorf("migrate agent run seconds: %w", err)
+	}
+	if err := d.migrateContextWindowK(); err != nil {
+		return fmt.Errorf("migrate context window k: %w", err)
 	}
 	if err := d.seedDefaultAssetInterceptRules(); err != nil {
 		return fmt.Errorf("seed asset intercept rules: %w", err)
@@ -775,6 +781,45 @@ WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
 		"禁止清空系统关键目录下的内容",
 	); err != nil {
 		return fmt.Errorf("rule %q: %w", clearName, err)
+	}
+	return d.SetSetting(flag, "done")
+}
+
+// migrateContextWindowK 把 LLM 配置的上下文窗口从「未设置(按 200K 算)」改成
+// 显式的 1000K(1M)。
+//
+// 起因：本平台常用的 minimax-m3.1-flash-free 原生上下文是 1M(模型自报
+// 1000000)，而 profile 的 context_window_k 留空时代码按 200K(Claude 默认)
+// 算压缩阈值。于是压缩在远未到上限时就触发——压缩本身要额外调一次 LLM
+// (还要 32768 预算)，白白吃掉预算、拖慢流程。
+//
+// 只改仍为 0(未设置)的行:用户自己填过窗口大小的实例保持不变。
+func (d *DB) migrateContextWindowK() error {
+	const flag = "llm_profiles_context_window_1000k_v1"
+	if v, _, _ := d.GetSetting(flag); v == "done" {
+		return nil
+	}
+	if _, err := d.Exec(`UPDATE llm_profiles SET context_window_k=1000 WHERE COALESCE(context_window_k,0)=0`); err != nil {
+		return fmt.Errorf("context window k: %w", err)
+	}
+	return d.SetSetting(flag, "done")
+}
+
+// migrateAgentRunSeconds 把各 agent 的单次 run 墙钟预算从 1200s 提到 3600s。
+//
+// 起因：1200s(20 分钟)对一条渗透意图太短——挖一个目标的多个漏洞经常做不完。
+// run 到点即判 exhausted，而 exhausted 是**终态**、不会被自动重新领取，
+// 于是这条线索就断了（已发现的事实/资产/漏洞仍会写回，但没做完的部分没了）。
+// 实测生产环境里 89 个意图 exhausted vs 8 个 done。
+//
+// 只改仍是默认值 1200 的行：用户自己调过的实例保持不变。
+func (d *DB) migrateAgentRunSeconds() error {
+	const flag = "agents_run_seconds_3600_v1"
+	if v, _, _ := d.GetSetting(flag); v == "done" {
+		return nil
+	}
+	if _, err := d.Exec(`UPDATE agents SET run_seconds=3600 WHERE run_seconds=1200`); err != nil {
+		return fmt.Errorf("agent run seconds: %w", err)
 	}
 	return d.SetSetting(flag, "done")
 }

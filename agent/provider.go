@@ -103,7 +103,15 @@ type RetryConfig struct {
 // threshold math (window − summary reserve − buffer) would go non-positive and
 // compaction would fire every turn; above the cap it would never fire.
 const (
-	defaultWindowK = 200  // unset → assume a 200K window (Claude default)
+	// defaultWindowK = 1000（1M）：本平台常用的模型是 minimax-m3.1-flash-free，
+	// 其原生上下文是 1M（模型自报 1000000）。之前按 200K（Claude 默认）算，
+	// 于是压缩在远未到上限时就触发——而压缩本身是个要额外调 LLM 的重活，
+	// 白白吃掉预算、拖慢流程。设成 1M 后阈值从 ~174K 提到 ~930K。
+	//
+	// 上限 maxWindowK 已经是 1000（用户明确要求用满百万上下文），
+	// 阈值数学在 1M 下是安全的：effectiveWindow = 1M − 20K = 980K，
+	// buffer 50K，自动压缩阈值 930K。
+	defaultWindowK = 1000
 	minWindowK     = 32   // floor so effectiveWindow stays comfortably positive
 	maxWindowK     = 1000 // cap at 1M tokens (user request)
 )
