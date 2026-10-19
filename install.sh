@@ -918,8 +918,20 @@ install_pip_tools(){
   fi
   local proxy_args=()
   [ -n "$INSTALL_PROXY" ] && proxy_args=(--proxy "$INSTALL_PROXY")
-  local pkg
-  for pkg in wafw00f; do
+  # 包名|可执行文件名(空=该包不提供命令行)。已存在就跳过——
+  # pipx 对已装的包会报错退出，不该当成"安装失败"。
+  local specs="wafw00f|wafw00f
+netexec|netexec
+semgrep|semgrep
+pwntools|pwntools"
+  local spec pkg bin
+  for spec in $specs; do
+    pkg="$(printf '%s' "$spec" | cut -d'|' -f1)"
+    bin="$(printf '%s' "$spec" | cut -d'|' -f2)"
+    if [ -n "$bin" ] && command -v "$bin" >/dev/null 2>&1; then
+      ok "  $bin 已存在"
+      continue
+    fi
     if "${PIPX[@]}" "${proxy_args[@]}" "$pkg" >/dev/null 2>&1; then
       ok "  $pkg ✓"
     else
