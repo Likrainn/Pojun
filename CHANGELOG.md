@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.3.45] - 2026-10-20
+
+### 修复的问题
+
+- **install.sh 写运行期装机代理一直失败**：两处 bash 写法叠加所致。① `eval "$(python3 ... <<'HEREDOC' ... HEREDOC\n)"`——heredoc 套在命令替换里，eval 静默失败、`db_pass` 变空串，psql 连不上，而外层只看到一句「写入失败」；② psql 的 `:'proxy'` 变量替换在 `-c` 参数里**不生效**（那是 `-f` 读文件或交互式会话才有的路径），报 `syntax error at or near :`。现在整个写入过程交给 Python：读 config.json 取连接参数、拼好并转义 SQL、调用 psql，中途不经 bash 变量传递。
+
 ## [0.3.44] - 2026-10-20
 
 > 按实测数据继续调优压缩参数。
