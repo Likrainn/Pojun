@@ -90,11 +90,16 @@ jobs:
       - name: Generate checksums
         working-directory: dist
         run: sha256sum *.zip > SHA256SUMS
+      # install.sh 也作为 Release 资产发布：README 推荐的
+      # `curl -fsSL .../releases/latest/download/install.sh | sudo bash` 就取这里。
+      - name: Stage install.sh
+        run: cp install.sh dist/install.sh
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*.zip
             dist/SHA256SUMS
+            dist/install.sh
           generate_release_notes: true
 
   # ④ 多架构镜像（复用 binaries 编好的 Linux 二进制，镜像里只装工具 + 放二进制；
