@@ -39,26 +39,101 @@ type Compactor struct {
 	n, m     int           // minor / major thresholds (§7 N=20, M=8)
 	cooldown time.Duration // min gap between compactions per task (§7 60s)
 	maxDur   time.Duration // hard cap on one background compaction
+	// outTokens 是压缩这一次调用的输出预算(思考+正文共用)。0 = 用 defaultCompactionTokens。
+	//
+	// 为什么不能用小值:adaptive thinking 模型(MiniMax-M3.1 等强制思考的)会**按
+	// max_tokens 预算持续思考**,预算越小它思考得越久、正文越轮不到——实测同一份
+	// 26 节点的输入,预算 1500 时思考烧光 1500、正文 0 字;预算 2048 时正文仍是 0;
+	// 预算 32768 时思考约 2000 token 就收尾并正常吐出正文。也就是说预算给小了
+	// 不是"输出被截断",而是**模型根本没走到正文**。
+	outTokens int
+	// maxBlockMembers 是单次压缩请求的成员节点数上限。0 = 不限制。
+	//
+	// 为什么要限制:实测**能否收尾取决于单次输入规模,而非预算大小**——3 个节点
+	// (743 prompt token)在 32768 预算下正常收尾(约 2000 token 思考),26 个节点
+	// (3084 prompt token)即使给 32768 也会把预算烧光、跑 211 秒不出正文。
+	// 所以超大连通块必须切分,让每次请求的规模落在模型能处理住的范围内。
+	maxBlockMembers int
 
 	mu      sync.Mutex
 	running map[int64]bool
 	lastRun map[int64]time.Time
 }
 
+// defaultCompactionTokens 是压缩调用的默认输出预算。
+//
+// 32768 的由来:实测 adaptive thinking 模型在长输入总结任务上的思考量在
+// 2000~8000 token 量级(且随 max_tokens 预算线性膨胀),1500/2048/4096/8192
+// 全部实测为「思考烧光、正文为空」。32768 留足了思考+正文的冗余。
+const defaultCompactionTokens = 32768
+
+// defaultCompactionDuration 是单次后台压缩的墙钟上限。
+//
+// 压缩是**后台协程**,与 worker 领取意图并行(日志里可见压缩与「领取意图」交替),
+// 等久一点不影响主流程进度,只会让冷节点压缩晚一点落地。5 分钟对长输入的
+// adaptive thinking 模型明显不够(实测 26 节点要跑 10 分钟以上),故放宽。
+const defaultCompactionDuration = 20 * time.Minute
+
+// defaultCompactionMaxMembers 是单次压缩请求的成员节点数上限。
+//
+// 12 的由来:实测 3 个节点(743 prompt token)在 32768 预算下正常收尾;
+// 26 个节点(3084 prompt token)把 32768 预算烧光也不出正文。12 落在两者之间,
+// 既能正常收尾,又不会把一次压缩拆得太碎(拆太碎会让摘要失去「综合」的意义)。
+const defaultCompactionMaxMembers = 12
+
 // NewCompactor builds a compactor. prov/model are used for the §4 body LLM call
 // (same model the agent runs on, per §4). A nil Compactor is a safe no-op.
 func NewCompactor(prov llm.Provider, model string) *Compactor {
 	return &Compactor{
-		prov:     prov,
-		model:    model,
-		params:   defaultColdParams(),
-		n:        20,
-		m:        8,
-		cooldown: 60 * time.Second,
-		maxDur:   5 * time.Minute,
-		running:  map[int64]bool{},
-		lastRun:  map[int64]time.Time{},
+		prov:      prov,
+		model:     model,
+		params:    defaultColdParams(),
+		n:         20,
+		m:         8,
+		cooldown:  60 * time.Second,
+		maxDur:    defaultCompactionDuration,
+		outTokens: defaultCompactionTokens,
+		// maxBlockMembers 默认切分：超大连通块会让思考型模型陷进超长思考。
+		maxBlockMembers: defaultCompactionMaxMembers,
+		running:         map[int64]bool{},
+		lastRun:         map[int64]time.Time{},
 	}
+}
+
+// SetOutputTokens 设置压缩调用的输出预算。0 = 恢复默认。
+// 让部署方能按「思考型模型需要多大预算」来调,而不是改代码里的常量。
+func (c *Compactor) SetOutputTokens(n int) {
+	if c == nil {
+		return
+	}
+	if n <= 0 {
+		n = defaultCompactionTokens
+	}
+	c.outTokens = n
+}
+
+// SetMaxDuration 设置单次后台压缩的墙钟上限。<=0 = 恢复默认。
+func (c *Compactor) SetMaxDuration(d time.Duration) {
+	if c == nil {
+		return
+	}
+	if d <= 0 {
+		d = defaultCompactionDuration
+	}
+	c.maxDur = d
+}
+
+// SetMaxBlockMembers 设置单次压缩请求的成员节点数上限。<=0 = 恢复默认。
+// 刻意不提供"不切分"的选项:实测超大连通块必然让思考型模型陷进超长思考,
+// 切分是保证压缩能落地的必要条件,不是一个可选的优化。
+func (c *Compactor) SetMaxBlockMembers(n int) {
+	if c == nil {
+		return
+	}
+	if n <= 0 {
+		n = defaultCompactionMaxMembers
+	}
+	c.maxBlockMembers = n
 }
 
 // OnPlannerRound is the single entry the planner calls each wake-up. It bumps the
@@ -254,11 +329,14 @@ func (c *Compactor) major(ctx context.Context, ts *db.ExplorationStore) {
 // changed, so any member that has since gone hot (revived) is dropped from the
 // covers set. If the block dissolves below K it is skipped.
 func (c *Compactor) foldBlock(ctx context.Context, ts *db.ExplorationStore, g *coldGraph, b block, nodeByID map[int64]*db.Node, cvers map[int64]int, generation int) {
-	body, err := c.compress(ctx, g, b, nodeByID)
+	// 超大块会被切成若干子块分别压缩(见 compressChunked 的注释:思考型模型能否
+	// 收尾取决于单次输入规模)。多段 body 拼成一段,语义与原来的一段等价。
+	bodies, err := c.compressChunked(ctx, g, b, nodeByID)
 	if err != nil {
 		log.Printf("[compaction] compress exp=%d block=%v: %v", ts.ID(), b.Members, err)
 		return
 	}
+	body := strings.Join(bodies, "\n\n")
 	// Re-read fresh state and drop any member that revived while we compressed.
 	fresh, _, err := loadColdGraph(ts)
 	if err != nil {
@@ -514,20 +592,80 @@ func buildCompressionInput(g *coldGraph, b block, nodeByID map[int64]*db.Node) s
 // but MiniMax-M3.1 等**强制 adaptive thinking** 的模型会拒绝显式的
 // thinking.type=disabled，所以这里不发该字段）。
 func (c *Compactor) compress(ctx context.Context, g *coldGraph, b block, nodeByID map[int64]*db.Node) (string, error) {
-	req := llm.CompletionRequest{
-		System:    []string{compressionSystemPrompt},
-		Messages:  []llm.Message{llm.UserText(buildCompressionInput(g, b, nodeByID))},
-		MaxTokens: 1500,
+	tokens := c.outTokens
+	if tokens <= 0 {
+		tokens = defaultCompactionTokens
 	}
-	msg, _, _, err := c.prov.Complete(ctx, req)
+	req := llm.CompletionRequest{
+		System: []string{compressionSystemPrompt},
+		// MaxTokens 是思考+正文共用的预算,给小了模型会一直想、正文轮不到(见
+		// outTokens 字段的注释)。这里给足冗余。
+		Messages:  []llm.Message{llm.UserText(buildCompressionInput(g, b, nodeByID))},
+		MaxTokens: tokens,
+	}
+	msg, stop, usage, err := c.prov.Complete(ctx, req)
 	if err != nil {
 		return "", err
 	}
 	body := strings.TrimSpace(msg.Text())
 	if body == "" {
-		return "", fmt.Errorf("empty body from model")
+		// 空正文必须把诊断信息带出来，否则只有一句「empty body from model」
+		// 完全无法定位。以前这里丢掉了 stop reason 与 usage，排查时只能靠猜。
+		// 实测过的两类根因：
+		//   - stop="length"：输出被 max_tokens 截断（adaptive thinking 模型
+		//     会先烧一大段思考，正文没轮到最后就撞上限）。
+		//   - 只有 thinking 块没有 text 块：模型确实在思考，但正文为空。
+		return "", fmt.Errorf("empty body from model (stop=%q blocks=%d in=%d out=%d thinking=%d)",
+			stop, len(msg.Content), usage.InputTokens, usage.OutputTokens, countThinking(msg))
 	}
 	return body, nil
+}
+
+// compressChunked 压缩一个块，但把过大的块先切成若干子块、逐个压缩。
+//
+// 为什么要切:实测思考型模型能否收尾取决于**单次输入规模**,与输出预算无关——
+// 3 个节点(743 prompt token)在 32768 预算下正常收尾,26 个节点(3084 prompt
+// token)即使给 32768 也会把预算烧光、跑 211 秒不出正文。超大连通块(一个
+// 连通分量可能有几十个节点)在实践中就是这样,所以必须切。
+//
+// 切分保持原有语义:每块仍然是「一组彼此关联的节点」,只是规模更小。返回的
+// 多个 body 由调用方拼成一段摘要(分隔标记),语义与原来的一段 body 等价。
+func (c *Compactor) compressChunked(ctx context.Context, g *coldGraph, b block, nodeByID map[int64]*db.Node) ([]string, error) {
+	limit := c.maxBlockMembers
+	if limit <= 0 || len(b.Members) <= limit {
+		body, err := c.compress(ctx, g, b, nodeByID)
+		if err != nil {
+			return nil, err
+		}
+		return []string{body}, nil
+	}
+	var out []string
+	for i := 0; i < len(b.Members); i += limit {
+		j := i + limit
+		if j > len(b.Members) {
+			j = len(b.Members)
+		}
+		sub := block{Members: b.Members[i:j], Anchors: b.Anchors}
+		body, err := c.compress(ctx, g, sub, nodeByID)
+		if err != nil {
+			// 某个子块失败：整块视为失败(宁可重试也不要写半截摘要)。
+			return nil, fmt.Errorf("子块 %d/%d 压缩失败: %w", i/limit+1, (len(b.Members)+limit-1)/limit, err)
+		}
+		out = append(out, body)
+	}
+	return out, nil
+}
+
+// countThinking 数一数消息里有几个思考块。用于区分「模型只思考没正文」
+// 与「模型什么都没返回」。
+func countThinking(msg llm.Message) int {
+	n := 0
+	for _, b := range msg.Content {
+		if b.Type == llm.BlockThinking {
+			n++
+		}
+	}
+	return n
 }
 
 // compressionSystemPrompt is the §4 body prompt.

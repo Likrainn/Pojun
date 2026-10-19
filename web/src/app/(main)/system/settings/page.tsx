@@ -39,6 +39,11 @@ export default function SystemSettingsPage() {
   const [pyInterp, setPyInterp] = React.useState("");
   const [workers, setWorkers] = React.useState("3");
   const [savingWorkers, setSavingWorkers] = React.useState(false);
+  // 冷节点压缩的输出预算与墙钟上限。0=用默认值(32768 token / 20 分钟)。
+  const [compactionTokens, setCompactionTokens] = React.useState("0");
+  const [compactionTimeout, setCompactionTimeout] = React.useState("0");
+  const [compactionMembers, setCompactionMembers] = React.useState("0");
+  const [savingCompaction, setSavingCompaction] = React.useState(false);
   // 操作约束注入范围(默认都开)。
   const [injectPlanner, setInjectPlanner] = React.useState(true);
   const [injectWorker, setInjectWorker] = React.useState(true);
@@ -58,6 +63,9 @@ export default function SystemSettingsPage() {
     setGlobalProxyInput(s.global_proxy ?? "");
     setPyInterp(s.python_interpreter ?? "");
     setWorkers(String(s.workers ?? 3));
+    setCompactionTokens(String(s.compaction_max_tokens ?? 0));
+    setCompactionTimeout(String(s.compaction_timeout_seconds ?? 0));
+    setCompactionMembers(String(s.compaction_max_members ?? 0));
     setInjectPlanner(s.constraints_inject_planner !== false);
     setInjectWorker(s.constraints_inject_worker !== false);
     setNoaCompaction(!!s.noa_compaction);
@@ -80,8 +88,38 @@ export default function SystemSettingsPage() {
       .finally(() => setSavingWorkers(false));
   };
 
-  const savePython = () => {
-    setSaving(true);
+  const saveCompaction = () => {
+    const t = Number(compactionTokens);
+    const to = Number(compactionTimeout);
+    const m = Number(compactionMembers);
+    if (!Number.isInteger(t) || t < 0) {
+      toast.error("输出预算必须是不小于 0 的整数（0 = 默认）");
+      return;
+    }
+    if (!Number.isInteger(to) || to < 0) {
+      toast.error("超时必须是不小于 0 的整数秒（0 = 默认）");
+      return;
+    }
+    if (!Number.isInteger(m) || m < 0) {
+      toast.error("单块节点数必须是不小于 0 的整数（0 = 默认）");
+      return;
+    }
+    setSavingCompaction(true);
+    api
+      .setSettings({
+        compaction_max_tokens: t,
+        compaction_timeout_seconds: to,
+        compaction_max_members: m,
+      })
+      .then((s) => {
+        apply(s);
+        toast.success("已保存压缩参数（对之后启动的任务生效）");
+      })
+      .catch((e) => toast.error(`保存失败：${(e as Error).message}`))
+      .finally(() => setSavingCompaction(false));
+  };
+
+  const savePython = () => {    setSaving(true);
     api
       .setSettings({ python_interpreter: pyInterp.trim() })
       .then((s) => {
@@ -673,6 +711,77 @@ export default function SystemSettingsPage() {
                 onChange={(e) => setWorkers(e.target.value)}
               />
               <Button onClick={saveWorkers} disabled={!loaded || savingWorkers}>
+                保存
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="mb-4 break-inside-avoid md:mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <CpuIcon className="size-4" />
+              上下文压缩参数
+            </CardTitle>
+            <CardDescription>
+              冷节点压缩（把已完成的探索结论压成摘要）是<b>后台</b>跑的，不阻塞 agent 干活，
+              等久一点只影响摘要晚点落地。
+              <br />
+              <b>输出预算</b>是「思考 + 正文」共用的额度：思考型模型（强制 adaptive thinking
+              的那些）的思考长度随这个额度线性膨胀，额度给小了它会一直想、正文一个字都吐不出来
+              —— 实测 1500 / 2048 / 4096 / 8192 全部得到空正文。默认 32768。
+              <br />
+              <b>单块节点数上限</b>决定一次请求里塞多少个节点：实测 9 个节点能正常收尾，
+              26 个节点即使给满 32768 预算也会把预算烧光、跑 200 秒不出正文。所以超大连通块
+              必须切分。默认 12。
+              <br />
+              两项填 0 即使用默认值。修改后<b>对之后启动的任务生效</b>。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Label htmlFor="compaction-tokens" className="w-40 text-sm">
+                输出预算 (token)
+              </Label>
+              <Input
+                id="compaction-tokens"
+                type="number"
+                min={0}
+                step={1024}
+                className="w-40 font-mono text-sm"
+                placeholder="0 = 默认 32768"
+                value={compactionTokens}
+                disabled={!loaded || savingCompaction}
+                onChange={(e) => setCompactionTokens(e.target.value)}
+              />
+              <Label htmlFor="compaction-timeout" className="w-40 text-sm">
+                单次超时 (秒)
+              </Label>
+              <Input
+                id="compaction-timeout"
+                type="number"
+                min={0}
+                step={60}
+                className="w-40 font-mono text-sm"
+                placeholder="0 = 默认 1200"
+                value={compactionTimeout}
+                disabled={!loaded || savingCompaction}
+                onChange={(e) => setCompactionTimeout(e.target.value)}
+              />
+              <Label htmlFor="compaction-members" className="w-40 text-sm">
+                单块节点数上限
+              </Label>
+              <Input
+                id="compaction-members"
+                type="number"
+                min={0}
+                className="w-40 font-mono text-sm"
+                placeholder="0 = 默认 12"
+                value={compactionMembers}
+                disabled={!loaded || savingCompaction}
+                onChange={(e) => setCompactionMembers(e.target.value)}
+              />
+              <Button onClick={saveCompaction} disabled={!loaded || savingCompaction}>
                 保存
               </Button>
             </div>

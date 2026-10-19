@@ -3335,6 +3335,10 @@ func (s *Server) settingsPayload() map[string]any {
 		"install_proxy":            s.installProxy(),            // 装机代理：只用于宿主工具安装(apt/GitHub下载)，与目标流量无关
 		"python_interpreter":       strings.TrimSpace(pyStored), // 用户/自动设的值(空=用运行时检测)
 		"workers":                  s.m.Workers(),               // 并发工作 agent 数(默认3)；对之后启动的任务生效
+		// 冷节点压缩的输出预算与墙钟上限。0 = 用默认值(32768 token / 20 分钟)。
+		"compaction_max_tokens":   s.m.CompactionTokens(),
+		"compaction_timeout_seconds": s.m.CompactionTimeout(),
+		"compaction_max_members":  s.m.CompactionMaxMembers(),
 		"task_concurrency_enabled": concOn,                      // 任务并发上限开关(默认关)
 		"task_concurrency_limit":   concLimit,                   // 同时运行任务上限(开启后默认5)
 		// LLM 轮询(故障转移)。默认关；开启后走全局激活配置的 agent 在当前配置不可用时
@@ -3411,6 +3415,12 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		InstallProxy     *string `json:"install_proxy"`      // 装机代理：宿主工具安装用；null=不改，""=清空(直连)。不触发 agent 重建
 		PythonInterp     *string `json:"python_interpreter"` // 自定义脚本工具的 python 解释器路径
 		Workers          *int    `json:"workers"`            // 并发工作 agent 数(>0)；对之后启动的任务生效
+		// 冷节点压缩的输出预算与墙钟上限。null=不改，<=0=恢复默认。
+		// 见 agent.Compactor.outTokens:思考型模型的思考长度随 max_tokens 预算
+		// 线性膨胀,预算给小了模型会一直想、正文一个字都吐不出来。
+		CompactionMaxTokens  *int `json:"compaction_max_tokens"`
+		CompactionTimeoutSec *int `json:"compaction_timeout_seconds"`
+		CompactionMaxMembers *int `json:"compaction_max_members"`
 		// 任务并发上限:同时「运行中」的任务数上限。关闭=不限;开启后新建任务超限则排队,有空位自动启动。
 		ConcurrencyEnabled *bool `json:"task_concurrency_enabled"`
 		ConcurrencyLimit   *int  `json:"task_concurrency_limit"`
@@ -3501,6 +3511,24 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Workers != nil {
 		if err := s.m.SetWorkers(*req.Workers); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+	}
+	if req.CompactionMaxTokens != nil {
+		if err := s.m.SetCompactionTokens(*req.CompactionMaxTokens); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+	}
+	if req.CompactionTimeoutSec != nil {
+		if err := s.m.SetCompactionTimeout(*req.CompactionTimeoutSec); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+	}
+	if req.CompactionMaxMembers != nil {
+		if err := s.m.SetCompactionMaxMembers(*req.CompactionMaxMembers); err != nil {
 			writeErr(w, 400, err.Error())
 			return
 		}

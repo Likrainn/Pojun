@@ -285,8 +285,18 @@ const (
 	settingVulnIntelOn = "vulnintel_enabled"
 	// NVD API key（可选）：匿名 5 req/30s，配 key 50 req/30s，首次回填快 ~10 倍。
 	settingNvdApiKey = "nvd_api_key"
-	settingWorkers     = "workers"
-	settingLLMRecord   = "llm_record"
+	settingWorkers   = "workers"
+	settingLLMRecord = "llm_record"
+	// 冷节点压缩的输出预算与墙钟上限。默认 0 = 用代码里的默认值
+	// (32768 token / 20 分钟)。这两个值存在的原因见 agent.Compactor.outTokens:
+	// 思考型模型(强制 adaptive thinking)的思考长度随 max_tokens 预算线性膨胀,
+	// 预算给小了模型会一直想、正文一个字都吐不出来。
+	settingCompactionTokens  = "compaction_max_tokens"
+	settingCompactionTimeout = "compaction_timeout_seconds"
+	// 单次压缩请求的成员节点数上限。0 = 用代码默认值。
+	// 思考型模型能否收尾取决于**单次输入规模**而非预算大小(实测 3 节点正常、
+	// 26 节点把 32768 预算烧光也不出正文),所以超大连通块必须切分。
+	settingCompactionMaxMembers = "compaction_max_members"
 	// LLM 轮询(故障转移)。默认关闭——开启后走「全局激活配置」的 agent 在当前配置
 	// 不可用(余额不足/key 失效/限流/服务异常)时自动切到下一个配置。
 	// settingLLMPoolBindFallback 仅在轮询开启时有意义:默认关闭,即 agent/任务显式
@@ -363,6 +373,87 @@ func (m *Manager) SetWorkers(n int) error {
 		return fmt.Errorf("workers 必须 >0")
 	}
 	return m.pg.SetSetting(settingWorkers, strconv.Itoa(n))
+}
+
+// CompactionTokens 返回冷节点压缩的输出预算。0/未配 = 用 agent 包的默认值。
+func (m *Manager) CompactionTokens() int {
+	if m == nil || m.pg == nil {
+		return 0
+	}
+	v, ok, err := m.pg.GetSetting(settingCompactionTokens)
+	if err != nil || !ok {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+// SetCompactionTokens 持久化压缩的输出预算。n<=0 表示恢复默认(清空设置)。
+func (m *Manager) SetCompactionTokens(n int) error {
+	if m == nil || m.pg == nil {
+		return fmt.Errorf("数据库未就绪")
+	}
+	if n <= 0 {
+		return m.pg.SetSetting(settingCompactionTokens, "")
+	}
+	return m.pg.SetSetting(settingCompactionTokens, strconv.Itoa(n))
+}
+
+// CompactionTimeout 返回单次后台压缩的墙钟上限(秒)。0/未配 = 用 agent 包的默认值。
+func (m *Manager) CompactionTimeout() int {
+	if m == nil || m.pg == nil {
+		return 0
+	}
+	v, ok, err := m.pg.GetSetting(settingCompactionTimeout)
+	if err != nil || !ok {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+// SetCompactionTimeout 持久化压缩的墙钟上限(秒)。n<=0 表示恢复默认(清空设置)。
+func (m *Manager) SetCompactionTimeout(secs int) error {
+	if m == nil || m.pg == nil {
+		return fmt.Errorf("数据库未就绪")
+	}
+	if secs <= 0 {
+		return m.pg.SetSetting(settingCompactionTimeout, "")
+	}
+	return m.pg.SetSetting(settingCompactionTimeout, strconv.Itoa(secs))
+}
+
+// CompactionMaxMembers 返回单次压缩请求的成员节点数上限。0/未配 = 用默认值。
+func (m *Manager) CompactionMaxMembers() int {
+	if m == nil || m.pg == nil {
+		return 0
+	}
+	v, ok, err := m.pg.GetSetting(settingCompactionMaxMembers)
+	if err != nil || !ok {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+// SetCompactionMaxMembers 持久化单次压缩请求的成员节点数上限。n<=0 = 恢复默认。
+func (m *Manager) SetCompactionMaxMembers(n int) error {
+	if m == nil || m.pg == nil {
+		return fmt.Errorf("数据库未就绪")
+	}
+	if n <= 0 {
+		return m.pg.SetSetting(settingCompactionMaxMembers, "")
+	}
+	return m.pg.SetSetting(settingCompactionMaxMembers, strconv.Itoa(n))
 }
 
 // Enrich returns the asset auto-completion engine (may be nil if init failed).

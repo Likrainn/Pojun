@@ -932,6 +932,14 @@ export interface Settings {
   install_proxy?: string;
   python_interpreter?: string; // 自定义脚本工具的 python 解释器路径(空=运行时检测)
   workers?: number; // 并发工作 agent 数(默认3)；对之后启动的任务生效
+  // 冷节点压缩的输出预算(思考+正文共用)与单次墙钟超时。0=用默认值
+  // (32768 token / 1200 秒)。思考型模型的思考长度随这个预算线性膨胀,
+  // 预算给小了模型会一直想、正文一个字都吐不出来。
+  compaction_max_tokens?: number;
+  compaction_timeout_seconds?: number;
+  // 单次压缩请求的成员节点数上限。思考型模型能否收尾取决于单次输入规模
+  // (实测 9 节点正常、26 节点把 32768 预算烧光也不出正文),所以要切分。
+  compaction_max_members?: number;
   // 任务并发上限:同时「运行中」的任务数上限。关闭=不限;开启后新建任务超限则排队,有空位自动启动。
   task_concurrency_enabled?: boolean; // 默认 false
   task_concurrency_limit?: number; // 开启后默认 5

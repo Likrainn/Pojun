@@ -585,7 +585,16 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	// cold-digest §7: 冷节点后台压缩。引擎经权威解析器实际驱动的就是这套 per-task planner
 	// (agentsForTask),Compactor 必须接在这里。走任务路由的 planner provider(§4:与 agent
 	// 同模型,随任务 LLM 链解析),压缩用 Complete 一次性生成 body。
-	pl.SetCompactor(agent.NewCompactor(plannerRuntime, "task-router"))
+	compactor := agent.NewCompactor(plannerRuntime, "task-router")
+	// 压缩的输出预算与墙钟上限从设置读(0=用包内默认)。这两个值必须给足:
+	// 思考型模型的思考长度随 max_tokens 预算线性膨胀,预算给小了模型会一直想、
+	// 正文一个字都吐不出来(实测 1500/2048/4096/8192 全部正文为空)。
+	compactor.SetOutputTokens(s.m.CompactionTokens())
+	if secs := s.m.CompactionTimeout(); secs > 0 {
+		compactor.SetMaxDuration(time.Duration(secs) * time.Second)
+	}
+	compactor.SetMaxBlockMembers(s.m.CompactionMaxMembers())
+	pl.SetCompactor(compactor)
 	main := agent.NewMainAgent(mainRuntime, "task-router", s.m.dir, tx, mainRuntime.CompactionWindow(), s.agentMaxTurns("mainagent"))
 	main.SetFindingRecorder(s.evidenceStore())
 	main.SetCompactionWindowResolver(mainRuntime.CompactionWindow)
