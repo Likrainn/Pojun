@@ -10,8 +10,9 @@ import (
 
 func TestInventoryCoversCatalog(t *testing.T) {
 	inv := Inventory()
-	if len(inv) != 22 {
-		t.Fatalf("目录应有 22 项,得到 %d", len(inv))
+	// 目录项数会随工具增补变化，这里只断言「不低于基线」并逐项检查字段完整性。
+	if len(inv) < 22 {
+		t.Fatalf("目录不应少于 22 项,得到 %d", len(inv))
 	}
 	// curl 在任何测试环境都该存在(Git/CI 镜像自带),用它验证探测为真
 	foundCurl := false

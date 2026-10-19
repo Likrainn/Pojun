@@ -75,6 +75,10 @@ var catalog = []Tool{
 	{Name: "dig", Purpose: "DNS 查询", Kind: KindApt, Apt: "dnsutils", Dnf: "bind-utils"},
 	{Name: "ssh", Purpose: "登录验证/隧道", Kind: KindApt, Apt: "openssh-client", Dnf: "openssh-clients"},
 	{Name: "testssl.sh", Bin: "testssl", Purpose: "TLS 配置弱项扫描", Kind: KindApt, Apt: "testssl.sh", Dnf: "testssl"},
+	// nodejs 连 npx 一起装：MCP 里用 `npx @playwright/mcp` 启动 browser 服务器，
+	// 机器上没有 node 时那个 MCP 永远连不上（实测每次 worker 启动都报
+	// "npx: executable file not found in $PATH"）。
+	{Name: "nodejs", Bin: "node", Purpose: "Node 运行时(npx 随装,供 MCP 服务器用)", Kind: KindApt, Apt: "nodejs", Dnf: "nodejs"},
 
 	{Name: "nuclei", Purpose: "基于模板的漏洞扫描(漏洞情报联动)", Kind: KindGitHub,
 		Repo: "projectdiscovery/nuclei", AssetTmpl: "nuclei_{ver}_linux_{arch}.zip"},
