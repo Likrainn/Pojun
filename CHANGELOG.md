@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.3.39] - 2026-10-20
+
+> 观察期实测：三处能力缺失导致 agent 大量无效调用，以及「一堆子任务中断但看不出原因」。
+
+### 修复的问题
+
+- **子任务中断原因完全不可见**（用户反馈「一大堆子任务异常中断」的直接根因）：意图只有 done/blocked/exhausted 三态，实测 94% 的意图以非 done 收场（exhausted 72 / blocked 40 / done 7），但**为什么**中断没有任何记录——轮次上限、任务超时、LLM 配额耗尽、超时、错误、被杀、任务完成这七种终止原因在库里都写成同一个 `blocked_reason=context_exhausted`。新增 `SetIntentStopReason` 写入真实原因，DTO 带出 `blocked_reason`，探索图的状态徽章悬停即见。
+- **DSL 不支持网段查询**：`assets.ip` 是自由文本，DSL 里只能 `=`/`==`/`!=` 模糊匹配，agent 想查网段只能试 `ip >= 10.0.0.0`——实测 24 次「字符串字段 ip 不支持运算符 >=」加 11 次语法错误，全是这一个能力缺失逼出来的。新增 `cidr` 字段，用 Postgres inet 包含运算（`try_inet(ip) >>= 网段`），转换不出 inet 的行（主机名）自然被排除，不会让一条脏数据打挂整个查询。
+- **DSL 错误不可执行**：`list_assets` 只回「DSL 错误: 字符串字段 ip 不支持运算符 >=」，agent 会再猜一次同样的写法（实测同类错误重复 42 次）。补上 `dslHint` 提示：告诉它字符串字段只支持 `=`/`==`/`!=`、要按数值比就用 `port`/`status_code`、要按网段查就用 `cidr=10.10.0.0/16`。
+- **`search_vulns` 的 `limit` 参数类型写错**：误写成嵌套对象，校验器于是要求模型传 `limit: {}`，实测 41 次调用全部报 `invalid tool input: limit: expected object`——这个工具等于废了一半。改为整数参数。
+
+### 其他
+
+- `exploration-graph.tsx` 里两个裸 NUL 字节让 Git 把该文件当二进制，diff 审查全废。改成转义写法，行为不变。
+
 ## [0.3.38] - 2026-10-20
 
 > 观察期发现的问题：MCP 连接失败刷屏、宿主环境缺 Node。
