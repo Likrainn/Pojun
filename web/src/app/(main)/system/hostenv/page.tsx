@@ -242,7 +242,9 @@ export default function HostEnvPage() {
                         {t.available ? (
                           "—"
                         ) : (
-                          <span>
+                          // break-all：缺失项的提示里可能带长 URL（如 msfconsole 的官方文档），
+                          // 不换行会把表格撑到横向溢出，需要左右拖动才看得到第一列。
+                          <span className="break-all">
                             <span className="mr-1 text-foreground/70">{KIND_LABEL[t.kind]}</span>
                             {t.install}
                           </span>
