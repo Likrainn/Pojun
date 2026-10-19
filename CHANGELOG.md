@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.3.46] - 2026-10-20
+
+> 用户最初提的第四块（工具页/宿主环境页扩展）此前一直延期，现在基础设施齐了。
+
+### 新增
+
+- **宿主工具扩容 10 个**（GitHub Release 类）：`gitleaks`（代码/配置密钥扫描）、`chisel`（内网穿透与隧道）、`amass`（OWASP 子域名枚举）、`dalfox`（XSS 扫描与利用）、`feroxbuster`（Rust 版目录/文件爆破）、`notify`（外带数据接收，DNS/HTTP/TLS 多通道）、`interactsh-client`（OOB 回连客户端，配合 nuclei 的 oob 模板）；（pip 类）：`netexec`（SMB/WinRM 横移与凭据喷洒）、`semgrep`（SAST 规则扫描）、`pwntools`（利用脚本框架）。
+- **安装器支持更多归档格式与架构命名**：各项目的 release 资产命名差异极大（架构在前/后、版本带不带 v、`.zip`/`.tar.gz`/`.gz` 三种格式、架构名有 amd64/x86_64/x86/x64 四套），原先的模板只认「`{tool}_{ver}_linux_{arch}.zip`」这一种，装另外一半项目必然 404。现在模板占位符扩到 `{ver}` `{verv}` `{arch}` `{arch2}`(x86_64) `{arch3}`(x86) `{arch4}`(x64)，hostd 的解包从只支持 zip 扩到 zip / tar(.gz) / 单文件 gz（**按内容嗅探，不靠后缀猜**——后缀拼错就直接装不上）。
+
+### 测试
+
+- `hostd/asseturl_test.go`：资产 URL 必须与**实测的真实 release 资产名**逐字一致；模板里不能出现未实现的占位符（拼出来会带字面量 `{archX}`）；每个 GitHub 配方都必须有 Repo + AssetTmpl + Bin。
+
 ## [0.3.45] - 2026-10-20
 
 ### 修复的问题
