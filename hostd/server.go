@@ -96,18 +96,25 @@ type Server struct {
 	sem    chan struct{} // 串行执行:apt/dpkg 不允许并发
 	pkgMgr PkgMgr
 	logger *log.Logger
+	// base 是任务的父 ctx。**绝不能**用 HTTP 请求的 ctx:handler 返回后它立刻被取消,
+	// 排队中的任务会当场变成 cancelled(实测踩过)。
+	base context.Context
 }
 
-// NewServer 构造。jobs 串行执行(容量 1)。
-func NewServer(logger *log.Logger) *Server {
+// NewServer 构造。base 为进程级生命周期 ctx(随守护进程退出而取消);传 nil 用 Background。
+func NewServer(base context.Context, logger *log.Logger) *Server {
 	if logger == nil {
 		logger = log.Default()
+	}
+	if base == nil {
+		base = context.Background()
 	}
 	return &Server{
 		jobs:   map[string]*Job{},
 		sem:    make(chan struct{}, 1),
 		pkgMgr: DetectPkgMgr(),
 		logger: logger,
+		base:   base,
 	}
 }
 
@@ -118,6 +125,7 @@ func newID() string {
 }
 
 // Start 发起一次安装。toolID 必须命中 hosttools 白名单,否则拒绝。
+// parent 必须是进程级 ctx,不能传 HTTP 请求的 ctx(见 Server.base 注释)。
 func (s *Server) Start(parent context.Context, toolID, proxy string) (*Job, error) {
 	tool, ok := hosttools.Lookup(toolID)
 	if !ok {
@@ -420,7 +428,7 @@ func (s *Server) Handler() http.Handler {
 			writeJSON(w, 400, map[string]any{"error": "请求体不是合法 JSON"})
 			return
 		}
-		job, err := s.Start(r.Context(), req.ToolID, req.Proxy)
+		job, err := s.Start(s.base, req.ToolID, req.Proxy)
 		if err != nil {
 			writeJSON(w, 400, map[string]any{"error": err.Error()})
 			return

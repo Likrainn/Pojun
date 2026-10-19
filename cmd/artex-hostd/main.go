@@ -67,13 +67,16 @@ func main() {
 	log.Printf("[hostd] v%s 就绪 socket=%s mode=%s group=%q pkg_mgr=%s tools=%d",
 		version, *socketPath, *socketMode, *socketGroup, mgr, len(hosttools.Inventory()))
 
+	// 任务的父 ctx = 进程生命周期：收到 SIGTERM 时连正在跑的安装一起取消。
+	// 绝不能传 HTTP 请求的 ctx——handler 返回即取消，排队任务会当场变 cancelled。
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	srv := &http.Server{
-		Handler:           hostd.NewServer(log.New(os.Stderr, "", log.LstdFlags)).Handler(),
+		Handler:           hostd.NewServer(ctx, log.New(os.Stderr, "", log.LstdFlags)).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("[hostd] 服务异常: %v", err)
