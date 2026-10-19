@@ -186,8 +186,22 @@ deploy_binary(){
 
   mkdir -p "$INSTALL_DIR"
   # 程序/skills 覆盖；config.json / jwt.key / data 不在 zip 里，天然不被动
-  cp -r "$src"/. "$INSTALL_DIR/"
-  chmod +x "$INSTALL_DIR/artex" "$INSTALL_DIR/start.sh"
+  # 二进制不能直接 cp 覆盖正在运行的进程（Linux 报 ETXTBSY "Text file busy"），
+  # 先落到同目录临时名再 rename——rename 对运行中的可执行文件是合法的。
+  # 这一步之前漏了，导致「重跑 install.sh 即升级」在服务运行状态下必然失败。
+  for b in artex artex-hostd; do
+    [ -f "$src/$b" ] || continue
+    cp "$src/$b" "$INSTALL_DIR/.$b.new"
+    chmod +x "$INSTALL_DIR/.$b.new"
+    mv -f "$INSTALL_DIR/.$b.new" "$INSTALL_DIR/$b"
+  done
+  # 其余文件（skills / README / start.sh / config.example.json）直接覆盖
+  for f in "$src"/*; do
+    base="$(basename "$f")"
+    case "$base" in artex|artex-hostd) continue ;; esac
+    cp -r "$f" "$INSTALL_DIR/"
+  done
+  chmod +x "$INSTALL_DIR/start.sh"
   ok "程序就绪: $INSTALL_DIR/artex"
 
   # 运行用户
@@ -278,7 +292,10 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 WantedBy=multi-user.target
 UNIT
   systemctl daemon-reload
-  systemctl enable --now "$SERVICE" 2>/dev/null || systemctl restart "$SERVICE"
+  systemctl enable "$SERVICE" 2>/dev/null || true
+  # 升级场景下服务可能已经在跑：enable --now 不会重启它，必须显式 restart
+  # 才会用上新换的二进制。
+  systemctl restart "$SERVICE"
   ok "systemd 服务已启动（${SERVICE}）"
 
   if [ "$WITH_INSTALLER" = "1" ]; then install_hostd; fi
@@ -293,7 +310,9 @@ install_hostd(){
     warn "发行包里没有 artex-hostd（旧版本包），跳过；体检仍可用，一键安装不可用"
     return 0
   fi
-  install -m 0755 "$INSTALL_DIR/artex-hostd" /usr/local/bin/artex-hostd
+  # 同上：目标可能是正在运行的助手，先落临时名再 rename 避免 ETXTBSY。
+  install -m 0755 "$INSTALL_DIR/artex-hostd" /usr/local/bin/.artex-hostd.new
+  mv -f /usr/local/bin/.artex-hostd.new /usr/local/bin/artex-hostd
   cat > "/etc/systemd/system/${SERVICE}-hostd.service" <<UNIT
 [Unit]
 Description=ARTEX host tool installer (privileged helper)
@@ -339,7 +358,9 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 UNIT
   systemctl daemon-reload
-  systemctl enable --now "${SERVICE}-hostd" 2>/dev/null || systemctl restart "${SERVICE}-hostd"
+  systemctl enable "${SERVICE}-hostd" 2>/dev/null || true
+  # 同主服务：已在跑时要显式 restart 才会换成新装的二进制。
+  systemctl restart "${SERVICE}-hostd"
   ok "安装助手已启动（${SERVICE}-hostd）→ socket /run/artex/hostd.sock"
 }
 
