@@ -57,11 +57,46 @@ func (s *Server) wireInterceptReviewer() {
 		if v.Action == "" {
 			// 把模型原始回复截一段带进错误里：解析失败时只有「格式无效」这四个字
 			// 根本没法排查（是缺三段？分隔符不对？还是被 max_tokens 截断了？）。
+			//
+			// 两种「解析失败」要分开看：
+			//   - 回复为空：思考把预算烧光，正文一个字没轮到（长命令常见）。
+			//   - 回复被截断成 `{"decision":"al`：JSON 没写完，也是预算不够。
+			// 两者都指向同一个解法：给足预算 + 升预算重试。上面
+			// streamCollectTextBudget 已经处理了「空回复」的情形；这里再补
+			// 「有内容但解析不出来」的升预算重试。
+			if retryText, retryErr := reviewCompletionEscalate(ctx, prov, prompt, input, text); retryErr == nil {
+				text = retryText
+				v = intercept.ParseVerdict(text)
+			}
+		}
+		if v.Action == "" {
 			return intercept.Decision{ProfileID: profileID},
 				fmt.Errorf("模型裁决格式无效（需要 decision + 三段 comment）：原始回复 %.400q", text)
 		}
 		return intercept.Decision{Action: v.Action, Message: v.Reason, ProfileID: profileID}, nil
 	})
+}
+
+// reviewCompletionEscalate 在「有内容但解析不出裁决」时用更高的预算重试一次。
+// 典型场景是 JSON 写到一半被 max_tokens 截断（`{"decision":"al`）。
+func reviewCompletionEscalate(ctx context.Context, prov llm.Provider, prompt string, input intercept.ReviewInput, first string) (string, error) {
+	user, err := json.Marshal(input)
+	if err != nil {
+		return "", err
+	}
+	for _, b := range judgeRetryBudgets {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		text, err := oneCompletion(ctx, prov, prompt, string(user), b)
+		if err != nil {
+			return "", err
+		}
+		if intercept.ParseVerdict(text).Action != "" {
+			return text, nil
+		}
+	}
+	return first, nil
 }
 
 func reviewCompletion(ctx context.Context, prov llm.Provider, prompt string, input intercept.ReviewInput) (string, error) {
@@ -72,9 +107,8 @@ func reviewCompletion(ctx context.Context, prov llm.Provider, prompt string, inp
 	return streamCollectText(ctx, prov, prompt, string(user))
 }
 
-// streamCollectText runs a single non-streaming-style completion (thinking off,
-// low temperature, bounded output) and returns the concatenated text. The
-// budget includes the explanation and complete closing JSON delimiters.
+// streamCollectText runs a single non-streaming-style completion (low
+// temperature, bounded output) and returns the concatenated text.
 //
 // thinking 的处理：原先这里硬编码 Thinking:"disabled"，对 MiniMax-M3.1 这类
 // **强制要求 adaptive thinking** 的模型会被上游直接拒（400 "requires adaptive
@@ -84,15 +118,61 @@ func reviewCompletion(ctx context.Context, prov llm.Provider, prompt string, inp
 // 现在默认【不发】thinking 字段（空串 = 让模型/网关按自己的默认走），
 // 由 profile 的 thinking_type 配置决定；只有显式配了才带上。
 //
-// max_tokens 也跟着调：开启思考的模型会把思考内容算进输出额度，1024 会被
-// 思考吃光、正文 JSON 反而被截断成不可解析。给到 2048，并在解析失败时
-// 明确区分「输出被截断」与「格式不对」。
+// max_tokens 必须给足：开启思考的模型会把思考内容算进输出额度，**思考与正文
+// 共用同一份预算**。实测长命令（几百到上千字符的 shell 脚本）在 2048 预算下
+// 思考烧光、正文为空（裁决记录里表现为「原始回复 ""」）；短命令则 2048 就够。
+// 所以这里一次给到 32768，并在正文为空时**逐级升预算重试**——
+// 宁可多花点额度，也不能让这道关卡因为预算不够而静默失效。
 func streamCollectText(ctx context.Context, prov llm.Provider, system, user string) (string, error) {
+	return streamCollectTextBudget(ctx, prov, system, user, judgeMaxTokens)
+}
+
+// judgeMaxTokens 是裁决的输出预算（思考+正文共用）。
+//
+// 32768 的由来：实测同一模型在长命令上 2048 会「思考烧光、正文为空」，
+// 短命令 2048 够用。给足预算后长命令也能正常产出三段式 JSON。
+const judgeMaxTokens = 32768
+
+// judgeRetryBudgets 是正文为空时的重试预算阶梯。
+//
+// 为什么要有阶梯：空正文的原因随命令长度而变（输入越长、思考越长），固定预算
+// 要么永远不够、要么对短命令过度浪费。逐级升预算既保证长命令能出结果，
+// 短命令又不会被无谓地放大额度。
+//
+// 注意阶梯必须**严格大于**首次预算：首次是 32768，阶梯就从 65536 起，
+// 否则第一次重试会用同样的预算再问一遍，纯属浪费一轮往返。
+var judgeRetryBudgets = []int{65536, 131072}
+
+// streamCollectTextBudget 在指定预算下取一次回复；正文为空时按阶梯升预算重试。
+func streamCollectTextBudget(ctx context.Context, prov llm.Provider, system, user string, budget int) (string, error) {
+	var last string
+	for i, b := range append([]int{budget}, judgeRetryBudgets...) {
+		if i > 0 {
+			// 重试前先看 ctx 是否还有预算：裁决有独立超时（默认 90s），
+			// 长命令本来就慢，别把时间花在注定超时的重试上。
+			if ctx.Err() != nil {
+				return last, ctx.Err()
+			}
+		}
+		text, err := oneCompletion(ctx, prov, system, user, b)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(text) != "" {
+			return text, nil
+		}
+		last = text
+	}
+	return last, nil
+}
+
+// oneCompletion 发起一次带预算的完成请求，返回拼接后的文本。
+func oneCompletion(ctx context.Context, prov llm.Provider, system, user string, maxTokens int) (string, error) {
 	temp := 0.0
 	req := llm.CompletionRequest{
 		System:      []string{system},
 		Messages:    []llm.Message{llm.UserText(user)},
-		MaxTokens:   2048,
+		MaxTokens:   maxTokens,
 		Temperature: &temp,
 	}
 	var sb strings.Builder

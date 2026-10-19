@@ -328,7 +328,13 @@ const (
 //     「人没及时点确认」这一层。
 //   - 人工审批超时 180s：3 分钟，够操作员回来看一眼。
 const (
-	defaultJudgeTimeoutSecs      = 90
+	// defaultJudgeTimeoutSecs 是模型裁决的墙钟上限。
+	//
+	// 180 而非更短：思考型模型的裁决耗时随命令长度而变（实测短命令 4~26 秒，
+	// 长命令——几百到上千字符的 shell 脚本——明显更久），而且正文为空时会
+	// 升预算重试（32768 → 65536），重试要挤在同一个超时窗口内。时间给短了
+	// 就会把「模型其实能裁决」误判成超时失败。
+	defaultJudgeTimeoutSecs = 180
 	defaultJudgeFailAction       = "ask"
 	defaultJudgeAskTimeoutSecs   = 180
 	defaultJudgeAskTimeoutAction = "allow"
@@ -385,6 +391,13 @@ func (i *Interceptor) judgeConfig() JudgeConfig {
 	}
 	return c
 }
+
+// DefaultJudgeTimeoutSeconds 返回裁决的默认墙钟上限（秒）。
+//
+// 导出给 server 层的测试断言用：思考型模型的裁决耗时随命令长度而变，
+// 长命令明显更久，且正文为空时要升预算重试——超时给短了会把「模型其实
+// 能裁决」误判成超时失败。
+func DefaultJudgeTimeoutSeconds() int { return defaultJudgeTimeoutSecs }
 
 func (i *Interceptor) getSettingInt(key string, def int) int {
 	v, ok, err := i.db.GetSetting(key)

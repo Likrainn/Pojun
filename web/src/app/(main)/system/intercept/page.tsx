@@ -200,7 +200,7 @@ const defaultJudge = (): JudgeConfig => ({
   enabled: false,
   profile_id: 0,
   prompt: "",
-  timeout_seconds: 90,
+  timeout_seconds: 180,
   fail_action: "ask",
   ask_timeout_seconds: 180,
   ask_timeout_action: "allow",
@@ -386,6 +386,11 @@ function JudgeCard() {
                       if (n > 0) patch({ timeout_seconds: n });
                     }}
                   />
+                  <p className="text-muted-foreground mt-1 text-xs">
+                    思考型模型（强制 adaptive thinking 的那些）的判定耗时随命令长度而变：
+                    短命令几秒，长命令（几百上千字符的 shell 脚本）明显更久；正文为空时还会
+                    升预算重试。给短了会把「模型其实能判定」误判成超时失败——默认 180 秒。
+                  </p>
                 </Field>
                 <Field label="模型失败时（出错 / 超时 / 无法解析）">
                   <Select value={cfg.fail_action} onValueChange={(v) => patch({ fail_action: v as JudgeConfig["fail_action"] })}>

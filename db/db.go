@@ -299,6 +299,9 @@ ON CONFLICT (name) DO NOTHING`,
 	if err := d.migrateBuiltinRulePatterns(); err != nil {
 		return fmt.Errorf("migrate builtin rule patterns: %w", err)
 	}
+	if err := d.migrateJudgeTimeoutSeconds(); err != nil {
+		return fmt.Errorf("migrate judge timeout: %w", err)
+	}
 	if err := d.seedDefaultAssetInterceptRules(); err != nil {
 		return fmt.Errorf("seed asset intercept rules: %w", err)
 	}
@@ -772,6 +775,28 @@ WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
 		"禁止清空系统关键目录下的内容",
 	); err != nil {
 		return fmt.Errorf("rule %q: %w", clearName, err)
+	}
+	return d.SetSetting(flag, "done")
+}
+
+// migrateJudgeTimeoutSeconds 把模型裁决的墙钟上限从 90s 提到 180s。
+//
+// 起因：思考型模型(MiniMax-M3.1 等强制 adaptive thinking 的)的裁决耗时随
+// 命令长度而变——实测短命令 4~26 秒，长命令(几百到上千字符的 shell 脚本)
+// 明显更久；而且正文为空时会升预算重试(32768 → 65536)，重试要挤在同一个
+// 超时窗口内。90s 会把「模型其实能裁决」误判成超时失败(实测生产环境里
+// 已有 24 条这种超时记录)。
+//
+// 只改仍是默认值 90 的实例：用户自己调过的值保持不变。
+func (d *DB) migrateJudgeTimeoutSeconds() error {
+	const flag = "intercept_judge_timeout_180_v1"
+	if v, _, _ := d.GetSetting(flag); v == "done" {
+		return nil
+	}
+	if _, err := d.Exec(`
+UPDATE settings SET value='180', updated_at=now()
+WHERE key='llm_judge_timeout_seconds' AND value IN ('90','90.0',' 90 ')`); err != nil {
+		return fmt.Errorf("judge timeout: %w", err)
 	}
 	return d.SetSetting(flag, "done")
 }
