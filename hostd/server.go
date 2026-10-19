@@ -1,0 +1,492 @@
+package hostd
+
+import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"os/user"
+	"path"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/chu0119/artex/hosttools"
+)
+
+// State 任务状态。
+type State string
+
+const (
+	StateQueued    State = "queued"
+	StateRunning   State = "running"
+	StateDone      State = "done"
+	StateFailed    State = "failed"
+	StateCancelled State = "cancelled"
+)
+
+const (
+	maxLogBytes = 256 << 10 // 单个任务保留的最大日志(超出截尾)
+	binDir      = "/usr/local/bin"
+)
+
+// Job 一次安装任务。
+type Job struct {
+	ID       string    `json:"id"`
+	ToolID   string    `json:"tool_id"`
+	ToolName string    `json:"tool_name"`
+	State    State     `json:"state"`
+	ExitCode int       `json:"exit_code"`
+	Err      string    `json:"error,omitempty"`
+	StartedAt  time.Time `json:"started_at"`
+	EndedAt    time.Time `json:"ended_at,omitempty"`
+	Log      string    `json:"log"`
+
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	cancel context.CancelFunc
+}
+
+func (j *Job) append(line string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.buf.WriteString(line)
+	if j.buf.Len() > maxLogBytes {
+		// 掐掉前半段,保留尾部(安装失败原因通常在最后)
+		b := j.buf.Bytes()
+		keep := b[len(b)-maxLogBytes:]
+		j.buf.Reset()
+		j.buf.WriteString("…(前段日志已截断)…\n")
+		j.buf.Write(keep)
+	}
+	j.Log = j.buf.String()
+}
+
+func (j *Job) setState(s State) {
+	j.mu.Lock()
+	j.State = s
+	j.mu.Unlock()
+}
+
+func (j *Job) setErr(err error) {
+	if err == nil {
+		return
+	}
+	j.mu.Lock()
+	j.Err = err.Error()
+	j.mu.Unlock()
+}
+
+// Server 任务管理器 + HTTP 接口。
+type Server struct {
+	mu     sync.Mutex
+	jobs   map[string]*Job
+	sem    chan struct{} // 串行执行:apt/dpkg 不允许并发
+	pkgMgr PkgMgr
+	logger *log.Logger
+}
+
+// NewServer 构造。jobs 串行执行(容量 1)。
+func NewServer(logger *log.Logger) *Server {
+	if logger == nil {
+		logger = log.Default()
+	}
+	return &Server{
+		jobs:   map[string]*Job{},
+		sem:    make(chan struct{}, 1),
+		pkgMgr: DetectPkgMgr(),
+		logger: logger,
+	}
+}
+
+func newID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// Start 发起一次安装。toolID 必须命中 hosttools 白名单,否则拒绝。
+func (s *Server) Start(parent context.Context, toolID, proxy string) (*Job, error) {
+	tool, ok := hosttools.Lookup(toolID)
+	if !ok {
+		return nil, fmt.Errorf("未知工具 id: %q(不在白名单内)", toolID)
+	}
+	if tool.Kind == hosttools.KindManual {
+		return nil, fmt.Errorf("%s 官方只提供交互式安装器,不支持一键安装", tool.Name)
+	}
+	cleanProxy, err := ValidateProxy(proxy)
+	if err != nil {
+		return nil, err
+	}
+	if tool.AvailableInPath() {
+		return nil, fmt.Errorf("%s 已安装", tool.Name)
+	}
+
+	ctx, cancel := context.WithCancel(parent)
+	j := &Job{
+		ID: newID(), ToolID: tool.ID, ToolName: tool.Name,
+		State: StateQueued, StartedAt: time.Now(), cancel: cancel,
+	}
+	s.mu.Lock()
+	s.jobs[j.ID] = j
+	s.mu.Unlock()
+
+	s.logger.Printf("[audit] install start job=%s tool=%s proxy=%q", j.ID, tool.ID, cleanProxy)
+	go func() {
+		defer cancel()
+		s.sem <- struct{}{}
+		defer func() { <-s.sem }()
+		if ctx.Err() != nil {
+			j.setState(StateCancelled)
+			j.append("[cancel] 任务在排队时被取消\n")
+			return
+		}
+		j.setState(StateRunning)
+		code, err := s.run(ctx, j, tool, cleanProxy)
+		j.mu.Lock()
+		j.ExitCode = code
+		j.EndedAt = time.Now()
+		j.mu.Unlock()
+		switch {
+		case ctx.Err() != nil:
+			j.setState(StateCancelled)
+			j.append("[cancel] 已取消\n")
+		case err != nil:
+			j.setErr(err)
+			j.setState(StateFailed)
+			j.append(fmt.Sprintf("[fail] %v\n", err))
+		default:
+			j.setState(StateDone)
+			j.append("[ok] 安装完成\n")
+		}
+		s.logger.Printf("[audit] install end job=%s tool=%s state=%s exit=%d err=%v",
+			j.ID, tool.ID, j.State, code, err)
+	}()
+	return j, nil
+}
+
+// Get 取任务快照。
+func (s *Server) Get(id string) (*Job, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.jobs[id]
+	return j, ok
+}
+
+// List 全部任务(新→旧)。
+func (s *Server) List() []*Job {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*Job, 0, len(s.jobs))
+	for _, j := range s.jobs {
+		out = append(out, j)
+	}
+	return out
+}
+
+// Cancel 取消任务。
+func (s *Server) Cancel(id string) bool {
+	s.mu.Lock()
+	j, ok := s.jobs[id]
+	s.mu.Unlock()
+	if !ok {
+		return false
+	}
+	if j.cancel != nil {
+		j.cancel()
+		return true
+	}
+	return false
+}
+
+// ── 执行 ─────────────────────────────────────────
+
+// run 按配方执行,返回退出码与错误。
+func (s *Server) run(ctx context.Context, j *Job, tool hosttools.Tool, proxy string) (int, error) {
+	switch tool.Kind {
+	case hosttools.KindApt:
+		return s.runApt(ctx, j, tool, proxy)
+	case hosttools.KindGitHub:
+		return s.runGitHub(ctx, j, tool, proxy)
+	case hosttools.KindPip:
+		return s.runPip(ctx, j, tool, proxy)
+	}
+	return 1, fmt.Errorf("不支持的安装方式: %s", tool.Kind)
+}
+
+// execLogged 执行一条命令,输出实时追加到任务日志。
+func (s *Server) execLogged(ctx context.Context, j *Job, name string, argv []string, env []string) (int, error) {
+	j.append(fmt.Sprintf("$ %s %s\n", name, strings.Join(argv, " ")))
+	cmd := exec.CommandContext(ctx, name, argv...)
+	cmd.Env = append(os.Environ(), env...)
+	w := &logWriter{j: j}
+	cmd.Stdout, cmd.Stderr = w, w
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return -1, ctx.Err()
+	}
+	if err == nil {
+		return 0, nil
+	}
+	if ee, ok := err.(*exec.ExitError); ok {
+		return ee.ExitCode(), fmt.Errorf("%s 退出码 %d", name, ee.ExitCode())
+	}
+	return 1, err
+}
+
+type logWriter struct{ j *Job }
+
+func (w *logWriter) Write(p []byte) (int, error) {
+	w.j.append(string(p))
+	return len(p), nil
+}
+
+func (s *Server) runApt(ctx context.Context, j *Job, tool hosttools.Tool, proxy string) (int, error) {
+	if s.pkgMgr == PkgNone {
+		return 1, fmt.Errorf("本机未检测到 apt/dnf")
+	}
+	// 先刷新索引;失败不致命(可能只是某个源不可达),继续尝试安装
+	if code, err := s.execLogged(ctx, j, firstWord(aptUpdateArgv(s.pkgMgr, proxy)),
+		aptUpdateArgv(s.pkgMgr, proxy)[1:], []string{"DEBIAN_FRONTEND=noninteractive"}); err != nil {
+		j.append(fmt.Sprintf("[warn] 索引刷新失败(退出码 %d),继续尝试安装\n", code))
+	}
+	argv, err := aptArgv(tool, s.pkgMgr, proxy)
+	if err != nil {
+		return 1, err
+	}
+	return s.execLogged(ctx, j, argv[0], argv[1:], []string{"DEBIAN_FRONTEND=noninteractive"})
+}
+
+func (s *Server) runPip(ctx context.Context, j *Job, tool hosttools.Tool, proxy string) (int, error) {
+	argv := pipArgv(tool, proxy)
+	return s.execLogged(ctx, j, argv[0], argv[1:], []string{"PIP_DISABLE_PIP_VERSION_CHECK=1"})
+}
+
+// runGitHub 从 GitHub Release 取单文件二进制并装到 /usr/local/bin。
+func (s *Server) runGitHub(ctx context.Context, j *Job, tool hosttools.Tool, proxy string) (int, error) {
+	client := httpClient(proxy)
+
+	j.append(fmt.Sprintf("[*] 解析 %s 最新版本…\n", tool.Repo))
+	tag, err := latestTag(ctx, client, GitHubAPITagURL(tool))
+	if err != nil {
+		return 1, fmt.Errorf("解析最新版本失败(可配置安装代理后重试): %w", err)
+	}
+	u := GitHubAssetURL(tool, tag)
+	j.append(fmt.Sprintf("[*] 下载 %s\n", u))
+
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		return 1, fmt.Errorf("下载失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 1, fmt.Errorf("下载失败: HTTP %d", resp.StatusCode)
+	}
+	blob, err := io.ReadAll(io.LimitReader(resp.Body, 128<<20))
+	if err != nil {
+		return 1, err
+	}
+	j.append(fmt.Sprintf("[*] 已下载 %.1f MB,解压…\n", float64(len(blob))/(1<<20)))
+
+	zr, err := zip.NewReader(bytes.NewReader(blob), int64(len(blob)))
+	if err != nil {
+		return 1, fmt.Errorf("压缩包无法解析: %w", err)
+	}
+	return installFromZip(j, zr, tool)
+}
+
+func installFromZip(j *Job, zr *zip.Reader, tool hosttools.Tool) (int, error) {
+	want := tool.BinInZip
+	if want == "" {
+		want = tool.Bin
+	}
+	for _, f := range zr.File {
+		if path.Base(f.Name) != want || f.FileInfo().IsDir() {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return 1, err
+		}
+		defer rc.Close()
+		dst := filepath.Join(binDir, tool.Bin)
+		tmp := dst + ".tmp"
+		out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+		if err != nil {
+			return 1, fmt.Errorf("写入 %s 失败: %w", tmp, err)
+		}
+		if _, err := io.Copy(out, io.LimitReader(rc, 256<<20)); err != nil {
+			out.Close()
+			os.Remove(tmp)
+			return 1, err
+		}
+		if err := out.Close(); err != nil {
+			os.Remove(tmp)
+			return 1, err
+		}
+		if err := os.Chmod(tmp, 0o755); err != nil {
+			os.Remove(tmp)
+			return 1, err
+		}
+		if err := os.Rename(tmp, dst); err != nil {
+			os.Remove(tmp)
+			return 1, err
+		}
+		j.append(fmt.Sprintf("[ok] %s → %s\n", want, dst))
+		return 0, nil
+	}
+	return 1, fmt.Errorf("压缩包里找不到二进制 %q", want)
+}
+
+// ── 辅助 ─────────────────────────────────────────
+
+func firstWord(argv []string) string {
+	if len(argv) == 0 {
+		return ""
+	}
+	return argv[0]
+}
+
+func httpClient(proxy string) *http.Client {
+	tr := &http.Transport{Proxy: http.ProxyFromEnvironment}
+	if proxy != "" {
+		if pu, err := url.Parse(proxy); err == nil {
+			tr.Proxy = http.ProxyURL(pu)
+		}
+	}
+	return &http.Client{Timeout: 10 * time.Minute, Transport: tr}
+}
+
+func latestTag(ctx context.Context, client *http.Client, apiURL string) (string, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GitHub API HTTP %d", resp.StatusCode)
+	}
+	var payload struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&payload); err != nil {
+		return "", err
+	}
+	if payload.TagName == "" {
+		return "", fmt.Errorf("响应里没有 tag_name")
+	}
+	return payload.TagName, nil
+}
+
+// ── HTTP ─────────────────────────────────────────
+
+// Handler 返回挂在 Unix socket 上的 mux。
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{
+			"ok": true, "service": "artex-hostd",
+			"pkg_mgr": string(s.pkgMgr),
+			"tools":   len(hosttools.Inventory()),
+		})
+	})
+
+	mux.HandleFunc("GET /tools", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"tools": hosttools.Inventory()})
+	})
+
+	mux.HandleFunc("POST /jobs", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ToolID string `json:"tool_id"`
+			Proxy  string `json:"proxy"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req); err != nil {
+			writeJSON(w, 400, map[string]any{"error": "请求体不是合法 JSON"})
+			return
+		}
+		job, err := s.Start(r.Context(), req.ToolID, req.Proxy)
+		if err != nil {
+			writeJSON(w, 400, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 201, job)
+	})
+
+	mux.HandleFunc("GET /jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		job, ok := s.Get(r.PathValue("id"))
+		if !ok {
+			writeJSON(w, 404, map[string]any{"error": "任务不存在"})
+			return
+		}
+		writeJSON(w, 200, job)
+	})
+
+	mux.HandleFunc("POST /jobs/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		if !s.Cancel(r.PathValue("id")) {
+			writeJSON(w, 404, map[string]any{"error": "任务不存在"})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+	})
+
+	return mux
+}
+
+// Listen 建立 Unix socket 并设置权限(仅属主/属组可读写,杜绝本机其它用户触发安装)。
+func Listen(socketPath string, mode os.FileMode, group string) (net.Listener, error) {
+	_ = os.Remove(socketPath)
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
+		return nil, err
+	}
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(socketPath, mode); err != nil {
+		ln.Close()
+		return nil, err
+	}
+	if group != "" {
+		if g, err := lookupGID(group); err == nil {
+			if err := os.Chown(socketPath, 0, g); err != nil {
+				ln.Close()
+				return nil, err
+			}
+		} else {
+			ln.Close()
+			return nil, fmt.Errorf("找不到属组 %q: %w", group, err)
+		}
+	}
+	return ln, nil
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// lookupGID 把属组名解析成 gid。
+func lookupGID(name string) (int, error) {
+	g, err := user.LookupGroup(name)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(g.Gid)
+}

@@ -1,64 +1,163 @@
-// Package hosttools:宿主工具体检。
+// Package hosttools:宿主工具体检 + 安装配方。
+//
 // 二进制部署形态下,ARTEX 直接跑在操作系统里——宿主装了什么渗透工具,
 // worker 就能通过 Bash 工具直接调用什么。这里用 exec.LookPath 探测一份
 // 常用工具清单(可用/缺失+安装提示),注入 graph_overview 让模型派意图时
 // 知道家底,并通过 /api/tools/inventory 暴露给前端展示。
+//
+// 同一份清单同时驱动「一键安装」:每条工具带一个 Kind + 配方(apt 包名 /
+// GitHub Release 资产模板 / pip 包 / 仅手工),由特权助手 artex-hostd 按
+// 配方执行。**体检清单和安装器共用这一个 catalog**,不存在"页面上列了、
+// 安装器却不会装"的漂移。
+//
 // LookPath 只扫 PATH,单次微秒级,无需缓存。
 package hosttools
 
 import (
 	"os/exec"
+	"runtime"
 	"strings"
 )
 
-// Tool 一条体检结果。
+// Kind 安装方式。manual = 官方只提供交互式安装器,不做一键。
+type Kind string
+
+const (
+	KindApt    Kind = "apt"    // 系统包管理器(apt/dnf)
+	KindGitHub Kind = "github" // GitHub Release 单文件
+	KindPip    Kind = "pip"    // pip / pipx
+	KindManual Kind = "manual" // 不提供一键安装
+)
+
+// Tool 一条体检结果 + 安装配方。
 type Tool struct {
-	Name      string `json:"name"`              // 工具名(展示用)
-	Bin       string `json:"bin"`               // PATH 里探测的二进制名
-	Available bool   `json:"available"`         // 是否在 PATH
-	Purpose   string `json:"purpose"`           // 干什么用(给模型看)
-	Install   string `json:"install,omitempty"` // 缺失时的安装提示
+	ID   string `json:"id"`   // 稳定标识(与 Bin 相同)
+	Name string `json:"name"` // 工具名(展示用)
+	Bin  string `json:"bin"`  // PATH 里探测的二进制名
+
+	Available   bool   `json:"available"`
+	Installable bool   `json:"installable"`      // 能否一键安装
+	Purpose     string `json:"purpose"`          // 干什么用(给模型看)
+	Install     string `json:"install,omitempty"` // 缺失时展示的安装提示
+	Kind        Kind   `json:"kind"`
+
+	// kind=apt: 各包管理器下的包名
+	Apt string `json:"-"`
+	Dnf string `json:"-"`
+
+	// kind=github: owner/repo + 资产名模板({ver} 不带 v,{arch} = amd64|arm64)
+	// + 压缩包内二进制名(空 = 与 Bin 同名)
+	Repo      string `json:"-"`
+	AssetTmpl string `json:"-"`
+	BinInZip  string `json:"-"`
+
+	// kind=pip
+	Pip string `json:"-"`
 }
 
-// catalog 常用渗透工具目录。Bin 留空 = 与 Name 相同;
-// install 按 Debian/Ubuntu apt 给(与 deploy-linux.sh --with-tools 对齐),
-// 不在 apt 源的给官方安装指引。
+// catalog 常用渗透工具目录。安装方式优先选「自包含」的:能用 GitHub Release
+// 单文件就不依赖 go install(宿主未必有 Go 工具链)。
 var catalog = []Tool{
-	{Name: "nmap", Purpose: "端口扫描/服务指纹", Install: "apt install nmap"},
-	{Name: "masscan", Purpose: "大规模端口快扫", Install: "apt install masscan"},
-	{Name: "nuclei", Purpose: "基于模板的漏洞扫描(漏洞情报联动)", Install: "见 https://github.com/projectdiscovery/nuclei/releases 下载二进制,或 go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"},
-	{Name: "httpx", Purpose: "Web 存活/指纹批量探测(projectdiscovery 版)", Install: "go install github.com/projectdiscovery/httpx/cmd/httpx@latest"},
-	{Name: "subfinder", Purpose: "子域名枚举", Install: "go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"},
-	{Name: "sqlmap", Purpose: "SQL 注入检测与利用", Install: "apt install sqlmap"},
-	{Name: "ffuf", Purpose: "目录/参数模糊枚举", Install: "apt install ffuf"},
-	{Name: "gobuster", Purpose: "目录/DNS/vhost 爆破", Install: "apt install gobuster"},
-	{Name: "nikto", Purpose: "Web 服务器常见问题扫描", Install: "apt install nikto"},
-	{Name: "whatweb", Purpose: "Web 指纹识别", Install: "apt install whatweb"},
-	{Name: "hydra", Purpose: "在线口令爆破(ssh/登录表单等)", Install: "apt install hydra"},
-	{Name: "john", Purpose: "离线口令破解", Install: "apt install john"},
-	{Name: "hashcat", Purpose: "GPU 口令破解", Install: "apt install hashcat"},
-	{Name: "msfconsole", Purpose: "Metasploit 框架(exploit/encoder)", Install: "见 https://docs.rapid7.com/metasploit/installing-the-metasploit-framework/"},
-	{Name: "nc", Purpose: "TCP/UDP 连接与监听(反连交互)", Install: "apt install netcat-openbsd"},
-	{Name: "curl", Purpose: "HTTP 请求与调试", Install: "apt install curl"},
-	{Name: "dig", Purpose: "DNS 查询", Install: "apt install dnsutils"},
-	{Name: "python3", Purpose: "脚本执行/自定义 PoC", Install: "apt install python3"},
-	{Name: "openssl", Purpose: "TLS 证书检查/加解密", Install: "apt install openssl"},
-	{Name: "ssh", Purpose: "登录验证/隧道", Install: "apt install openssh-client"},
-	{Name: "testssl.sh", Purpose: "TLS 配置弱项扫描", Bin: "testssl", Install: "apt install testssl.sh"},
-	{Name: "wafw00f", Purpose: "WAF 识别", Install: "pip install wafw00f"},
+	{Name: "nmap", Purpose: "端口扫描/服务指纹", Kind: KindApt, Apt: "nmap", Dnf: "nmap"},
+	{Name: "masscan", Purpose: "大规模端口快扫", Kind: KindApt, Apt: "masscan", Dnf: "masscan"},
+	{Name: "sqlmap", Purpose: "SQL 注入检测与利用", Kind: KindApt, Apt: "sqlmap", Dnf: "sqlmap"},
+	{Name: "ffuf", Purpose: "目录/参数模糊枚举", Kind: KindApt, Apt: "ffuf", Dnf: "ffuf"},
+	{Name: "gobuster", Purpose: "目录/DNS/vhost 爆破", Kind: KindApt, Apt: "gobuster", Dnf: "gobuster"},
+	{Name: "nikto", Purpose: "Web 服务器常见问题扫描", Kind: KindApt, Apt: "nikto", Dnf: "nikto"},
+	{Name: "whatweb", Purpose: "Web 指纹识别", Kind: KindApt, Apt: "whatweb", Dnf: "whatweb"},
+	{Name: "hydra", Purpose: "在线口令爆破(ssh/登录表单等)", Kind: KindApt, Apt: "hydra", Dnf: "hydra"},
+	{Name: "john", Purpose: "离线口令破解", Kind: KindApt, Apt: "john", Dnf: "john"},
+	{Name: "hashcat", Purpose: "GPU 口令破解", Kind: KindApt, Apt: "hashcat", Dnf: "hashcat"},
+	{Name: "curl", Purpose: "HTTP 请求与调试", Kind: KindApt, Apt: "curl", Dnf: "curl"},
+	{Name: "openssl", Purpose: "TLS 证书检查/加解密", Kind: KindApt, Apt: "openssl", Dnf: "openssl"},
+	{Name: "python3", Purpose: "脚本执行/自定义 PoC", Kind: KindApt, Apt: "python3", Dnf: "python3"},
+	{Name: "nc", Purpose: "TCP/UDP 连接与监听(反连交互)", Kind: KindApt, Apt: "netcat-openbsd", Dnf: "nmap-ncat"},
+	{Name: "dig", Purpose: "DNS 查询", Kind: KindApt, Apt: "dnsutils", Dnf: "bind-utils"},
+	{Name: "ssh", Purpose: "登录验证/隧道", Kind: KindApt, Apt: "openssh-client", Dnf: "openssh-clients"},
+	{Name: "testssl.sh", Bin: "testssl", Purpose: "TLS 配置弱项扫描", Kind: KindApt, Apt: "testssl.sh", Dnf: "testssl"},
+
+	{Name: "nuclei", Purpose: "基于模板的漏洞扫描(漏洞情报联动)", Kind: KindGitHub,
+		Repo: "projectdiscovery/nuclei", AssetTmpl: "nuclei_{ver}_linux_{arch}.zip"},
+	{Name: "httpx", Purpose: "Web 存活/指纹批量探测(projectdiscovery 版)", Kind: KindGitHub,
+		Repo: "projectdiscovery/httpx", AssetTmpl: "httpx_{ver}_linux_{arch}.zip"},
+	{Name: "subfinder", Purpose: "子域名枚举", Kind: KindGitHub,
+		Repo: "projectdiscovery/subfinder", AssetTmpl: "subfinder_{ver}_linux_{arch}.zip"},
+
+	{Name: "wafw00f", Purpose: "WAF 识别", Kind: KindPip, Pip: "wafw00f"},
+
+	{Name: "msfconsole", Purpose: "Metasploit 框架(exploit/encoder)", Kind: KindManual,
+		Install: "官方安装包(需交互): https://docs.rapid7.com/metasploit/installing-the-metasploit-framework/"},
+}
+
+// normalize 补齐派生字段并做路径探测。
+func normalize(t Tool) Tool {
+	if t.Bin == "" {
+		t.Bin = t.Name
+	}
+	t.ID = t.Bin
+	if t.BinInZip == "" {
+		t.BinInZip = t.Bin
+	}
+	t.Installable = t.Kind != KindManual
+	return t
+}
+
+// humanInstall 给缺失项生成人类可读的安装提示(没有配方时回落到系统包名)。
+func humanInstall(t Tool) string {
+	switch t.Kind {
+	case KindApt:
+		return "apt install " + t.Apt
+	case KindGitHub:
+		return "GitHub Release: https://github.com/" + t.Repo + "/releases"
+	case KindPip:
+		return "pip install " + t.Pip
+	}
+	if t.Install != "" {
+		return t.Install
+	}
+	return ""
+}
+
+// Catalog 返回目录的副本(含派生字段,未探测可用性)。
+func Catalog() []Tool {
+	out := make([]Tool, len(catalog))
+	for i, t := range catalog {
+		out[i] = normalize(t)
+	}
+	return out
+}
+
+// Lookup 按 id 取配方;ok=false 表示不在白名单内——这是特权助手唯一的
+// 输入校验依据:凡是这里查不到的 id 一律拒绝执行。
+func Lookup(id string) (Tool, bool) {
+	for _, t := range catalog {
+		n := normalize(t)
+		if n.ID == id {
+			return n, true
+		}
+	}
+	return Tool{}, false
+}
+
+// AvailableInPath 该工具当前是否已在 PATH 内。
+func (t Tool) AvailableInPath() bool {
+	_, err := exec.LookPath(t.Bin)
+	return err == nil
 }
 
 // Inventory 探测全部目录项(顺序与 catalog 一致)。
 func Inventory() []Tool {
 	out := make([]Tool, len(catalog))
 	for i, t := range catalog {
-		t.Bin = firstNonEmpty(t.Bin, t.Name)
-		t.Available = false
-		if _, err := exec.LookPath(t.Bin); err == nil {
-			t.Available = true
-			t.Install = ""
+		n := normalize(t)
+		n.Available = false
+		if _, err := exec.LookPath(n.Bin); err == nil {
+			n.Available = true
+			n.Install = ""
+		} else {
+			n.Install = humanInstall(n)
 		}
-		out[i] = t
+		out[i] = n
 	}
 	return out
 }
@@ -97,11 +196,12 @@ func SummaryText() string {
 	return b.String()
 }
 
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
+// Arch 归一化为 Release 资产里用的架构名。
+func Arch() string {
+	switch runtime.GOARCH {
+	case "amd64", "arm64":
+		return runtime.GOARCH
+	default:
+		return runtime.GOARCH
 	}
-	return ""
 }

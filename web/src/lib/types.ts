@@ -926,6 +926,9 @@ export interface Settings {
   // 全局出口代理(http/https/socks5，可带 user:pass)，所有目标流量走它。开启流量捕获时作为
   // MITM 上游；关闭捕获时直接注入 agent 的 bash/WebFetch。空=直连。
   global_proxy?: string;
+  // 装机代理(http/https/socks5)，仅用于宿主工具安装时的 apt/curl/GitHub 下载。
+  // 与目标流量代理、搜索代理、LLM 代理完全独立。空=直连。
+  install_proxy?: string;
   python_interpreter?: string; // 自定义脚本工具的 python 解释器路径(空=运行时检测)
   workers?: number; // 并发工作 agent 数(默认3)；对之后启动的任务生效
   // 任务并发上限:同时「运行中」的任务数上限。关闭=不限;开启后新建任务超限则排队,有空位自动启动。
@@ -1612,4 +1615,45 @@ export interface InterceptExecution {
   session: string;
   seq: number;
   items: Activity[];
+}
+
+// ── 宿主环境:工具体检 + 一键安装 ──────────────────────────────
+
+/** 一条体检结果。installable=false 表示官方只提供交互式安装器（如 msfconsole）。 */
+export interface HostTool {
+  id: string;
+  name: string;
+  bin: string;
+  available: boolean;
+  installable: boolean;
+  purpose: string;
+  install?: string;
+  kind: "apt" | "github" | "pip" | "manual";
+}
+
+/** 一键安装是否可用，取决于特权助手 artex-hostd 是否在线（Docker 部署下不在线）。 */
+export interface HostenvInstaller {
+  available: boolean;
+  reason: string;
+  socket: string;
+  proxy: string;
+}
+
+export interface HostenvStatus {
+  tools: HostTool[];
+  deploy_mode: "docker" | "host";
+  installer: HostenvInstaller;
+}
+
+/** 一次安装任务。log 是累积输出，随轮询增长。 */
+export interface InstallJob {
+  id: string;
+  tool_id: string;
+  tool_name: string;
+  state: "queued" | "running" | "done" | "failed" | "cancelled";
+  exit_code: number;
+  error?: string;
+  started_at: string;
+  ended_at?: string;
+  log: string;
 }

@@ -264,6 +264,11 @@ const (
 	// (http/https/socks5). Empty = direct. Distinct from web_search_proxy (which
 	// only routes the search backend) and the per-profile LLM proxy.
 	settingGlobalProxy = "global_proxy"
+	// settingInstallProxy 是「装东西」用的出网代理(http/https/socks5,空=直连)。
+	// 只作用于宿主工具安装时的 apt / curl / GitHub 下载,与 agent 的目标流量代理
+	// (settingGlobalProxy)、搜索代理、LLM 代理完全独立——国内环境常常需要一个
+	// 能出网的代理才能装上 nuclei 这类走 GitHub Release 的工具。
+	settingInstallProxy = "install_proxy"
 	// 漏洞情报库（vulnintel）同步开关，默认开——同步自带限速、延迟启动与每轮上限，
 	// agent 的 search_vulns/get_vuln 读它；关闭只是停同步，已入库数据仍可查。
 	settingVulnIntelOn = "vulnintel_enabled"

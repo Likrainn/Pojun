@@ -24,6 +24,7 @@ import (
 	"github.com/Autumn-27/norma/transcript"
 	"github.com/chu0119/artex/agent"
 	"github.com/chu0119/artex/db"
+	"github.com/chu0119/artex/hostd"
 	"github.com/chu0119/artex/intercept"
 	"github.com/chu0119/artex/llmpool"
 	"github.com/chu0119/artex/llmrec"
@@ -829,6 +830,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/report/export", s.exportTaskDocx)
 	mux.HandleFunc("GET /api/findings/{id}/export", s.exportFindingDocx)
 	mux.HandleFunc("GET /api/tools/inventory", s.toolsInventory)
+	// 宿主环境:体检(含一键安装可用性)+ 一键安装(经特权助手 artex-hostd)
+	mux.HandleFunc("GET /api/hostenv/status", s.hostenvStatus)
+	mux.HandleFunc("POST /api/hostenv/install", s.hostenvInstall)
+	mux.HandleFunc("GET /api/hostenv/jobs/{id}", s.hostenvJob)
+	mux.HandleFunc("POST /api/hostenv/jobs/{id}/cancel", s.hostenvCancel)
 	mux.HandleFunc("GET /api/chat/mentions", s.searchChatMentions)
 	mux.HandleFunc("POST /api/chat", s.chat)
 	mux.HandleFunc("POST /api/chat/upload", s.chatUpload) // 方式1 文件上传:落到会话/任务工作目录 uploads/
@@ -3317,6 +3323,7 @@ func (s *Server) settingsPayload() map[string]any {
 		"tavily_key_set":           strings.TrimSpace(tavilyKey) != "",
 		"web_search_proxy":         proxy,                       // 独立出口代理(http/https/socks5)，空=直连
 		"global_proxy":             s.m.GlobalProxy(),           // 全局出口代理(http/https/socks5)，所有目标流量走它，空=直连
+		"install_proxy":            s.installProxy(),            // 装机代理：只用于宿主工具安装(apt/GitHub下载)，与目标流量无关
 		"python_interpreter":       strings.TrimSpace(pyStored), // 用户/自动设的值(空=用运行时检测)
 		"workers":                  s.m.Workers(),               // 并发工作 agent 数(默认3)；对之后启动的任务生效
 		"task_concurrency_enabled": concOn,                      // 任务并发上限开关(默认关)
@@ -3392,6 +3399,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		TavilyKey        *string `json:"tavily_search_api_key"`
 		WebSearchProxy   *string `json:"web_search_proxy"`   // 独立出口代理(http/https/socks5)；null=不改，""=清空
 		GlobalProxy      *string `json:"global_proxy"`       // 全局出口代理(http/https/socks5)；null=不改，""=清空(直连)
+		InstallProxy     *string `json:"install_proxy"`      // 装机代理：宿主工具安装用；null=不改，""=清空(直连)。不触发 agent 重建
 		PythonInterp     *string `json:"python_interpreter"` // 自定义脚本工具的 python 解释器路径
 		Workers          *int    `json:"workers"`            // 并发工作 agent 数(>0)；对之后启动的任务生效
 		// 任务并发上限:同时「运行中」的任务数上限。关闭=不限;开启后新建任务超限则排队,有空位自动启动。
@@ -3561,6 +3569,21 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		changed = true // capture-off egress is baked into agents at build time → rebuild
+	}
+	if req.InstallProxy != nil {
+		raw := strings.TrimSpace(*req.InstallProxy)
+		// 复用助手侧的同一套校验：只允许 http/https/socks5 且必须带 host:port，
+		// 挡掉换行/空格（该值会被拼进 apt 的 Acquire 选项）。
+		clean, err := hostd.ValidateProxy(raw)
+		if err != nil {
+			writeErr(w, 400, "安装代理无效："+err.Error())
+			return
+		}
+		if err := s.m.pg.SetSetting(settingInstallProxy, clean); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		// 只影响后续安装动作，不改变 agent 行为，无需 applyLLM 重建。
 	}
 	if req.WebSearchEnabled != nil || req.WebSearchBackend != nil || req.BraveKey != nil || req.TavilyKey != nil || req.WebSearchProxy != nil {
 		// Fill unspecified fields from current state so a partial PUT doesn't reset them.

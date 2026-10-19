@@ -46,6 +46,8 @@ import type {
   FindingsPage,
   FindingTraffic,
   FindingTrafficDetail,
+  HostenvStatus,
+  InstallJob,
   IntentAsset,
   InterceptApprovalFilter,
   InterceptApprovalRow,
@@ -850,6 +852,11 @@ export const api = {
       summary: { available: string[]; missing: { name: string; install: string }[]; hint: string };
       deploy_mode: "docker" | "host";
     }>(`/tools/inventory`),
+  // 宿主环境:体检(含一键安装可用性)+ 一键安装(由特权助手 artex-hostd 执行)
+  hostenvStatus: () => get<HostenvStatus>(`/hostenv/status`),
+  hostenvInstall: (id: string) => post<InstallJob>(`/hostenv/install`, { id }),
+  hostenvJob: (jobId: string) => get<InstallJob>(`/hostenv/jobs/${jobId}`),
+  hostenvCancel: (jobId: string) => post<{ ok: boolean }>(`/hostenv/jobs/${jobId}/cancel`, {}),
   notifyChannels: () =>
     get<{ channels: NotificationChannel[] }>(`/notify/channels`).then((r) => arr(r.channels)),
   notifyCreateChannel: (payload: {
