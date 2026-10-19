@@ -241,7 +241,9 @@ func (s *Server) toolListLLMProfiles() actool.CoreTool {
 
 func (s *Server) toolSpawnTask() actool.CoreTool {
 	return wrTool("spawn_task",
-		"新建一个子任务并启动探索引擎，返回 task_id。用于把一件事(如一道题/一个目标)派成独立任务。parent_ref 可选：填当前编排关联的父任务 id 做父子关联。",
+		"新建一个子任务并启动探索引擎，返回 task_id。用于把一件事(如一道题/一个目标)派成独立任务。parent_ref 可选：填当前编排关联的父任务 id 做父子关联。"+
+			"**一个任务 = 一个目标 + 它的完整渗透链**(资产发现→服务识别→漏洞探测→验证→报告)：同一目标的多个阶段必须写进同一个任务的 goal，"+
+			"不要按阶段拆成多个任务并行——那会重复扫描同一批资产，且后一个任务开局没有任何前置资产。只有多个互不依赖的目标才建多个任务。",
 		objSchema(map[string]any{
 			"description":            strParam("任务描述(简短标题)"),
 			"goal":                   strParam("任务目标(要达成什么)"),
@@ -514,7 +516,7 @@ func (s *Server) seedOrchestrationTools() {
 // reaches an old DB otherwise. Preserves each tool's agent binding + enabled flag.
 // Bump the flag whenever these tools' schemas/descriptions change in code.
 func (s *Server) refreshBuiltinToolSchemas() {
-	const flag = "tool_schema_refresh_v7_list_facts_paging"
+	const flag = "tool_schema_refresh_v8_spawntask_one_target"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
