@@ -187,6 +187,11 @@ type TaskNodeDTO struct {
 	SourceTaskID string `json:"source_task_id,omitempty"`
 	Inherited    bool   `json:"inherited,omitempty"`
 	DeleteReason string `json:"delete_reason,omitempty"` // 意图假删除(state='deleted')时的删除原因
+	// BlockedReason 是意图**为什么停**的说明（exhausted/blocked/stopped 都可能有）：
+	// 撞步数上限、运行超时、任务级超时收尾、被规划者终止、执行出错……
+	// 之前这些原因完全不落库，界面上只看到一个空状态——用户看到「一堆子任务异常
+	// 中断」却不知道为什么中断。
+	BlockedReason string `json:"blocked_reason,omitempty"`
 }
 
 func taskNodeDTO(n *db.Node) TaskNodeDTO {
@@ -195,6 +200,7 @@ func taskNodeDTO(n *db.Node) TaskNodeDTO {
 		Type:         n.Kind,
 		Payload:      rawString(n.Payload),
 		DeleteReason: n.DeleteReason,
+		BlockedReason: n.BlockedReason,
 		Priority:     n.Priority,
 		State:        n.State,
 		Origin:       n.Origin,

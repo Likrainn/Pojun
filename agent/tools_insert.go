@@ -526,6 +526,29 @@ func (t *ToolSet) listUntestedAssets() actool.CoreTool {
 	)
 }
 
+// dslHint turns a DSL error into an actionable correction. The DSL error text
+// alone leaves the agent guessing the same wrong syntax again (observed: 42
+// failed list_assets calls, most of them the same "ip doesn't support >="
+// mistake, because nothing told it that CIDR lookups go through cidr=...).
+func dslHint(errMsg string) string {
+	switch {
+	case strings.Contains(errMsg, "不支持运算符"):
+		return "提示：字符串字段(ip/domain/url 等)只支持 = == !=（模糊/精确/排除），不支持 > >= < <=；" +
+			"要按数值比就用数字字段(port/status_code)；要按网段查用 cidr=10.10.0.0/16。"
+	case strings.Contains(errMsg, "DSL 语法错误"):
+		return "提示：表达式形如 字段=值，用 AND/OR 组合、括号分组；字段与运算符之间不要有空格；" +
+			"值里有空格或特殊字符时用引号包起来。"
+	case strings.Contains(errMsg, "未知字段"):
+		return "提示：可用字段：domain、root_domain、ip、cidr、url、page_title、icp、service_name、" +
+			"app_name、method、service_type、record_type、technology、port、status_code、company_id、task_id。"
+	case strings.Contains(errMsg, "需要整数值"):
+		return "提示：port/status_code/company_id 是整数，写成 port==443（用 == 或 =，不要加引号）。"
+	case strings.Contains(errMsg, "cidr"):
+		return "提示：cidr 要写成网段，如 10.10.0.0/16。"
+	}
+	return "提示：DSL 形如 字段=值；多个条件用 AND/OR 连接。字段清单见本工具描述。"
+}
+
 // listAssets lets an agent query the asset table.
 func (t *ToolSet) listAssets() actool.CoreTool {
 	return readTool(
@@ -533,8 +556,9 @@ func (t *ToolSet) listAssets() actool.CoreTool {
 		"查询资产库：DSL 表达式搜索，或按 id/ids 直取；支持分页。只返回【本任务及直接关联任务】测试范围内的资产。\n"+
 			"DSL：field=value 模糊(ILIKE) | field==value 精确 | field!=value 排除 | 数字字段支持 > >= < <= | 裸词=全文模糊；AND/OR 组合(AND 优先级高)，可用括号分组。资产类型用独立 type 参数，不写进 DSL。\n"+
 			"未传 id/ids 时 dsl 必须非空（不允许无条件全量查询）。\n"+
-			"可用字段：domain(根/子/服务域名)、root_domain、ip、url、page_title、icp、service_name、app_name、method(如 GET/POST)、service_type(http|other)、record_type(如 A/CNAME)、technology(数组，=模糊 ==精确)、port/status_code/company_id(整数)。\n"+
-			"示例：status_code>=400 AND technology=shiro ；(port==80 OR port==443) AND technology=nginx",
+			"可用字段：domain(根/子/服务域名)、root_domain、ip、cidr(网段，如 10.10.0.0/16)、url、page_title、icp、service_name、app_name、method(如 GET/POST)、service_type(http|other)、record_type(如 A/CNAME)、technology(数组，=模糊 ==精确)、port/status_code/company_id(整数)。\n"+
+			"**查某个网段用 cidr=10.10.0.0/16，不要用 ip>=10.0.0.0**（ip 是字符串字段，不支持大小比较）。\n"+
+			"示例：cidr=10.10.0.0/16 ；status_code>=400 AND technology=shiro ；(port==80 OR port==443) AND technology=nginx",
 		obj(map[string]any{
 			"dsl":    str(`DSL 查询表达式（语法/字段见工具描述）。未传 id/ids 时必须非空。`),
 			"type":   str("资产类型过滤：root_domain|ip|subdomain|app|service|endpoint（独立字段，可与 dsl 叠加；单独 type 不足以查询，仍需 dsl）"),
@@ -573,7 +597,10 @@ func (t *ToolSet) listAssets() actool.CoreTool {
 				return actool.Errorf("未传 id/ids 时 dsl 不能为空：不允许无条件查询全部资产，请提供查询条件"), nil
 			}
 			if err != nil {
-				return actool.Errorf("DSL 错误: " + err.Error()), nil
+				// DSL 错误必须**可执行**：只回一句「DSL 错误: 字符串字段 ip 不支持运算符 >=」
+				// 的话，agent 只会再猜一次同样的写法（实测 42 次这类错误）。补上
+				// 「正确写法」提示，agent 才能自己纠正。
+				return actool.Errorf("DSL 错误: " + err.Error() + "\n" + dslHint(err.Error())), nil
 			}
 			return jsonResult(map[string]any{
 				"count":  len(assets),

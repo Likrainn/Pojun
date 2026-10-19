@@ -476,6 +476,18 @@ func (e *Engine) releaseWorkControl(intentID int64, run *workExecution, action s
 	e.workMu.Unlock()
 }
 
+// truncateStopReason keeps the stored reason short and single-line so the UI can
+// show it in a tooltip without a wall of text.
+func truncateStopReason(s string) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	const max = 300
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
+}
+
+// transitionIntentState atomically moves an intent from expected to state.
 func transitionIntentState(store *db.ExplorationStore, intentID int64, expected, state string) error {
 	changed, err := store.CompareAndSetIntentState(intentID, expected, state)
 	if err != nil {
@@ -1102,6 +1114,8 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	if ectx.Err() != nil && e.isSettling(t.ID) {
 		if err := transitionIntentState(t.Store, intent.ID, "running", "exhausted"); err != nil {
 			log.Printf("[worker %s] task %s 意图 #%d 超时收尾状态落库失败: %v", name, t.ID, intent.ID, err)
+		} else {
+			_ = t.Store.SetIntentStopReason(intent.ID, db.IntentStopTaskTimeout)
 		}
 		log.Printf("[worker %s] task %s 意图 #%d 因任务超时收尾结束(exhausted)，写回 %s", name, t.ID, intent.ID, wrote)
 		e.touch(t.ID)
@@ -1112,6 +1126,8 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	if ectx.Err() != nil && isTerminalStatus(e.m.TaskStatus(t.ID)) {
 		if err := transitionIntentState(t.Store, intent.ID, "running", "stopped"); err != nil {
 			log.Printf("[worker %s] task %s 意图 #%d 终态停止落库失败: %v", name, t.ID, intent.ID, err)
+		} else {
+			_ = t.Store.SetIntentStopReason(intent.ID, db.IntentStopTaskDone)
 		}
 		log.Printf("[worker %s] task %s 意图 #%d 因任务已完成而取消(stopped)", name, t.ID, intent.ID)
 		e.touch(t.ID)
@@ -1121,6 +1137,8 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	if killed {
 		if err := transitionIntentState(t.Store, intent.ID, "running", "stopped"); err != nil {
 			log.Printf("[worker %s] task %s 意图 #%d planner 停止落库失败: %v", name, t.ID, intent.ID, err)
+		} else {
+			_ = t.Store.SetIntentStopReason(intent.ID, db.IntentStopKilled)
 		}
 		log.Printf("[worker %s] task %s 意图 #%d 被终止(stopped)", name, t.ID, intent.ID)
 		e.touch(t.ID)
@@ -1132,15 +1150,27 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	}
 	// terminal分流：撞步数上限 ≠ 完成。max_turns→exhausted（规划者据此知道这个方向
 	// 试过但没真正做完、需换角度，而非当成已覆盖永久跳过）；出错→blocked；正常→done。
+	//
+	// 每条路径都落一个原因码到 blocked_reason：之前 exhausted/blocked/stopped 的
+	// 原因**完全没落库**，界面上只看到一个空状态——用户看到「一堆子任务异常中断」
+	// 却不知道为什么是中断的。规划者也能据此判断该不该重试。
 	state := "done"
+	stopReason := ""
 	switch {
 	case err != nil:
 		state = "blocked"
+		stopReason = db.IntentStopError
+		if isTaskLLMChainExhausted(err) {
+			stopReason = db.IntentBlockedLLMQuota
+		}
+		stopReason = stopReason + ": " + truncateStopReason(err.Error())
 	case reason == harness.ReasonMaxTurns:
 		state = "exhausted"
+		stopReason = db.IntentStopMaxTurns
 		log.Printf("[worker %s] intent %d 撞步数上限(exhausted)，本次写回 %s", name, intent.ID, wrote)
 	case reason == harness.ReasonTimeout:
 		state = "exhausted"
+		stopReason = db.IntentStopTimeout
 		log.Printf("[worker %s] intent %d 运行超时(exhausted)，收尾后写回 %s", name, intent.ID, wrote)
 	}
 	if state == "blocked" && isTaskLLMChainExhausted(err) {
@@ -1148,6 +1178,10 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	} else {
 		if stateErr := transitionIntentState(t.Store, intent.ID, "running", state); stateErr != nil {
 			log.Printf("[worker %s] task %s 意图 #%d 终态 %s 落库失败: %v", name, t.ID, intent.ID, state, stateErr)
+		} else if stopReason != "" {
+			if err := t.Store.SetIntentStopReason(intent.ID, stopReason); err != nil {
+				log.Printf("[worker %s] task %s 意图 #%d 终态原因落库失败: %v", name, t.ID, intent.ID, err)
+			}
 		}
 	}
 	log.Printf("[worker %s] task %s 意图 #%d 结束: %s (写回 %s)", name, t.ID, intent.ID, state, wrote)

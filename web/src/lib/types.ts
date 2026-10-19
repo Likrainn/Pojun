@@ -422,6 +422,7 @@ export interface TaskNode {
   source_task_id?: string;
   inherited?: boolean;
   delete_reason?: string; // 意图假删除(state='deleted')时的删除原因
+  blocked_reason?: string; // 意图为什么停（撞步数上限/运行超时/任务收尾/被终止/出错）
 }
 
 // 播报板一页:按创建顺序分页的节点 + 这一页涉及的边 + 边另一端的节点(refs,按 id 索引),

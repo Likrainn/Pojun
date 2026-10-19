@@ -50,7 +50,10 @@ func (t *ToolSet) searchVulns() actool.CoreTool {
 			"product": str("组件名，如 httpd / nginx / thinkphp / tomcat / weblogic；支持 % 通配"),
 			"vendor":  str("厂商名过滤(可选)，如 apache / oracle，用于区分同名组件"),
 			"version": str("目标版本号(可选，如 2.4.49)：命中过 CPE 版本段的结果会标记 version_seen_in_criteria"),
-			"limit":   obj(map[string]any{"type": "integer", "description": "返回条数上限(默认 20，最大 50)"}),
+			// limit 是整数参数。之前误写成 obj(...)（嵌套对象），校验器于是要求
+			// 模型传 `limit: {}` —— 实测 41 次调用全部报
+			// "invalid tool input: limit: expected object"，这个工具等于废了一半。
+			"limit":   intp("返回条数上限(默认 20，最大 50)"),
 		}, "product"),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
 			if vulnintelStore == nil {
