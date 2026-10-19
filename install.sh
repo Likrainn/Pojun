@@ -538,55 +538,43 @@ persist_install_proxy(){
   [ -f "$INSTALL_DIR/config.json" ] || { warn "找不到 config.json，跳过写入运行期代理"; return 0; }
   command -v psql >/dev/null 2>&1 || { warn "没有 psql，跳过写入运行期代理"; return 0; }
 
-  # 从 config.json 取连接参数（python3 或 grep 都能解，优先 python3）
-  local db_host db_port db_user db_pass db_name
-  if command -v python3 >/dev/null 2>&1; then
-    eval "$(python3 - "$INSTALL_DIR/config.json" <<'PYEOF'
-import json, shlex, sys
+  # 整个写入过程交给 Python 完成——不用 bash 变量在中间传递连接参数。
+  #
+  # 之前拆成两步（bash eval 读 config.json → 再传给 psql）踩了两个坑：
+  #   1. `eval "$(python3 ... <<'HEREDOC' ... HEREDOC
+  #      )"` 这种「heredoc 套在 $() 里」的写法，heredoc 体与命令替换的边界
+  #      在 bash 里很难伺候——实测 eval 静默失败、db_pass 变空串，于是
+  #      psql 连不上、整个写入失败而外层只看到「写入失败」。
+  #   2. psql 的 `:'proxy'` 变量替换在 `-c` 参数里**不生效**（那是 -f 读文件
+  #      或交互式会话才有的路径），会报 "syntax error at or near :"。
+  # 现在：Python 读 config.json 取连接参数、拼好并转义 SQL、调用 psql。
+  if python3 - "$INSTALL_DIR/config.json" "$INSTALL_PROXY" <<'PYEOF'
+import json, os, subprocess, sys
+
+cfg_path, proxy = sys.argv[1], sys.argv[2]
 try:
-    d = json.load(open(sys.argv[1])).get("database", {})
+    d = json.load(open(cfg_path)).get("database", {}) or {}
 except Exception:
     d = {}
-for k in ("host", "port", "user", "password", "dbname"):
-    v = str(d.get(k, ""))
-    print(f"db_{k}={shlex.quote(v)}")
-PYEOF
-)"
-  fi
-  db_host="${db_host:-127.0.0.1}"
-  db_port="${db_port:-5432}"
-  db_user="${db_user:-artex}"
-  db_pass="${db_pass:-}"
-  db_name="${db_name:-artex}"
+host = str(d.get("host") or "127.0.0.1")
+port = str(d.get("port") or 5432)
+user = str(d.get("user") or "artex")
+dbname = str(d.get("dbname") or "artex")
+password = str(d.get("password") or "")
 
-  # 等服务把 schema 建好（settings 表是 migration 建的）
-  local i
-  for i in $(seq 1 30); do
-    if PGPASSWORD="$db_pass" psql -h "$db_host" -p "$db_port" -U "$db_user" -d "$db_name" \
-         -tAc "SELECT 1 FROM settings LIMIT 1" >/dev/null 2>&1; then
-      break
-    fi
-    sleep 1
-  done
-
-  # 写入 setting。
-  #
-  # 不用 psql 的 `:'proxy'` 变量替换：`-c` 的参数**不走 psql 的变量替换**
-  # （那是 `-f` 读文件、或交互式会话才有的路径），实测直接报
-  # "syntax error at or near :"。所以这里用 Python 生成完整 SQL——值做
-  # 标准的 SQL 字符串转义（代理地址已过 URL 校验，但仍不把原始串直接拼）。
-  if PGPASSWORD="$db_pass" python3 - "$db_host" "$db_port" "$db_user" "$db_name" "$INSTALL_PROXY" <<'PYEOF'
-import json, subprocess, sys
-host, port, user, dbname, proxy = sys.argv[1:6]
 # SQL 字符串字面量转义:单引号翻倍。代理地址已过 URL 校验(仅 http/https/socks5
 # 且必须带 host:port),不含控制字符。
 lit = "'" + proxy.replace("'", "''") + "'"
 sql = ("INSERT INTO settings(key, value) VALUES ('install_proxy', %s) "
        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()" % lit)
+
+env = dict(os.environ)
+if password:
+    env["PGPASSWORD"] = password
 p = subprocess.run(
     ["psql", "-h", host, "-p", port, "-U", user, "-d", dbname,
      "-v", "ON_ERROR_STOP=1", "-c", sql],
-    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
 )
 sys.exit(p.returncode)
 PYEOF
