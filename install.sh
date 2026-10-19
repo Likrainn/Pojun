@@ -143,7 +143,11 @@ ok "部署形态: $MODE  目标目录: $INSTALL_DIR"
 
 # ── 解析版本 ─────────────────────────────────────
 resolve_version(){
-  [ "$VERSION" = "latest" ] || return
+  # 注意：这里不能写成 `[ "$VERSION" = latest ] || return`——测试为假时 return 会带着
+  # 测试的退出码 1 返回，set -e 会当场终止脚本。显式指定 --version 的调用必踩。
+  if [ "$VERSION" != "latest" ]; then
+    return 0
+  fi
   VERSION="$("${CURL[@]}" "https://api.github.com/repos/$REPO/releases/latest" \
     | grep -oE '"tag_name": *"[^"]+"' | head -1 | cut -d'"' -f4)" || VERSION=""
   [ -n "$VERSION" ] || die "无法获取最新版本号（检查网络或用 --install-proxy 指定代理）"
