@@ -225,21 +225,32 @@ func Inventory() []Tool {
 // Summary 注入 graph_overview / API 的紧凑形态:
 // available 是可直接调用的二进制名清单;missing 带安装提示;
 // hint 给模型一句话用法约定。
+//
+// available 里每项都带**用途**（"name: 用途"），不只给名字。
+// 理由很实际：目录里现在有 30+ 个工具，模型只看到名字（chisel / dalfox /
+// feroxbuster…）根本判断不出该在什么场景调哪一个，只能瞎试或者干脆不用。
+// 带上用途后"派意图选手段以家底为准"才真正成立。
 func Summary() map[string]any {
 	inv := Inventory()
 	avail := make([]string, 0, len(inv))
-	missing := make([]map[string]string, 0, len(inv))
+	missing := make([]string, 0, len(inv))
 	for _, t := range inv {
 		if t.Available {
-			avail = append(avail, t.Bin)
+			if t.Purpose != "" {
+				avail = append(avail, t.Bin+": "+t.Purpose)
+			} else {
+				avail = append(avail, t.Bin)
+			}
 		} else {
-			missing = append(missing, map[string]string{"name": t.Name, "install": t.Install})
+			// 缺失项只给名字——安装提示是给人看的（宿主环境页），模型既不能装
+			// 也不需要知道怎么装，给它 27 条安装命令只是每轮都在烧上下文。
+			missing = append(missing, t.Name)
 		}
 	}
 	return map[string]any{
 		"available": avail,
 		"missing":   missing,
-		"hint":      "available 是本机 PATH 里可直接经 Bash 调用的工具;missing 里的工具本机没有,派意图选手段时以可用工具为准,不要臆测缺失工具的存在。需要缺失工具时在意图/小结里向用户提示安装命令,不要自行安装。",
+		"hint":      "available 是本机 PATH 里可直接经 Bash 调用的工具，格式为「命令名: 用途」——派意图选手段时按用途挑，别只认得名字；missing 是本机没有的工具，不要臆测它们的存在。需要缺失工具时在意图/小结里向用户提示安装命令，不要自行安装。",
 	}
 }
 
