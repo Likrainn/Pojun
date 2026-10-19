@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -72,8 +73,18 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	hs := hostd.NewServer(ctx, log.New(os.Stderr, "", log.LstdFlags))
+	hs.Version = version
+	// 自身路径用于「自我换装」：改了名/软链也认得出真实文件。
+	if exe, runErr := os.Executable(); runErr == nil {
+		if resolved, e := filepath.EvalSymlinks(exe); e == nil {
+			exe = resolved
+		}
+		hs.SelfPath = exe
+	}
+
 	srv := &http.Server{
-		Handler:           hostd.NewServer(ctx, log.New(os.Stderr, "", log.LstdFlags)).Handler(),
+		Handler:           hs.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

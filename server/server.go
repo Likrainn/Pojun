@@ -260,6 +260,9 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	s.restoreTaskRuntimes()
 	go s.reconcileConcurrency()
 	s.startTaskArchiveWorker()
+	// 让特权安装助手跟上主程序版本：它装在 root 拥有的 /usr/local/bin，
+	// 主服务写不进去，只能由它自己换装——这里只负责发现版本不一致并通知。
+	s.StartHostdReconcile()
 	s.wireInterceptReviewer() // LLM 兜底审批:未命中拦截规则的命令交给模型判定
 	return s
 }

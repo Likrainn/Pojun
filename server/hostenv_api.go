@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/chu0119/artex/hosttools"
+	"github.com/chu0119/artex/selfupdate"
 )
 
 // 默认 socket 路径,与 hostd 单元里的 -socket 一致;可用环境变量覆盖。
@@ -189,4 +191,83 @@ func (e hostdUnavailable) Error() string { return e.msg }
 
 func errConnectHostd(err error) error {
 	return hostdUnavailable{"宿主助手不可用（未安装 artex-hostd，或当前是 Docker 部署）: " + err.Error()}
+}
+
+// hostdVersion 查询助手版本。ok=false 表示助手不在（Docker 部署 / 未安装 / 未启动）。
+func (s *Server) hostdVersion(ctx context.Context) (string, bool) {
+	body, code, err := s.hostdCall(ctx, http.MethodGet, "/version", nil)
+	if err != nil || code != http.StatusOK {
+		return "", false
+	}
+	var v struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(body, &v) != nil || strings.TrimSpace(v.Version) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(v.Version), true
+}
+
+// StartHostdReconcile 在后台把助手版本对齐到主程序版本。
+//
+// 为什么需要它：助手 artex-hostd 装在 root 拥有的 /usr/local/bin，主服务受
+// ProtectSystem=strict 限制写不进去，所以**助手的升级只能由助手自己完成**。
+// 主程序每次自我升级后重启，这里发现版本落后就通知助手自我换装；助手会自己从
+// 官方 Release 下载并按 SHA256SUMS 校验，主程序能影响的只有"装哪个已发布版本"。
+func (s *Server) StartHostdReconcile() {
+	go func() {
+		// 等主服务与助手都稳定下来，别和启动抢资源。
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-time.After(45 * time.Second):
+		}
+		for attempt := 1; attempt <= 5; attempt++ {
+			if s.reconcileHostdOnce() {
+				return
+			}
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-time.After(30 * time.Second):
+			}
+		}
+		log.Printf("[hostd] 版本对齐放弃重试（助手始终不可达）")
+	}()
+}
+
+// reconcileHostdOnce 做一次版本对齐。返回 true 表示无需再重试。
+func (s *Server) reconcileHostdOnce() bool {
+	want := strings.TrimSpace(BuildVersion)
+	// dev / git describe 构建（带后缀）不参与对齐，避免开发版覆盖正式助手。
+	if _, ok := selfupdate.CompareVersions(want, want); !ok {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+	defer cancel()
+
+	got, ok := s.hostdVersion(ctx)
+	if !ok {
+		return false // 助手还没起来，稍后重试
+	}
+	if got == want {
+		return true
+	}
+	log.Printf("[hostd] 版本不一致（助手 %s / 主程序 %s），请求助手自我换装", got, want)
+
+	payload, _ := json.Marshal(map[string]string{
+		"tag":   want,
+		"proxy": s.maintenanceProxy(),
+	})
+	body, code, err := s.hostdCall(ctx, http.MethodPost, "/self-upgrade", payload)
+	if err != nil {
+		log.Printf("[hostd] 请求自我换装失败：%v", err)
+		return false
+	}
+	if code/100 != 2 {
+		log.Printf("[hostd] 请求自我换装被拒（HTTP %d）：%s", code, strings.TrimSpace(string(body)))
+		return true // 被拒（版本号非法 / 已在升级中）重试无益
+	}
+	log.Printf("[hostd] 已请求换装到 %s，助手会自行重启", want)
+	return true
 }

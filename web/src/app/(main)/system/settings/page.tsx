@@ -287,7 +287,7 @@ export default function SystemSettingsPage() {
           高度自动平衡填充，避免高矮不齐留大片空白），组标题自然通栏。 */}
       <section className="flex flex-col gap-2">
         <h2 className="font-semibold text-sm">维护</h2>
-        <div className="columns-1 gap-4 md:gap-6 lg:columns-2">
+        <div className="grid items-start gap-4">
             <UpdateCard />
         </div>
       </section>
@@ -297,8 +297,8 @@ export default function SystemSettingsPage() {
         <p className="text-muted-foreground text-xs leading-relaxed">
           ARTEX 有<b>四条互不相干</b>的出网路径，别混：<b>目标流量</b>走「全局代理」（隐藏源 IP）；<b>搜索出网</b>走「网络搜索」里的代理；<b>模型出网</b>走 LLM 配置里的代理（见「系统 → LLM」）；<b>装东西</b>走「装机代理」（见「系统 → 宿主环境」）。需要轮换出口另有「系统 → 代理池」。
         </p>
-        <div className="columns-1 gap-4 md:gap-6 lg:columns-2">
-          <Card className="mb-4 break-inside-avoid md:mb-6">
+        <div className="grid items-start gap-4 md:grid-cols-2">
+          <Card className="min-w-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <RadioTowerIcon className="size-4" />
@@ -338,7 +338,7 @@ export default function SystemSettingsPage() {
               </p>
             </CardContent>
           </Card>
-          <Card className="mb-4 break-inside-avoid md:mb-6">
+          <Card className="min-w-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <NetworkIcon className="size-4" />
@@ -381,7 +381,7 @@ export default function SystemSettingsPage() {
               </Button>
             </CardContent>
           </Card>
-          <Card className="mb-4 break-inside-avoid md:mb-6">
+          <Card className="min-w-0 md:col-span-2">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <SearchIcon className="size-4" />
@@ -571,8 +571,8 @@ export default function SystemSettingsPage() {
 
       <section className="flex flex-col gap-2">
         <h2 className="font-semibold text-sm">Agent 行为</h2>
-        <div className="columns-1 gap-4 md:gap-6 lg:columns-2">
-          <Card className="mb-4 break-inside-avoid md:mb-6">
+        <div className="grid items-start gap-4 md:grid-cols-2">
+          <Card className="min-w-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <RadioTowerIcon className="size-4" />
@@ -598,7 +598,7 @@ export default function SystemSettingsPage() {
               />
             </CardContent>
           </Card>
-          <Card className="mb-4 break-inside-avoid md:mb-6">
+          <Card className="min-w-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <RadioTowerIcon className="size-4" />
@@ -625,7 +625,7 @@ export default function SystemSettingsPage() {
               />
             </CardContent>
           </Card>
-          <Card className="mb-4 break-inside-avoid md:mb-6">
+          <Card className="min-w-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <ShieldAlertIcon className="size-4" />
@@ -669,8 +669,8 @@ export default function SystemSettingsPage() {
 
       <section className="flex flex-col gap-2">
         <h2 className="font-semibold text-sm">运行时</h2>
-        <div className="columns-1 gap-4 md:gap-6 lg:columns-2">
-          <Card className="mb-4 break-inside-avoid md:mb-6">
+        <div className="grid items-start gap-4 md:grid-cols-2">
+          <Card className="min-w-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <RadioTowerIcon className="size-4" />
@@ -699,7 +699,7 @@ export default function SystemSettingsPage() {
               </div>
             </CardContent>
           </Card>
-          <Card className="mb-4 break-inside-avoid md:mb-6">
+          <Card className="min-w-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <CpuIcon className="size-4" />
@@ -727,7 +727,7 @@ export default function SystemSettingsPage() {
               </div>
             </CardContent>
           </Card>
-          <Card className="mb-4 break-inside-avoid md:mb-6">
+          <Card className="min-w-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <KeyboardIcon className="size-4" />
@@ -762,8 +762,8 @@ export default function SystemSettingsPage() {
 
       <section className="flex flex-col gap-2">
         <h2 className="font-semibold text-sm">实验功能</h2>
-        <div className="columns-1 gap-4 md:gap-6 lg:columns-2">
-          <Card className="mb-4 break-inside-avoid md:mb-6">
+        <div className="grid items-start gap-4">
+          <Card className="min-w-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <FlaskConicalIcon className="size-4" />

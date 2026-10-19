@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chu0119/artex/hosttools"
@@ -99,6 +100,14 @@ type Server struct {
 	// base 是任务的父 ctx。**绝不能**用 HTTP 请求的 ctx:handler 返回后它立刻被取消,
 	// 排队中的任务会当场变成 cancelled(实测踩过)。
 	base context.Context
+
+	// Version 是助手的构建版本,SelfPath 是它自己的可执行文件(由 main 注入)。
+	// 助手装在 root 拥有的 /usr/local/bin,主服务被 ProtectSystem=strict 锁死写不进去,
+	// 所以「助手自身的升级」只能由助手自己做。
+	Version  string
+	SelfPath string
+
+	upgrading atomic.Bool
 }
 
 // NewServer 构造。base 为进程级生命周期 ctx(随守护进程退出而取消);传 nil 用 Background。
@@ -410,9 +419,53 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{
 			"ok": true, "service": "artex-hostd",
+			"version": s.Version,
 			"pkg_mgr": string(s.pkgMgr),
 			"tools":   len(hosttools.Inventory()),
 		})
+	})
+
+	// /version 供主服务做版本对齐：主程序自我升级后会拿自己的版本号来敲门，
+	// 助手发现自己落后就自我换装（见 UpgradeSelf 的注释：只能由它自己来做）。
+	mux.HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"service": "artex-hostd", "version": s.Version})
+	})
+
+	mux.HandleFunc("POST /self-upgrade", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Tag   string `json:"tag"`
+			Proxy string `json:"proxy"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&req); err != nil {
+			writeJSON(w, 400, map[string]any{"error": "请求体不是合法 JSON"})
+			return
+		}
+		if !ValidVersionTag(req.Tag) {
+			writeJSON(w, 400, map[string]any{"error": "版本号格式非法: " + req.Tag})
+			return
+		}
+		cleanProxy, err := ValidateProxy(req.Proxy)
+		if err != nil {
+			writeJSON(w, 400, map[string]any{"error": err.Error()})
+			return
+		}
+		if !s.upgrading.CompareAndSwap(false, true) {
+			writeJSON(w, 409, map[string]any{"error": "已有一个自我换装在进行中"})
+			return
+		}
+		writeJSON(w, 202, map[string]any{"ok": true, "target": req.Tag})
+		// 用进程级 ctx：请求一返回它就被取消，下载会当场中断（同一课踩过一次）。
+		go func() {
+			if err := s.UpgradeSelf(s.base, req.Tag, cleanProxy); err != nil {
+				log.Printf("[hostd] 自我换装失败：%v", err)
+				s.upgrading.Store(false)
+				return
+			}
+			log.Printf("[hostd] 已换装到 %s，退出由 systemd 重启", req.Tag)
+			// 留一点时间把日志刷出去再退；Restart=always 会把新版本拉起来。
+			time.Sleep(300 * time.Millisecond)
+			os.Exit(0)
+		}()
 	})
 
 	mux.HandleFunc("GET /tools", func(w http.ResponseWriter, r *http.Request) {
