@@ -187,6 +187,23 @@ function fmtDuration(sec: number): string {
 // taskDuration is the task's run duration in seconds: created → now while running,
 // created → completion for a finished task, else created → last activity. 0 when it
 // never ran (no activity yet).
+// taskStalled 判断一个「running 但 0 个 Worker」的任务是否疑似卡住。
+//
+// 判据是 last_activity_unix（最后一次 planner/worker 活动）距今超过阈值。
+// 阈值取 20 分钟：planner 心跳是 10 分钟，所以正常情况下最长 10 分钟就该有
+// 一次活动；20 分钟说明连心跳都没生效——多半是某一轮规划卡住把 runRound
+// 堵死了，后续唤醒全进不来。
+//
+// 刚启动的任务还没有 last_activity（0/undefined），那不算卡住——它可能只是
+// 还没跑第一轮。
+const TASK_STALL_SECONDS = 20 * 60;
+
+function taskStalled(task: Task, nowSec: number): boolean {
+  const last = task.last_activity_unix ?? 0;
+  if (!last) return false;
+  return nowSec - last > TASK_STALL_SECONDS;
+}
+
 function taskDuration(task: Task, nowSec: number): number {
   const start = task.created_unix ?? 0;
   if (!start) return 0;
@@ -1242,6 +1259,22 @@ const TaskRow = React.memo(function TaskRow({
       <TableCell className="text-center text-xs tabular-nums">
         {task.in_flight && task.in_flight > 0 ? (
           <span className="font-medium text-foreground">{task.in_flight}</span>
+        ) : task.status === "running" && taskStalled(task, nowSec) ? (
+          // 0 个 Worker 但任务还是 running —— 多半是 planner 卡住了。
+          //
+          // 为什么要有这个提示：planner 的规划轮是串行的，某一轮卡住（比如上游
+          // 半开连接）就再也不会有新的意图被派发，worker 领不到活就陆续收工，
+          // 最后「运行中 Worker」恒为 0。此时任务状态仍是 running，看起来像
+          // 「在跑但没人干活」——和「任务真的跑完了」在界面上没区别。
+          //
+          // 实测（线上 2026-10-20）：planner 卡住后 6 小时零规划轮、零新意图，
+          // 界面只显示「运行中 Worker 0」，完全看不出任务已经僵死。
+          <span
+            className="font-medium text-amber-600 dark:text-amber-400"
+            title={`已 ${fmtDuration(nowSec - (task.last_activity_unix ?? nowSec))} 无任何活动——planner 可能已卡住（可暂停/恢复任务触发重新规划）`}
+          >
+            疑似卡住
+          </span>
         ) : (
           <span className="text-muted-foreground">0</span>
         )}
