@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.3.52] - 2026-10-20
+
+> 调优循环需要日志，但日志被一个后台任务的 debug 输出整个淹掉了。
+
+### 修复的问题
+
+- **journal 被 vulnintel 的 debug 日志刷掉 33 万行**：一次资产-CVE 匹配在 28 秒内写了 **3.2 万行**逐条 debug（对「每个资产的每个 tech × 每个 product」打一行），journald 随即 `Suppressed 332115 messages from artex.service`——**agent 自己的日志被连带丢弃**。实测一次 30 分钟观察窗里，journal 有 32565 行，其中 32465 行是 vulnintel 噪音，只有 64 行是 agent 的工具调用信号。调优循环因此形同闭眼调。
+  - 逐条 debug 日志删除。
+  - 匹配算法改成 **token 倒排索引**：原来是 O(资产 × tech × product) 三重嵌套，且 `cpeTokens(product)` 对每个 product 每轮都重算一遍；现在预建索引、每 product 只算一次，资产匹配退化成查表。
+  - 顺带按「资产 × CVEID」去重——同一 product 有多个 cpeToken 时同一个 CVE 会多路命中，原实现会重复 append。
+  - **匹配语义不变**：新增等价性测试用随机数据跑 40 轮，断言新算法与旧算法的命中集合完全一致；另两条测试守住「同一资产内去重」与「跨资产不去重」。
+- **工具日志的 blocked 判定误伤数据类工具**：启发式判定（WAF/403/denied 措辞）原先对所有工具生效，而 `list_findings` 返回的漏洞数据里本来就含 "403"/"denied"——实测 30KB 的漏洞列表被判成 blocked。现在启发式只对 Bash 生效（与 guard 一致：Bash 是打目标的），平台拦截靠 ARTEX 自己的固定前缀精确识别，对任何工具都生效。
+
 ## [0.3.51] - 2026-10-20
 
 > 没有可观测性，调优就是闭眼调——这条把「看得见」补上。
