@@ -215,31 +215,33 @@ FROM assets a WHERE a.type='service'`)
 	aRows.Close()
 
 	res := &AssetLinkResult{ScannedAssets: len(assets), Matches: []AssetVulnMatch{}}
-	// product→cves 反排一次,资产匹配时直接取。
-	byProduct := map[string][]cveRow{}
+	// token → 命中该 token 的 CVE 行。一次建索引,资产匹配时 O(1) 查表。
+	//
+	// 此前这里是 O(资产 × tech × product) 的三重嵌套扫描,而且 cpeTokens(product)
+	// 对每个 product 每轮都要重算一遍。实测全库 4966 条资产时,这一段跑了 28 秒、
+	// 往 journal 写了 3.2 万行 debug 日志——把 agent 的日志信号整个淹掉(见
+	// [[artex-obs-loop]])。倒排索引把它降到 O(CVE × token + 资产 × token)。
+	tokIndex := map[string][]cveRow{}
 	for _, c := range cves {
-		byProduct[c.Product] = append(byProduct[c.Product], c)
+		for _, pt := range cpeTokens(c.Product) {
+			tokIndex[pt] = append(tokIndex[pt], c)
+		}
 	}
+	// 一个 product 可能有多个 cpeToken,同一个 CVE 会通过多个 token 命中同一资产 →
+	// 按资产去重(按 CVEID),否则 res.Matches 里会出现重复行、浪费写库。
+	// 注意 seenCVE 必须在【每个资产内】新建:CVE 是「资产×CVE」的关系,
+	// 跨资产去重会让第二个资产匹配不到同一个 CVE。
 	for _, a := range assets {
-		// 收集本资产命中的 cve 集合(to sql by product group)。
 		var hitCVEs []cveRow
+		seenCVE := map[string]bool{}
 		for _, tech := range a.Techs {
-			toks := techTokens(tech)
-			if len(toks) == 0 {
-				continue
-			}
-			log.Printf("[vulnintel][debug] asset=%d tech=%q toks=%v", a.ID, tech, toks)
-			for product, cs := range byProduct {
-				pts := cpeTokens(product)
-				log.Printf("[vulnintel][debug]   product=%q cpeToks=%v cves=%d", product, pts, len(cs))
-				for _, pt := range pts {
-					for _, tok := range toks {
-						if tok == pt {
-							log.Printf("[vulnintel][debug]   HIT tok=%s", tok)
-							hitCVEs = append(hitCVEs, cs...)
-							break
-						}
+			for _, tok := range techTokens(tech) {
+				for _, c := range tokIndex[tok] {
+					if seenCVE[c.CVEID] {
+						continue
 					}
+					seenCVE[c.CVEID] = true
+					hitCVEs = append(hitCVEs, c)
 				}
 			}
 		}
@@ -256,8 +258,8 @@ FROM assets a WHERE a.type='service'`)
 			}
 		}
 	}
-	log.Printf("[vulnintel] asset link: scanned=%d matched=%d matches=%d",
-		res.ScannedAssets, res.MatchedAssets, len(res.Matches))
+	log.Printf("[vulnintel] asset link: scanned=%d matched=%d matches=%d cve=%d",
+		res.ScannedAssets, res.MatchedAssets, len(res.Matches), len(cves))
 	return res, nil
 }
 

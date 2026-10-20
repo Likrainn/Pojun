@@ -106,7 +106,7 @@ func (h *toolLogHooks) logPre(ctx context.Context, name string, input []byte) {
 }
 
 func (h *toolLogHooks) logPost(ctx context.Context, name string, input, result []byte, isErr bool) {
-	log.Printf("%s ← %s %s out=%dB", h.prefix(ctx), name, classifyToolResult(result, isErr), len(result))
+	log.Printf("%s ← %s %s out=%dB", h.prefix(ctx), name, classifyToolResult(name, result, isErr), len(result))
 }
 
 // logStop 打收场行：最后一个助手回合有没有正文/工具调用。这是区分
@@ -197,14 +197,27 @@ func shortID(s string) string {
 // 归因正则同源，但这里只用于打标签，不参与决策。
 var reToolBlocked = regexp.MustCompile(`(?i)\b(403|forbidden|waf|blocked|rate.?limit|429|captcha|denied|too many requests)\b`)
 
-// classifyToolResult 把工具结果压成一个分类标签 + 命中原因。
-// ok / error / blocked —— 三态足够调优定位，且长度恒定。
-func classifyToolResult(result []byte, isErr bool) string {
+// platformBlockMarker 是平台拦截消息的固定前缀（见 guard.systemBlockMessage）。
+// 出现它 = 这次调用被 ARTEX 自己拦了，与目标侧的 WAF 是两回事。
+const platformBlockMarker = "【ARTEX 平台管控·非目标防御】"
+
+// classifyToolResult 把工具结果压成一个分类标签。
+//
+// blocked 的判定**分两种**，不能混：
+//   - 平台拦截：结果里有 ARTEX 自己的固定前缀 → 精确、可靠。
+//   - 目标侧拦截（WAF/403/…）：只对 **Bash** 生效。Bash 是打目标的，命令输出里
+//     出现 403 说明被目标挡了；数据类工具（list_findings/list_assets…）的输出里
+//     出现 "403"/"denied" 往往只是**漏洞描述本身**——实测 list_findings 返回 30KB
+//     漏洞数据被判成 blocked，纯属误报。归因正则只对 Bash 生效，与 guard 一致。
+func classifyToolResult(name string, result []byte, isErr bool) string {
 	s := string(result)
 	if isErr {
 		return "error"
 	}
-	if reToolBlocked.MatchString(s) {
+	if strings.Contains(s, platformBlockMarker) {
+		return "blocked"
+	}
+	if name == "Bash" && reToolBlocked.MatchString(s) {
 		return "blocked"
 	}
 	return "ok"

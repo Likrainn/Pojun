@@ -99,16 +99,29 @@ func TestSummarizeToolInputEmpty(t *testing.T) {
 	}
 }
 
-// 结果分类：error 优先于 blocked（WAF 措辞常常出现在错误输出里）。
+// 结果分类：error 优先于 blocked；平台拦截靠固定前缀精确识别；
+// WAF 措辞的启发式只对 Bash 生效——数据类工具的输出里出现 403/denied
+// 往往只是漏洞描述本身，不是被拦截。
 func TestClassifyToolResult(t *testing.T) {
-	if got := classifyToolResult([]byte("boom"), true); got != "error" {
+	if got := classifyToolResult("Bash", []byte("boom"), true); got != "error" {
 		t.Fatalf("isErr 应判 error: %q", got)
 	}
-	if got := classifyToolResult([]byte("HTTP 403 Forbidden"), false); got != "blocked" {
-		t.Fatalf("403 应判 blocked: %q", got)
+	if got := classifyToolResult("Bash", []byte("HTTP 403 Forbidden"), false); got != "blocked" {
+		t.Fatalf("Bash 的 403 应判 blocked: %q", got)
 	}
-	if got := classifyToolResult([]byte("found 3 open ports"), false); got != "ok" {
+	if got := classifyToolResult("Bash", []byte("found 3 open ports"), false); got != "ok" {
 		t.Fatalf("正常输出应判 ok: %q", got)
+	}
+	if got := classifyToolResult("Bash", []byte(platformBlockMarker+" 此操作被禁止。"), false); got != "blocked" {
+		t.Fatalf("平台拦截应判 blocked: %q", got)
+	}
+	// 回归：list_findings 返回的漏洞数据里含 403/denied，不是被拦截。
+	data := []byte(`{"findings":[{"title":"CVE-2021-403 越权"},{"desc":"denied by WAF"}]}`)
+	if got := classifyToolResult("list_findings", data, false); got != "ok" {
+		t.Fatalf("数据类工具的输出不应判 blocked: %q", got)
+	}
+	if got := classifyToolResult("list_findings", []byte(platformBlockMarker+" 禁止"), false); got != "blocked" {
+		t.Fatalf("平台拦截前缀对任何工具都应生效: %q", got)
 	}
 }
 
