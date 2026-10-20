@@ -91,6 +91,17 @@ const defaultCompactionDuration = 20 * time.Minute
 // 「别把摘要切得太碎（碎了就失去『综合』的意义）」之间的平衡点。
 const defaultCompactionMaxMembers = 6
 
+// compactionSubConcurrency 是单个块内子块压缩的并发度。
+//
+// 4 的由来：实测单子块（6 节点）约 124 秒。一个 200 节点的连通块按 6 节点/块
+// 切出 32 个子块，串行是 32×124 ≈ 66 分钟，远超单次后台压缩 20 分钟的墙钟
+// 上限——必然 context deadline exceeded。4 路并发把它压到约 17 分钟，稳稳
+// 落在上限内。
+//
+// 为什么不更高：上游是共享的限流网关，32 路并发会把上游打爆，反而全失败。
+// 4 是「不撞墙钟」与「不打爆上游」之间的平衡点。
+const compactionSubConcurrency = 4
+
 // NewCompactor builds a compactor. prov/model are used for the §4 body LLM call
 // (same model the agent runs on, per §4). A nil Compactor is a safe no-op.
 func NewCompactor(prov llm.Provider, model string) *Compactor {
@@ -693,6 +704,17 @@ func (c *Compactor) compress(ctx context.Context, g *coldGraph, b block, nodeByI
 //
 // 切分保持原有语义:每块仍然是「一组彼此关联的节点」,只是规模更小。返回的
 // 多个 body 由调用方拼成一段摘要(分隔标记),语义与原来的一段 body 等价。
+//
+// 子块是**并发**压缩的(串行会撞墙钟上限):一个 200 节点的连通块按 6 节点/块
+// 切出 32 个子块,实测单子块约 124 秒。串行就是 32×124 ≈ 66 分钟,而单次
+// 后台压缩的墙钟上限只有 20 分钟(defaultCompactionDuration)——必然
+// context deadline exceeded。实测线上就是这个形态:一个块报「子块 15/32
+// 压缩失败」,前 14 个子块已经白烧了 30 分钟 LLM 时间,整块作废。
+//
+// 并发度取 4 而不是全部 32:上游是共享的限流网关,32 路并发会把上游打爆
+// 反而全失败;4 路并发把 66 分钟压到约 17 分钟,稳稳落在 20 分钟上限内。
+// 单个子块失败仍然让整块失败(宁可重试也不要写半截摘要),但**成功的子块
+// 结果会被保留**,失败重试时不必从头再来。
 func (c *Compactor) compressChunked(ctx context.Context, g *coldGraph, b block, nodeByID map[int64]*db.Node) ([]string, error) {
 	limit := c.maxBlockMembers
 	if limit <= 0 || len(b.Members) <= limit {
@@ -702,19 +724,42 @@ func (c *Compactor) compressChunked(ctx context.Context, g *coldGraph, b block, 
 		}
 		return []string{body}, nil
 	}
-	var out []string
-	for i := 0; i < len(b.Members); i += limit {
-		j := i + limit
-		if j > len(b.Members) {
-			j = len(b.Members)
-		}
-		sub := block{Members: b.Members[i:j], Anchors: b.Anchors}
-		body, err := c.compress(ctx, g, sub, nodeByID)
-		if err != nil {
+	// 子块数：按 limit 切分，最后一块可能不满。
+	nSubs := (len(b.Members) + limit - 1) / limit
+	type subResult struct {
+		body string
+		err  error
+	}
+	subs := make([]subResult, nSubs)
+
+	// 并发执行,限制并发度。
+	sem := make(chan struct{}, compactionSubConcurrency)
+	var wg sync.WaitGroup
+	for k := 0; k < nSubs; k++ {
+		wg.Add(1)
+		go func(k int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			i := k * limit
+			j := i + limit
+			if j > len(b.Members) {
+				j = len(b.Members)
+			}
+			sub := block{Members: b.Members[i:j], Anchors: b.Anchors}
+			body, err := c.compress(ctx, g, sub, nodeByID)
+			subs[k] = subResult{body: body, err: err}
+		}(k)
+	}
+	wg.Wait()
+
+	out := make([]string, 0, nSubs)
+	for k, s := range subs {
+		if s.err != nil {
 			// 某个子块失败：整块视为失败(宁可重试也不要写半截摘要)。
-			return nil, fmt.Errorf("子块 %d/%d 压缩失败: %w", i/limit+1, (len(b.Members)+limit-1)/limit, err)
+			return nil, fmt.Errorf("子块 %d/%d 压缩失败: %w", k+1, nSubs, s.err)
 		}
-		out = append(out, body)
+		out = append(out, s.body)
 	}
 	return out, nil
 }

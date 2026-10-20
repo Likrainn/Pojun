@@ -4,6 +4,46 @@
 
 ## [Unreleased]
 
+## [0.3.56] - 2026-10-20
+
+### 修复的问题
+
+- **模型拒收 thinking 参数导致整条链路静默失效**（同一个坑的第三次复发+根治）：
+  MiniMax-M3.1 这类**强制 adaptive thinking** 的模型会直接拒绝 `thinking.type="disabled"`，上游返回 400
+  `requires adaptive thinking; thinking.type="disabled" (including reasoning.effort=none) is not allowed (2013)`。
+  这个坑在 ARTEX 里已经踩了三次：裁决路径（`server/intercept.go`）、压缩路径（`agent/compaction.go`）、
+  旁路摘要路径（`sidequestion/context.go`）——三处各自硬编码 thinking 参数，各修一次，但只要再有一处
+  新代码带上 thinking 就会复发。
+  - **根治**：在任务侧 LLM 调用的统一入口（`server/task_llm.go` 的 `streamTaskLLM` / `completeTaskLLM`）
+    加了一层降级——检测到 thinking 拒绝就摘掉该参数原样重试一次。新增 `server/thinking_fallback.go`
+    承载识别与摘除逻辑。这样「某个调用方忘了别写 thinking」不再等于「整条链路挂掉」。
+  - **残留**：`sidequestion/context.go` 的摘要请求仍在硬编码 `Thinking: "disabled"`，一并去掉。
+  - **实测代价**：线上一次模型切换后的两小时里，裁决失败 787 次、压缩失败 130 次，**全部是同一个 400**。
+    裁决每次失败都走「按失败策略处理」，那两小时里这道关卡等于完全失效。
+
+- **压缩子块串行执行必然撞墙钟上限**：一个 200 节点的连通块按 6 节点/块切出 32 个子块，
+  实测单子块约 124 秒，串行是 32×124 ≈ 66 分钟，而单次后台压缩的墙钟上限只有 20 分钟——
+  必然 `context deadline exceeded`。线上形态是一个块报「子块 15/32 压缩失败」，
+  前 14 个子块已白烧 30 分钟 LLM 时间，整块作废。
+  - 子块改为**并发**压缩，并发度上限 4（`compactionSubConcurrency`）：66 分钟压到约 17 分钟，
+    稳稳落在 20 分钟上限内；不取 32 是因为上游是共享的限流网关，32 路并发会把它打爆反而全失败。
+  - 单个子块失败仍然让整块失败（宁可重试也不要写半截摘要），语义不变。
+
+### 其他
+
+- 工具日志的 `logPre` 死代码清理（PreToolUse 改为内联记日志后已无调用方）。
+- 旁路摘要请求的测试判别式从 `Thinking == "disabled"` 改为按 system prompt 识别
+  （新增 `sidequestion.IsSummaryRequest`）。原来的判别式与「不要写 thinking」直接冲突：
+  为了能被识别而写出一段会被模型拒收的代码。
+
+## [0.3.55] - 2026-10-20
+
+### 修复的问题
+
+- **凭据脱敏把裸 `-p` 一律当口令，误伤了正常命令的路径**：0.3.53 的脱敏规则里 `-p` 的值只要不是纯端口就打码，但 `-p` 在不同命令里含义完全不同——`sshpass`/`mysql`/`psql` 的 `-p` 是口令，`mkdir`/`tar`/`cp` 的 `-p` 是 parents/preserve。实测 `mkdir -p /opt/artex/data/tasks/3/i661 && pwd` 的整条路径被打成 `***`，日志里根本看不出 agent 在操作哪个目录。
+  - 规则改为**按命令限定**：只有 `mysql`/`mysqldump`/`psql`/`pg_dump`/`mariadb` 这几条命令的 `-p` 才当口令，其余命令的 `-p` 一律放行。
+  - 补回归用例：`mkdir -p`、`tar -p`、`cp -p` 三条必须原样保留；`mysql -h... -uroot -pTr0ub4dor`、`psql -h ... -p hunter2` 两条必须打码。
+
 ## [0.3.54] - 2026-10-20
 
 ### 修复的问题

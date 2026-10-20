@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"iter"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,7 +15,12 @@ import (
 
 // fakeProvider 是一个可控的假 provider：记录每次调用的 MaxTokens 与输入长度，
 // 并按脚本返回内容或空正文。
+//
+// calls 用互斥锁保护：子块压缩是**并发**的（见 compressChunked 的注释），
+// 不加锁的话并发测试会撞 -race，而且调用顺序也不再确定（并发下 call 序号
+// 天然不保证与子块序号对应）。
 type fakeProvider struct {
+	mu    sync.Mutex
 	calls []fakeCall
 	// reply 返回给每次调用的正文；空串 = 模拟"模型只思考没正文"。
 	reply func(call int, maxTokens int, input string) string
@@ -36,8 +42,10 @@ func (f *fakeProvider) Complete(ctx context.Context, req llm.CompletionRequest) 
 	for _, m := range req.Messages {
 		in += m.Text()
 	}
+	f.mu.Lock()
 	f.calls = append(f.calls, fakeCall{MaxTokens: req.MaxTokens, Input: in})
 	idx := len(f.calls) - 1
+	f.mu.Unlock()
 	body := ""
 	if f.reply != nil {
 		body = f.reply(idx, req.MaxTokens, in)
@@ -51,6 +59,20 @@ func (f *fakeProvider) Complete(ctx context.Context, req llm.CompletionRequest) 
 		msg.Content = []llm.ContentBlock{llm.TextBlock(body)}
 	}
 	return msg, stop, llm.Usage{InputTokens: 100, OutputTokens: 50}, nil
+}
+
+// callCount 返回已发起的调用次数（线程安全）。
+func (f *fakeProvider) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+// snapshotCalls 返回调用记录的副本（线程安全）。
+func (f *fakeProvider) snapshotCalls() []fakeCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fakeCall(nil), f.calls...)
 }
 
 // 压缩的输出预算必须**给足**。
@@ -91,11 +113,11 @@ func TestCompressUsesConfiguredOutputBudget(t *testing.T) {
 	if body != "摘要正文" {
 		t.Errorf("正文不对: %q", body)
 	}
-	if len(prov.calls) != 1 {
-		t.Fatalf("应调用一次,实际 %d 次", len(prov.calls))
+	if prov.callCount() != 1 {
+		t.Fatalf("应调用一次,实际 %d 次", prov.callCount())
 	}
-	if prov.calls[0].MaxTokens != 65536 {
-		t.Errorf("未使用配置的输出预算: %d", prov.calls[0].MaxTokens)
+	if prov.snapshotCalls()[0].MaxTokens != 65536 {
+		t.Errorf("未使用配置的输出预算: %d", prov.snapshotCalls()[0].MaxTokens)
 	}
 }
 
@@ -173,11 +195,11 @@ func TestCompressSplitsOversizedBlock(t *testing.T) {
 	if len(bodies) != 3 {
 		t.Errorf("10 个成员按 4 切应得 3 块,得到 %d", len(bodies))
 	}
-	if len(prov.calls) != 3 {
-		t.Errorf("应发起 3 次调用,实际 %d", len(prov.calls))
+	if prov.callCount() != 3 {
+		t.Errorf("应发起 3 次调用,实际 %d", prov.callCount())
 	}
 	// 每次调用的输入里成员数不超过阈值
-	for i, call := range prov.calls {
+	for i, call := range prov.snapshotCalls() {
 		n := strings.Count(call.Input, "\n- #")
 		if n > 4 {
 			t.Errorf("第 %d 次调用含 %d 个成员,超过阈值 4", i, n)
@@ -206,5 +228,73 @@ func TestBuildCompressionInputEscapesNodeText(t *testing.T) {
 	in := buildCompressionInput(g, block{Members: []int64{1}}, nodeByID)
 	if !strings.Contains(in, `含"引号"`) {
 		t.Errorf("节点摘要未带出: %s", in)
+	}
+}
+
+// 子块必须**并发**压缩——串行会撞后台压缩的墙钟上限。
+//
+// 回归背景：实测一个 200 节点的连通块按 6 节点/块切出 32 个子块，单子块约
+// 124 秒。串行是 32×124 ≈ 66 分钟，而单次后台压缩的墙钟上限只有 20 分钟
+// （defaultCompactionDuration）——必然 context deadline exceeded。线上就是这个
+// 形态：一个块报「子块 15/32 压缩失败」，前 14 个子块已经白烧了 30 分钟
+// LLM 时间，整块作废。
+//
+// 并发度上限是 compactionSubConcurrency（4）：32 路并发会把共享的限流网关
+// 打爆，反而全失败；4 路把 66 分钟压到约 17 分钟，稳稳落在上限内。
+func TestCompressChunkedRunsSubBlocksConcurrently(t *testing.T) {
+	const (
+		members  = 40 // 40 个成员
+		limit    = 4  // 每块 4 个 → 10 个子块
+		wantSubs = members / limit
+	)
+	var (
+		mu      sync.Mutex
+		inFlt   = 0
+		maxSeen = 0
+	)
+	prov := &fakeProvider{}
+	prov.reply = func(call int, maxTokens int, input string) string {
+		// 记录同时在飞的子块数。
+		mu.Lock()
+		inFlt++
+		if inFlt > maxSeen {
+			maxSeen = inFlt
+		}
+		mu.Unlock()
+		// 拉长单次调用，让并发窗口可观测。
+		time.Sleep(30 * time.Millisecond)
+		mu.Lock()
+		inFlt--
+		mu.Unlock()
+		return fmt.Sprintf("子块%d", call)
+	}
+
+	c := NewCompactor(prov, "test-model")
+	c.SetMaxBlockMembers(limit)
+
+	ms := make([]int64, members)
+	nodeByID := map[int64]*db.Node{}
+	for i := range ms {
+		ms[i] = int64(i + 1)
+		nodeByID[ms[i]] = &db.Node{ID: ms[i], Kind: db.KindFact, State: "confirmed"}
+	}
+	bodies, err := c.compressChunked(context.Background(), &coldGraph{}, block{Members: ms}, nodeByID)
+	if err != nil {
+		t.Fatalf("compressChunked 失败: %v", err)
+	}
+	if len(bodies) != wantSubs {
+		t.Fatalf("应得 %d 个子块摘要,得到 %d", wantSubs, len(bodies))
+	}
+	if prov.callCount() != wantSubs {
+		t.Fatalf("应发起 %d 次调用,实际 %d", wantSubs, prov.callCount())
+	}
+	mu.Lock()
+	observed := maxSeen
+	mu.Unlock()
+	if observed < 2 {
+		t.Errorf("子块应并发执行,但同时在飞的最多只有 %d 个（并发未生效）", observed)
+	}
+	if observed > compactionSubConcurrency {
+		t.Errorf("同时在飞的子块 %d 个,超过并发上限 %d", observed, compactionSubConcurrency)
 	}
 }

@@ -119,10 +119,6 @@ func (h *toolLogHooks) prefix(ctx context.Context) string {
 	return p
 }
 
-func (h *toolLogHooks) logPre(ctx context.Context, name string, input []byte) {
-	log.Printf("%s → %s %s", h.prefix(ctx), name, summarizeToolInput(name, input))
-}
-
 func (h *toolLogHooks) logPost(ctx context.Context, name string, input, result []byte, isErr bool) {
 	log.Printf("%s ← %s %s out=%dB", h.prefix(ctx), name, classifyToolResult(name, result, isErr), len(result))
 }
