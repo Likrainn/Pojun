@@ -157,7 +157,7 @@ export function FindingsTable({
           <TableHead>漏洞名称</TableHead>
           <TableHead className="w-44">资产</TableHead>
           <TableHead className="w-28">状态</TableHead>
-          <TableHead className="w-32">所属任务</TableHead>
+          <TableHead className="w-48">所属任务</TableHead>
           <TableHead className="w-24">时间</TableHead>
           <TableHead className="w-48">操作</TableHead>
         </TableRow>
@@ -262,6 +262,11 @@ export function FindingsTable({
                       className="inline-flex max-w-full items-center gap-1 text-primary hover:underline"
                       title={f.task_description}
                     >
+                      {/* 任务 id 必须显示且不能被截断掉——两个任务的名字可能
+                          前缀完全相同（实测两条都以「安康职业技术学院」开头），
+                          列宽又只有 w-32，只显示描述的话两行看起来一模一样，
+                          根本分不清这条发现属于哪个任务。 */}
+                      <span className="shrink-0 font-mono text-xs">#{f.task_id}</span>
                       <span className="truncate">{f.task_description}</span>
                       <ArrowUpRightIcon className="size-3 shrink-0" />
                     </Link>
