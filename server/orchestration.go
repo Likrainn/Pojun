@@ -725,14 +725,25 @@ func (s *Server) upgradeReporterTriggerMessage() {
 // 绑定 update_finding_report + 任务查询工具，并挂一个「report_finding 被调用即触发」的
 // 触发器 —— 每登记一个漏洞就唤起它写详细报告。一次性(settings flag 守卫)：用户删掉后不再重建。
 // 依赖：orchestration 工具已在本函数上方 SeedTool 入库，故绑定得上。
+//
+// flag 守卫不是「跑过就永远不管」：agent 存在但触发器/工具绑定缺失时（误删、
+// DB 迁移、清库后恢复），必须**补齐缺的那部分**——否则漏洞上报后不会自动
+// 触发报告 Agent，流量证据也就没人去核对了。已经存在的部分**不覆盖**，
+// 用户改过的内容保持原样。
 func (s *Server) seedReporterAgent() {
 	const flag = "reporter_agent_seed_v1"
+	seeded := false
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
-		return
+		seeded = true
 	}
-	defer func() { _ = s.m.pg.SetSetting(flag, "true") }() // 无论成功与否只尝试一次
+	if !seeded {
+		defer func() { _ = s.m.pg.SetSetting(flag, "true") }() // 无论成功与否只尝试一次
+	}
 
-	if exist, _ := s.m.pg.GetAgentByKey("reporter"); exist != nil {
+	exist, _ := s.m.pg.GetAgentByKey("reporter")
+	if exist != nil {
+		// agent 已在（builtin 或用户手建）——只补缺失的触发器与绑定，不覆盖。
+		s.repairReporterAgent(exist)
 		return // key 已被占用(用户手建过)——不覆盖
 	}
 	a, err := s.m.pg.CreateAgent("reporter", "报告撰写",
@@ -770,6 +781,57 @@ func (s *Server) seedReporterAgent() {
 		log.Printf("[reporter] 创建触发器失败: %v", err)
 	}
 	log.Printf("[reporter] 已预置「报告撰写」agent + finding 触发器")
+}
+
+// repairReporterAgent 补齐 reporter 缺失的 report_finding 触发器与工具绑定。
+// 已存在的部分不动——用户可能改过工具列表或触发消息。
+func (s *Server) repairReporterAgent(a *db.Agent) {
+	triggers, err := s.m.pg.ListTriggersFor("reporter")
+	if err != nil {
+		log.Printf("[reporter] 读取触发器失败: %v", err)
+		return
+	}
+	hasFindingTrigger := false
+	for _, t := range triggers {
+		if t.OnToolCall && containsString(t.ToolNames, "report_finding") {
+			hasFindingTrigger = true
+			break
+		}
+	}
+	if !hasFindingTrigger {
+		if _, err := s.m.pg.CreateTrigger(&db.AgentTrigger{
+			AgentKey:        "reporter",
+			Enabled:         true,
+			OnToolCall:      true,
+			ToolNames:       []string{"report_finding"},
+			ToolCallMessage: reporterToolCallMessage,
+		}); err != nil {
+			log.Printf("[reporter] 补建 report_finding 触发器失败: %v", err)
+		} else {
+			log.Printf("[reporter] 已补建缺失的 report_finding 触发器")
+		}
+	}
+	// 工具绑定同理：缺哪个补哪个，已绑的不动。
+	for _, key := range []string{
+		"update_finding_report", "get_task_node_detail", "list_task_findings",
+		"get_task_worker_trace", "list_task_worker_traces", "search_task_worker_traces",
+		"get_task_graph",
+	} {
+		if err := s.m.pg.AddAgentToToolBinding("reporter", []string{key}); err != nil {
+			log.Printf("[reporter] 补绑工具 %s 失败: %v", key, err)
+		}
+	}
+	_ = a
+}
+
+// containsString reports whether list contains s.
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 // seedAutoReportFindingBinding adds "auto" to report_finding's binding ONCE so
