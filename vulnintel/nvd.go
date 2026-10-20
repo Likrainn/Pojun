@@ -22,13 +22,10 @@ type NvdClient struct {
 }
 
 func NewNvdClient(apiKey string, proxyURL string) (*NvdClient, error) {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if strings.TrimSpace(proxyURL) != "" {
-		u, err := url.Parse(strings.TrimSpace(proxyURL))
-		if err != nil {
-			return nil, fmt.Errorf("vulnintel: bad proxy url: %w", err)
-		}
-		transport.Proxy = http.ProxyURL(u)
+	// 代理传输层失败时自动回退直连——代理对某些源不通时不该整轮失败。
+	transport, err := newFallbackTransport(proxyURL)
+	if err != nil {
+		return nil, err
 	}
 	return &NvdClient{
 		Base:   "https://services.nvd.nist.gov",

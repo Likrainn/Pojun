@@ -86,13 +86,9 @@ type GitHubClient struct {
 }
 
 func NewGitHubClient(token string, proxyURL string) (*GitHubClient, error) {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if strings.TrimSpace(proxyURL) != "" {
-		u, err := url.Parse(strings.TrimSpace(proxyURL))
-		if err != nil {
-			return nil, fmt.Errorf("vulnintel: bad proxy url: %w", err)
-		}
-		transport.Proxy = http.ProxyURL(u)
+	transport, err := newFallbackTransport(proxyURL)
+	if err != nil {
+		return nil, err
 	}
 	h := &http.Client{Timeout: 60 * time.Second, Transport: transport}
 	return &GitHubClient{Base: "https://api.github.com", HTTP: h, Token: strings.TrimSpace(token)}, nil
