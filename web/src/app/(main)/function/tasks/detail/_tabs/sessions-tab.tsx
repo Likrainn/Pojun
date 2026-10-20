@@ -570,6 +570,9 @@ export function SessionsTab({ taskId }: { taskId: string }) {
   // 下方的会话记录会被挤到只剩标题与输入框。折叠后记录区拿到几乎全部高度，
   // 点标题栏可展开选会话，选完自动收起。桌面端不受影响（lg 起始终展开）。
   const [listOpen, setListOpen] = React.useState(false);
+  // 继承来的 worker 会话分组默认**收起**——它们来自别的任务，混在自家列表里
+  // 会让人分不清哪个 Agent 在哪边跑。要看历史时再展开。
+  const [expandedInherited, setExpandedInherited] = React.useState<Record<number, boolean>>({});
   // Per-session lazily-loaded caches, keyed by session_key (main | plan | intent:<id>).
   const [store, setStore] = React.useState<SessionStore>({});
   // Worker sessions derived from exploration intents (paged past the old 300 cap).
@@ -1197,7 +1200,35 @@ export function SessionsTab({ taskId }: { taskId: string }) {
     return grouped;
   }, [intentAssets]);
 
+  // worker 会话分成【本任务的】与【继承来的】两组。
+  //
+  // 为什么必须分开：派生任务（如任务 4 从任务 3 派生）会继承源任务**全部已结束的
+  // 意图**——实测任务 4 的接口返回 224 条，其中 206 条 inherited（来自任务 3），
+  // 只有 18 条是任务 4 自己的。这些继承条目以前和自家条目**混在同一列表**里
+  // 平铺，只靠一个「来源 #3」小徽标区分——两个任务各有几百条时根本分不清哪个
+  // 是哪个任务在跑、哪个 Agent 在哪边。
+  //
+  // 后台的继承本身是有用的（少干重复活、结论可复用），不需要改；这里只解决
+  // **前端视图按任务分开**的问题：继承的折叠进一个可展开分组，默认收起。
   const workerSessions = React.useMemo(() => allIntents.map(intentToSession), [allIntents]);
+  const ownWorkerSessions = React.useMemo(
+    () => workerSessions.filter((s) => !s.inherited),
+    [workerSessions],
+  );
+  // 继承的按来源任务分组（一个任务可以继承多个来源）。
+  const inheritedWorkerGroups = React.useMemo(() => {
+    const bySource = new Map<number, Session[]>();
+    for (const s of workerSessions) {
+      if (!s.inherited) continue;
+      const src = Number(s.source_task_id ?? 0);
+      const list = bySource.get(src);
+      if (list) list.push(s);
+      else bySource.set(src, [s]);
+    }
+    return [...bySource.entries()]
+      .map(([sourceTaskId, items]) => ({ sourceTaskId, items }))
+      .sort((a, b) => a.sourceTaskId - b.sourceTaskId);
+  }, [workerSessions]);
   const intentsHasMore = hasLoadedOlderIntentsPage ? olderIntentsHasMore : firstIntentsHasMore;
 
   // For each worker session (intent), derive the display title from the intent
@@ -1305,7 +1336,9 @@ export function SessionsTab({ taskId }: { taskId: string }) {
   const grouped = {
     mainagent: sessions.filter((s) => s.role === "mainagent"),
     planner: sessions.filter((s) => s.role === "planner"),
-    worker: sessions.filter((s) => s.role === "worker"),
+    // worker 只放**本任务自己的**会话；继承来的单独按来源任务折叠展示
+    // （见 inheritedWorkerGroups）。
+    worker: ownWorkerSessions,
     system: sessions.filter((s) => s.role === "system"),
   };
 
@@ -1775,10 +1808,65 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                         加载更早的 Worker
                       </button>
                     )}
+                    {/* 继承来的 worker 会话（来自别的任务）折叠成独立分组，默认收起。
+                        后台的继承是有用的（少干重复活），但前端必须按任务分开看——
+                        否则两个任务各有几百条时根本分不清哪个 Agent 在哪边跑。 */}
+                    {role === "worker" &&
+                      inheritedWorkerGroups.map((group) => {
+                        const expanded = expandedInherited[group.sourceTaskId] ?? false;
+                        return (
+                          <div className="mt-1 flex flex-col gap-0.5" key={`inh-${group.sourceTaskId}`}>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setExpandedInherited((prev) => ({
+                                  ...prev,
+                                  [group.sourceTaskId]: !expanded,
+                                }))
+                              }
+                              className="flex items-center gap-1.5 rounded px-2 py-1 text-left text-[11px] text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                              aria-expanded={expanded}
+                            >
+                              <ChevronDownIcon
+                                className={cn("size-3.5 shrink-0 transition-transform", !expanded && "-rotate-90")}
+                              />
+                              <span className="min-w-0 flex-1 truncate">
+                                来自任务 #{group.sourceTaskId} 的历史（{group.items.length} 条）
+                              </span>
+                            </button>
+                            {expanded &&
+                              group.items.map((s) => {
+                                const meta = sessionMeta.get(s.id);
+                                return (
+                                  <SessionItem
+                                    key={s.id}
+                                    s={s}
+                                    active={s.id === activeId}
+                                    displayTitle={meta?.title ?? s.title}
+                                    hasPending={hasPendingForSession(s)}
+                                    unread={store[keyForSession(s, taskId)]?.unread}
+                                    onClick={() => {
+                                      approvalFocus.close();
+                                      setActiveId(s.id);
+                                      setListOpen(false);
+                                      setWorkerMessage("");
+                                      setWorkerMessageRequestId("");
+                                    }}
+                                    controlling={controllingIntent === s.intent_id}
+                                    deleted={meta?.deleted}
+                                    onCancel={() => {
+                                      setCancelIntent(s);
+                                    }}
+                                  />
+                                );
+                              })}
+                          </div>
+                        );
+                      })}
                   </div>
                 );
               })}
-              {mainLoaded && !workerSessions.length && (
+              {mainLoaded && !ownWorkerSessions.length && (
                 <div className="px-2 py-1 text-muted-foreground text-xs">暂无运行中的 Worker 会话。</div>
               )}
             </div>
