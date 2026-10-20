@@ -235,6 +235,9 @@ func (r *taskLLMRuntime) Complete(ctx context.Context, req llm.CompletionRequest
 }
 
 func completeTaskLLM(ctx context.Context, taskID string, req llm.CompletionRequest, hooks taskLLMStreamHooks) (llm.Message, string, llm.Usage, error) {
+	// thinking 降级只做一次（与 streamTaskLLM 同理，见 thinking_fallback.go）。
+	cur := req
+	thinkingDowngraded := false
 	for {
 		selection, err := hooks.current()
 		if err != nil {
@@ -250,7 +253,15 @@ func completeTaskLLM(ctx context.Context, taskID string, req llm.CompletionReque
 		// 中途已交付输出的问题,所以任何瞬时失败都可原样重试。
 		retries, backoffOf := sameProviderRetryPolicy(selection.retry)
 		for attempt := 0; ; attempt++ {
-			msg, sr, usage, callErr = selection.provider.Complete(ctx, req)
+			msg, sr, usage, callErr = selection.provider.Complete(ctx, cur)
+			// 模型拒收 thinking 参数 → 摘掉它原样重试一次。
+			if callErr != nil && !thinkingDowngraded && ctx.Err() == nil &&
+				isThinkingRejected(callErr) && requestHasThinking(cur) {
+				thinkingDowngraded = true
+				cur = stripThinking(cur)
+				log.Printf("[task-llm] task %s 模型拒收 thinking 参数,摘掉后重试: %v", taskID, callErr)
+				continue
+			}
 			if callErr != nil && ctx.Err() == nil &&
 				attempt < retries && isRetryableStreamError(callErr) {
 				backoff := backoffOf(attempt)
@@ -286,6 +297,11 @@ func completeTaskLLM(ctx context.Context, taskID string, req llm.CompletionReque
 
 func streamTaskLLM(ctx context.Context, taskID string, req llm.CompletionRequest, hooks taskLLMStreamHooks) iter.Seq2[llm.StreamEvent, error] {
 	return func(yield func(llm.StreamEvent, error) bool) {
+		// thinking 降级只做一次：模型拒收 thinking 参数时摘掉它重试。
+		// 变量在闭包外声明，因为降级后的请求要贯穿整个 for 循环
+		// （换 profile 之后用的也是这一份）。
+		cur := req
+		thinkingDowngraded := false
 		for {
 			selection, err := hooks.current()
 			if err != nil {
@@ -303,7 +319,7 @@ func streamTaskLLM(ctx context.Context, taskID string, req llm.CompletionRequest
 				committed = false
 				pending = nil
 				streamErr = nil
-				for event, err := range selection.provider.Stream(ctx, req) {
+				for event, err := range selection.provider.Stream(ctx, cur) {
 					if err != nil {
 						streamErr = err
 						break
@@ -324,6 +340,22 @@ func streamTaskLLM(ctx context.Context, taskID string, req llm.CompletionRequest
 					if !yield(event, nil) {
 						return
 					}
+				}
+				// 模型拒收 thinking 参数（adaptive thinking 模型不接受
+				// thinking.type=disabled）→ 摘掉它原样重试一次。
+				//
+				// 为什么在这里兜底而不是让每个调用方自己小心：这个 400 在
+				// ARTEX 里已经踩了三次（裁决/压缩/旁路摘要），每次都是某个
+				// 新的调用方硬编码了 thinking。放在统一入口，一处修好全局生效。
+				//
+				// 只降级一次：摘掉 thinking 后再报同样的错，说明不是这个原因，
+				// 继续重试只是浪费。
+				if streamErr != nil && !committed && !thinkingDowngraded &&
+					ctx.Err() == nil && isThinkingRejected(streamErr) && requestHasThinking(cur) {
+					thinkingDowngraded = true
+					cur = stripThinking(cur)
+					log.Printf("[task-llm] task %s 模型拒收 thinking 参数,摘掉后重试: %v", taskID, streamErr)
+					continue
 				}
 				if streamErr != nil && !committed && ctx.Err() == nil &&
 					attempt < retries && isRetryableStreamError(streamErr) {
