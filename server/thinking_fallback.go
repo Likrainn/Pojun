@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/Autumn-27/norma/llm"
+	"github.com/chu0119/artex/agent"
 )
 
 // thinking 拒绝错误的识别与自动降级。
@@ -11,7 +12,7 @@ import (
 // ## 这个坑为什么值得单独一个文件
 //
 // MiniMax-M3.1 这类**强制 adaptive thinking** 的模型会直接拒绝
-// thinking.type="disabled"（以及 reasoning.effort=none）:
+// thinking.type="disabled"（以及 reasoning.effort=none）：
 //
 //	400 {"error":{"type":"server_error","message":"Upstream request failed:
 //	 [bad_request_error] invalid params, model \"MiniMax-M3.1-Flash\" requires
@@ -36,8 +37,22 @@ import (
 // 不是请求问题：摘掉 thinking 字段后同一个请求就能成功。
 //
 // 所以在任务侧 LLM 调用的统一入口（taskLLMRuntime.Stream / Complete）做一次
-// 「检测 → 摘掉 thinking → 原样重试」，这类错误就能自愈，而不必要求每个
+// 「检测 → 换 provider → 原样重试」，这类错误就能自愈，而不必要求每个
 // 调用方都记得别写 thinking。
+//
+// ## 降级为什么必须换 provider 而不是改请求
+//
+// thinking 参数是在 **provider 配置层**注入的（llm.Config.ThinkingType，
+// 见 agent/provider.go 的 NewProvider），**不在 llm.CompletionRequest 里**。
+// 请求里的 req.Thinking 恒为空（那是「本次调用覆盖 profile 设置」用的
+// 请求级开关，与 profile 级的 thinking_type 不是一回事）。
+//
+// 所以第一版实现（改 req.Thinking）**根本不触发**——条件
+// requestHasThinking(req) 永远为 false。实测：把 profile 的 thinking_type
+// 设成 disabled 后，2013 错误如期出现 23 次，而降级日志 0 次。
+//
+// 正确的降级是**重建一个不发 thinking.type 的 provider**（agent.Config
+// .SuppressThinking），用它在同一次调用里重试。
 
 // thinkingRejectedMarkers 是上游拒绝 thinking 参数时的特征串。
 //
@@ -70,23 +85,16 @@ func isThinkingRejected(err error) bool {
 	return false
 }
 
-// requestHasThinking 报告请求里是否带了 thinking 参数。
-func requestHasThinking(req llm.CompletionRequest) bool {
-	return req.Thinking != ""
+// providerSendsThinking 报告 provider 的配置是否会发送 thinking.type。
+//
+// 判定依据是**配置**（agent.Config.ThinkingType），不是请求——因为请求里
+// 永远没有这个参数（见文件头注释）。
+func providerSendsThinking(cfg agent.Config) bool {
+	if cfg.SuppressThinking {
+		return false
+	}
+	return cfg.ThinkingType != ""
 }
 
-// stripThinking 返回一份去掉 thinking 参数的请求副本。
-//
-// 摘掉后模型会按自己的默认走（对 adaptive thinking 模型就是「开思考」），
-// 行为与用户没配 thinking 时一致——这正是 profile 里 thinking_type 为空的
-// 语义（见 agent/provider.go 的 ThinkingType 注释）。
-//
-// 注意：reasoning.effort 是 **profile 级**配置（agent.Config.ReasoningEffort），
-// 不在请求里，所以这里只清 Thinking。上游报错文本把 reasoning.effort=none
-// 也列进去了，但那是 profile 解析时就已经落到请求里的——profile 侧为空时
-// 根本不会发这个字段。
-func stripThinking(req llm.CompletionRequest) llm.CompletionRequest {
-	out := req
-	out.Thinking = ""
-	return out
-}
+// ensure llm 引用保留（降级后的 provider 仍是 llm.Provider）。
+var _ llm.Provider = (llm.Provider)(nil)

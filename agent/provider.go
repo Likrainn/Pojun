@@ -50,6 +50,20 @@ type Config struct {
 	//   "enabled" = 开启. 与 ReasoningEffort 完全解耦——有些接口没有 thinking 字段、
 	//   只靠强度参数就能激活思考,故两者可各自单独设置.
 	ThinkingType string
+	// SuppressThinking 强制【不发】thinking.type 字段（覆盖 ThinkingType）。
+	//
+	// 为什么需要它：thinking 参数是在**provider 配置层**注入的（见 NewProvider），
+	// 不在 llm.CompletionRequest 里——所以「收到 2013 就摘掉 thinking 重试」不能
+	// 靠改请求，只能重建一个不带 thinking 的 provider。
+	//
+	// 2013 的含义：模型是**强制 adaptive thinking** 的（MiniMax-M3.1 等），
+	// 显式关思考会被上游直接拒绝：
+	//   400 "requires adaptive thinking; thinking.type=\"disabled\" ... is not allowed (2013)"
+	// 摘掉该字段后模型按自己的默认走（即开思考），请求就能成功。
+	//
+	// 这个开关只用于**一次性降级重试**——不改变 profile 的持久配置（那属于
+	// 用户的选择），只是让这一次调用换个方式发。
+	SuppressThinking bool
 	// ReasoningEffort 独立控制思考「强度」字段:
 	//   "" = 不发送(默认); "low"/"medium"/"high"/"xhigh"/"max" = 对应强度.
 	//   OpenAI 映射为顶层 reasoning_effort;Anthropic 映射为 output_config.effort.
@@ -275,7 +289,11 @@ func (c Config) NewProvider() (llm.Provider, error) {
 	}
 	// 思考开关与强度两个字段各自透传(空 = 该字段不发送)。二者解耦:
 	// 可只发 thinking.type、只发 effort、都发、或都不发。
-	lc.ThinkingType = c.ThinkingType
+	//
+	// SuppressThinking 时不发 thinking.type（降级重试用，见该字段注释）。
+	if !c.SuppressThinking {
+		lc.ThinkingType = c.ThinkingType
+	}
 	lc.ReasoningEffort = c.ReasoningEffort
 	// 输出上限的字段名选择(空 = 用 max_tokens)。上限的「值」不在这里:它每轮随
 	// agentcore.Options.MaxTokens 走,provider 只决定把它塞进哪个键。
