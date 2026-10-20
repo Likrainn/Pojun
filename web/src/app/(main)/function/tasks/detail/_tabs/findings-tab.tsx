@@ -179,13 +179,41 @@ export function FindingsTab({ taskId }: { taskId: string }) {
     }
   }, []);
 
-  const items = findings
-    .filter((f) => f.task_id === taskId || f.inherited)
-    .sort((a, b) => {
-      const compared = Date.parse(a.ts) - Date.parse(b.ts);
-      if (compared !== 0) return sortPreference.direction === "asc" ? compared : -compared;
-      return b.id.localeCompare(a.id, undefined, { numeric: true });
-    });
+  // 本任务的发现与【继承来的】发现要分开。
+  //
+  // 为什么：派生任务会继承源任务**全部已结束的发现**——实测任务 4 的接口返回
+  // 273 条，其中 214 条 inherited（来自任务 3），只有 59 条是任务 4 自己报的。
+  // 以前两者在同一个列表里平铺，继承的只靠标题下一行「来源 #3 · 只读」的小字
+  // 区分——两个任务的名字又都以「安康职业技术学院」开头被截断，肉眼根本分不清
+  // 哪条是本任务报的、哪条是从源任务继承的。
+  //
+  // 继承本身是有用的（少干重复活、结论可复用），后台逻辑不动；这里只解决
+  // **前端视图按任务分开**：继承的折叠成独立分组，默认收起。
+  const sortedFindings = React.useMemo(
+    () =>
+      findings
+        .filter((f) => f.task_id === taskId || f.inherited)
+        .sort((a, b) => {
+          const compared = Date.parse(a.ts) - Date.parse(b.ts);
+          if (compared !== 0) return sortPreference.direction === "asc" ? compared : -compared;
+          return b.id.localeCompare(a.id, undefined, { numeric: true });
+        }),
+    [findings, taskId, sortPreference.direction],
+  );
+  const ownItems = React.useMemo(() => sortedFindings.filter((f) => !f.inherited), [sortedFindings]);
+  // 继承的按来源任务分组。
+  const inheritedGroups = React.useMemo(() => {
+    const bySource = new Map<string, Finding[]>();
+    for (const f of sortedFindings) {
+      if (!f.inherited) continue;
+      const src = String(f.source_task_id ?? "");
+      const list = bySource.get(src);
+      if (list) list.push(f);
+      else bySource.set(src, [f]);
+    }
+    return [...bySource.entries()].map(([sourceTaskId, items]) => ({ sourceTaskId, items }));
+  }, [sortedFindings]);
+  const [expandedInherited, setExpandedInherited] = React.useState<Record<string, boolean>>({});
 
   return (
     <Card className="overflow-hidden py-0">
@@ -211,10 +239,40 @@ export function FindingsTab({ taskId }: { taskId: string }) {
             )}
           </button>
         </div>
-        {items.map((f) => (
+        {ownItems.map((f) => (
           <Row key={f.id} f={f} contextTaskId={taskId} onStatus={onStatus} />
         ))}
-        {items.length === 0 && (
+        {/* 继承来的发现（来自别的任务）折叠成独立分组，默认收起。 */}
+        {inheritedGroups.map((group) => {
+          const expanded = expandedInherited[group.sourceTaskId] ?? false;
+          return (
+            <div key={`inh-${group.sourceTaskId}`}>
+              <button
+                type="button"
+                onClick={() =>
+                  setExpandedInherited((prev) => ({
+                    ...prev,
+                    [group.sourceTaskId]: !expanded,
+                  }))
+                }
+                className="flex w-full items-center gap-2 border-b bg-muted/30 px-4 py-2 text-left text-xs text-muted-foreground hover:bg-accent/40"
+                aria-expanded={expanded}
+              >
+                <ChevronRightIcon
+                  className={cn("size-3.5 shrink-0 transition-transform", expanded && "rotate-90")}
+                />
+                <span className="min-w-0 flex-1 truncate">
+                  来自任务 #{group.sourceTaskId} 的历史发现（{group.items.length} 条 · 只读）
+                </span>
+              </button>
+              {expanded &&
+                group.items.map((f) => (
+                  <Row key={f.id} f={f} contextTaskId={taskId} onStatus={onStatus} />
+                ))}
+            </div>
+          );
+        })}
+        {ownItems.length === 0 && inheritedGroups.length === 0 && (
           <p className="px-4 py-8 text-center text-muted-foreground text-sm">本任务及直接关联任务暂无确认发现。</p>
         )}
       </CardContent>
