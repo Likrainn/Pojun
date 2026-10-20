@@ -49,12 +49,30 @@ func wrapToolLog(inner harness.HookRunner, kind string, label string) *toolLogHo
 }
 
 // PreToolUse 记录一次工具调用的开始。
+//
+// 顺序很重要：**先转发给 inner，再记日志**。因为 inner（拦截/steer）会返回
+// 「这次调用被拦了」，日志层需要知道这个结果才能准确标注——
+//
+//	先记后转发 → 日志只说「要调这个工具」，实际有没有被拦是猜的；
+//	先转发后记 → 日志直接标 BLOCKED。
+//
+// 而「被拦」的判据必须是【平台自己的拦截决定】，不是输出里出现 403/denied
+// 这类字样——实测生成漏洞报告的命令（输出里含漏洞描述）被误判成 blocked。
 func (h *toolLogHooks) PreToolUse(ctx context.Context, name string, input []byte) (bool, string, []byte) {
-	h.logPre(ctx, name, input)
+	var (
+		block   bool
+		message string
+		updated []byte
+	)
 	if h.inner != nil {
-		return h.inner.PreToolUse(ctx, name, input)
+		block, message, updated = h.inner.PreToolUse(ctx, name, input)
 	}
-	return false, "", nil
+	tag := ""
+	if block {
+		tag = " BLOCKED"
+	}
+	log.Printf("%s → %s%s %s", h.prefix(ctx), name, tag, summarizeToolInput(name, input))
+	return block, message, updated
 }
 
 // PostToolUse 记录一次工具调用的结果。
@@ -108,7 +126,6 @@ func (h *toolLogHooks) logPre(ctx context.Context, name string, input []byte) {
 func (h *toolLogHooks) logPost(ctx context.Context, name string, input, result []byte, isErr bool) {
 	log.Printf("%s ← %s %s out=%dB", h.prefix(ctx), name, classifyToolResult(name, result, isErr), len(result))
 }
-
 // logStop 打收场行：最后一个助手回合有没有正文/工具调用。这是区分
 // 「正常做完」「空转收场」「模型报错」的第一手信号。
 func (h *toolLogHooks) logStop(ctx context.Context, messages []llm.Message) {
@@ -238,12 +255,19 @@ const platformBlockMarker = "【ARTEX 平台管控·非目标防御】"
 
 // classifyToolResult 把工具结果压成一个分类标签。
 //
-// blocked 的判定**分两种**，不能混：
-//   - 平台拦截：结果里有 ARTEX 自己的固定前缀 → 精确、可靠。
-//   - 目标侧拦截（WAF/403/…）：只对 **Bash** 生效。Bash 是打目标的，命令输出里
-//     出现 403 说明被目标挡了；数据类工具（list_findings/list_assets…）的输出里
-//     出现 "403"/"denied" 往往只是**漏洞描述本身**——实测 list_findings 返回 30KB
-//     漏洞数据被判成 blocked，纯属误报。归因正则只对 Bash 生效，与 guard 一致。
+// 语义分层，别混：
+//   - blocked：平台**自己**拦了这次调用。判据是 ARTEX 的固定前缀，精确可靠。
+//     （PreToolUse 行会标 BLOCKED，这里是兜底——理论上被拦的调用不会有 post 行。）
+//   - waf：输出里出现 WAF/403/denied 措辞，**只对 Bash 生效**。Bash 是打目标的，
+//     命令输出里的 403 说明被目标挡了——这是给 planner 做归因的有用信号。
+//     但数据类工具（list_findings/list_assets）的输出里出现 403/denied 往往只是
+//     **漏洞描述本身**，实测 30KB 的漏洞列表和一份漏洞报告都被误判过。
+//   - error：工具执行报错。
+//   - ok：其余。
+//
+// 为什么不把 waf 折进 blocked：实测「生成漏洞报告」的命令（输出含漏洞描述）
+// 被判成 blocked，而「被平台拦截」是完全不同的语义——前者是正常干活，后者是
+// 被平台管控。混在一起会让 blocked 的计数完全失去意义。
 func classifyToolResult(name string, result []byte, isErr bool) string {
 	s := string(result)
 	if isErr {
@@ -253,7 +277,7 @@ func classifyToolResult(name string, result []byte, isErr bool) string {
 		return "blocked"
 	}
 	if name == "Bash" && reToolBlocked.MatchString(s) {
-		return "blocked"
+		return "waf"
 	}
 	return "ok"
 }
