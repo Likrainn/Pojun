@@ -141,14 +141,62 @@ function emptyState(): SessionState {
   };
 }
 
+// taskScopedKey 给会话 key 加任务前缀。
+//
+// ## 为什么必须加
+//
+// 会话 key 原本是 `main:<seg>` / `plan` / `system` / `intent:<id>`——**前三个
+// 不含任务维度**。于是任务 3 的主会话和任务 4 的主会话 key 字面上都是
+// "main:0"。
+//
+// 而 store / reqTokenRef / loadingKeysRef / activeKeyRef **全部按这个 key
+// 索引**。切任务时：
+//
+//	1. reset effect 把 loadingKeysRef 置成 new Set(["main:0"])（预留）
+//	2. boot 时若新任务的当前段恰好是 0，`delete("main:0")` 不执行 → 预留项留着
+//	3. 用户点开主会话 → loadSession("main:0") → loadingKeysRef.has("main:0")
+//	   → **直接 return，不发请求**
+//	4. 界面显示的是 reset 前的残留 —— **就是上一个任务的会话**
+//
+// intent:<id> 不会串（节点 id 全局唯一），但主会话/规划/系统三类都会串，
+// 而这三类恰好是任务级的（worker 会话反而安全）。
+//
+// ## 为什么不改成"清空守卫"而是"加前缀"
+//
+// 清空守卫只能修好「预留项没删」这一处，跨任务的同 key 仍可能撞（比如
+// 切任务时旧请求在飞、token 序号与新任务混用）。加前缀是**结构性**的修复：
+// 不同任务的 key 永不相同，守卫/令牌/缓存自然隔离，不需要在每个使用点记得
+// "切任务时记得清干净"。
+function taskScopedKey(taskId: string, key: string): string {
+  return `t${taskId}:${key}`;
+}
+
+// wireSessionKey 把 store key 还原成后端认识的 session 格式。
+//
+// store key 带任务前缀（`t3:main:0`），但后端 parseActivitySession 只认
+// `main:N` / `plan` / `intent:ID` —— 直接把 store key 发过去会解析失败。
+// 所以发请求前剥掉前缀。
+//
+// 剥法：找最后一个 "t<taskId>:" 前缀。taskId 是数字串（任务的 id），
+// 而 key 的后半段是 `main:N`/`plan`/`system`/`intent:ID`，后者不会以 "t数字:"
+// 开头，所以按第一个 ":" 之后找 "t<数字>:" 前缀是安全的。
+function wireSessionKey(taskId: string, key: string): string {
+  const prefix = `t${taskId}:`;
+  return key.startsWith(prefix) ? key.slice(prefix.length) : key;
+}
+
 // sessionKeyOf routes an activity to its stable session key. worker="planner" covers
 // BOTH the Goal Agent's round-0 decomposition and the Planner (single Plan session).
-function sessionKeyOf(a: Activity): string {
-  if (a.worker === "system" || a.kind === "llm_switch" || a.kind === "llm_failover") return "system";
-  if (a.worker === "mainagent") return `main:${a.main_seg ?? 0}`; // one key per conversation segment
-  if (a.worker === "planner") return "plan";
-  if (a.intent_id) return `intent:${a.intent_id}`;
-  return "unknown";
+//
+// **key 必须带 taskId**（见 taskScopedKey 的说明）——两个任务的 "main:0"/
+// "plan"/"system" 在字面上完全相同，共用一套 store/守卫就会把上一个任务的
+// 会话显示到当前任务里。
+function sessionKeyOf(a: Activity, taskId: string): string {
+  if (a.worker === "system" || a.kind === "llm_switch" || a.kind === "llm_failover") return taskScopedKey(taskId, "system");
+  if (a.worker === "mainagent") return taskScopedKey(taskId, `main:${a.main_seg ?? 0}`); // one key per conversation segment
+  if (a.worker === "planner") return taskScopedKey(taskId, "plan");
+  if (a.intent_id) return taskScopedKey(taskId, `intent:${a.intent_id}`);
+  return taskScopedKey(taskId, "unknown");
 }
 
 // mergeBySeq unions two activity lists by seq (dedup) in ascending seq order. Every
@@ -248,7 +296,9 @@ const roleMeta = {
 // starts on a clean transcript while the task's graph/assets/goal stay shared. Each
 // segment is a switchable UI session; only the current (highest) one is writable.
 const mainSessionId = (seg: number) => `s-main-${seg}`;
-const mainSessionKey = (seg: number) => `main:${seg}`;
+// mainSessionKey 的 key 带任务前缀（见 taskScopedKey）——任务 3 与任务 4 的
+// "main:0" 在字面上相同，不加前缀会互相串。
+const mainSessionKey = (taskId: string, seg: number) => taskScopedKey(taskId, `main:${seg}`);
 const mainSessionTitle = (seg: number) => `主 Agent · 会话 #${seg + 1}`;
 const MAIN_ID = mainSessionId(0);
 const MAIN_SESSION: Session = {
@@ -289,11 +339,12 @@ const SYSTEM_SESSION: Session = {
 };
 
 // keyForSession maps a UI Session → its stable store key (main:<seg> | plan | intent:<id>).
-function keyForSession(s: Session): string {
-  if (s.role === "mainagent") return `main:${s.seg ?? 0}`;
-  if (s.role === "planner") return "plan";
-  if (s.role === "system") return "system";
-  return `intent:${s.intent_id}`;
+// key 带任务前缀（见 taskScopedKey）。
+function keyForSession(s: Session, taskId: string): string {
+  if (s.role === "mainagent") return taskScopedKey(taskId, `main:${s.seg ?? 0}`);
+  if (s.role === "planner") return taskScopedKey(taskId, "plan");
+  if (s.role === "system") return taskScopedKey(taskId, "system");
+  return taskScopedKey(taskId, `intent:${s.intent_id}`);
 }
 
 // Map an exploration intent (TaskNode) state → a session status the UI renders.
@@ -571,7 +622,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
       setMainSegs((prev) => [{ seq: r.seq, created_at: r.created_at }, ...prev.filter((m) => m.seq !== r.seq)]);
       setCurrentSeg(r.current ?? r.seq);
       // Seed an empty, loaded state so the new (empty) session renders immediately.
-      setStore((prev) => ({ ...prev, [mainSessionKey(r.seq)]: { ...emptyState(), loaded: true } }));
+      setStore((prev) => ({ ...prev, [mainSessionKey(taskId, r.seq)]: { ...emptyState(), loaded: true } }));
       setActiveId(mainSessionId(r.seq));
       setListOpen(false);
       setInput("");
@@ -644,7 +695,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
   // Refs backing SSE/loading without re-render churn.
   const snapshotRef = React.useRef(0); // task-level snapshot cursor → SSE since=
   const esRef = React.useRef<EventSource | null>(null);
-  const activeKeyRef = React.useRef(mainSessionKey(0)); // current session key (for SSE dispatch/unread)
+  const activeKeyRef = React.useRef(mainSessionKey(taskId, 0)); // current session key (for SSE dispatch/unread)
   const atBottomRef = React.useRef(true); // transcript pinned to bottom?
   const llmToastSeqRef = React.useRef<Set<number>>(new Set());
   const chatStatusRequestRef = React.useRef(0);
@@ -674,7 +725,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
       reqTokenRef.current[key] = token;
       patchStore(key, (s) => ({ ...s, loading: true, error: undefined }));
 
-      if (key === "system") {
+      if (key === taskScopedKey(taskId, "system")) {
         void (async () => {
           let since = 0;
           let systemItems: Activity[] = [];
@@ -718,7 +769,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
       }
 
       api
-        .activityHistory(taskId, key, 0, PAGE)
+        .activityHistory(taskId, wireSessionKey(taskId, key), 0, PAGE)
         .then((r) => {
           if (reqTokenRef.current[key] !== token) return; // superseded
           if (r.snapshotCursor > snapshotRef.current) snapshotRef.current = r.snapshotCursor;
@@ -755,7 +806,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
       const prevTop = vp?.scrollTop ?? 0;
       patchStore(key, (s) => ({ ...s, loadingMore: true }));
       api
-        .activityHistory(taskId, key, st.earliestSeq, PAGE)
+        .activityHistory(taskId, wireSessionKey(taskId, key), st.earliestSeq, PAGE)
         .then((r) => {
           patchStore(key, (s) => {
             const items = mergeBySeq(r.items, s.items);
@@ -895,7 +946,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
     reqTokenRef.current = {};
     // Reserve the initial main key so the active-session effect (which fires for main on
     // mount) won't double-load it and pre-empt the SSE opened here.
-    loadingKeysRef.current = new Set([mainSessionKey(0)]);
+    loadingKeysRef.current = new Set([mainSessionKey(taskId, 0)]);
     let alive = true;
 
     // MOCK demo: no SSE backend — pull one activity snapshot and bucket by session.
@@ -906,7 +957,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
           if (!alive) return;
           const buckets: SessionStore = {};
           for (const a of r.items) {
-            const k = sessionKeyOf(a);
+            const k = sessionKeyOf(a, taskId);
             if (!buckets[k]) buckets[k] = emptyState();
             buckets[k].items.push(a);
           }
@@ -918,13 +969,13 @@ export function SessionsTab({ taskId }: { taskId: string }) {
             st.earliestSeq = st.items.length ? st.items[0].seq : 0;
             st.lastTs = st.items.length ? st.items[st.items.length - 1].ts : "";
           }
-          buckets[mainSessionKey(0)] ??= { ...emptyState(), loaded: true };
+          buckets[mainSessionKey(taskId, 0)] ??= { ...emptyState(), loaded: true };
           buckets.system ??= { ...emptyState(), loaded: true };
           setStore(buckets);
         })
         .catch(() =>
           setStore({
-            [mainSessionKey(0)]: { ...emptyState(), loaded: true },
+            [mainSessionKey(taskId, 0)]: { ...emptyState(), loaded: true },
             system: { ...emptyState(), loaded: true },
           }),
         );
@@ -935,7 +986,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
 
     const token = (reqTokenRef.current.mainboot ?? 0) + 1;
     reqTokenRef.current.mainboot = token;
-    let bootKey = mainSessionKey(0);
+    let bootKey = mainSessionKey(taskId, 0);
     // Resolve the main-agent segments first, then load the CURRENT segment's history and
     // open the SSE from its snapshot cursor. The SSE tails all segments and routes each
     // frame by session_key (main:<seg>), so switching segments needs no new stream.
@@ -946,12 +997,12 @@ export function SessionsTab({ taskId }: { taskId: string }) {
         const segs = ms.sessions.length ? ms.sessions : [{ seq: 0, created_at: "" }];
         setMainSegs(segs);
         setCurrentSeg(ms.current);
-        bootKey = mainSessionKey(ms.current);
-        if (bootKey !== mainSessionKey(0)) loadingKeysRef.current.delete(mainSessionKey(0));
+        bootKey = mainSessionKey(taskId, ms.current);
+        if (bootKey !== mainSessionKey(taskId, 0)) loadingKeysRef.current.delete(mainSessionKey(taskId, 0));
         loadingKeysRef.current.add(bootKey);
         setActiveId(mainSessionId(ms.current));
         patchStore(bootKey, (s) => ({ ...s, loading: true }));
-        return api.activityHistory(taskId, bootKey, 0, PAGE);
+        return api.activityHistory(taskId, wireSessionKey(taskId, bootKey), 0, PAGE);
       })
       .then((r) => {
         if (!alive || reqTokenRef.current.mainboot !== token) return;
@@ -1001,7 +1052,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                 // The periodic resolver poll will retry if this event-triggered refresh fails.
               });
           }
-          const k = sessionKeyOf(a);
+          const k = sessionKeyOf(a, taskId);
           setStore((prev) => {
             const cur = prev[k] ?? emptyState();
             const activeK = activeKeyRef.current;
@@ -1201,8 +1252,8 @@ export function SessionsTab({ taskId }: { taskId: string }) {
     },
     [store],
   );
-  const currentMainKey = mainSessionKey(currentSeg);
-  const plannerLive = recentLive("plan");
+  const currentMainKey = mainSessionKey(taskId, currentSeg);
+  const plannerLive = recentLive(taskScopedKey(taskId, "plan"));
 
   // Which main segment is streaming RIGHT NOW. A main turn is serialized per task, so at
   // most one segment is live. Gate on the real running flag (sending / mainChatRunning)
@@ -1215,14 +1266,14 @@ export function SessionsTab({ taskId }: { taskId: string }) {
     let seg = currentSeg;
     let bestTs = -1;
     for (const m of mainSegs) {
-      const raw = store[mainSessionKey(m.seq)]?.lastTs;
+      const raw = store[mainSessionKey(taskId, m.seq)]?.lastTs;
       const ts = raw ? Date.parse(raw) : -1;
       if (ts > bestTs) {
         bestTs = ts;
         seg = m.seq;
       }
     }
-    const items = store[mainSessionKey(seg)]?.items ?? [];
+    const items = store[mainSessionKey(taskId, seg)]?.items ?? [];
     const last = items[items.length - 1];
     if (last && (last.kind === "result" || (last.kind === "text" && last.is_error))) return null;
     return seg;
@@ -1269,7 +1320,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
   const isMain = active.role === "mainagent";
   const isPlanner = active.role === "planner";
   const isSystem = active.role === "system";
-  const activeKey = keyForSession(active);
+  const activeKey = keyForSession(active, taskId);
   const activeState = store[activeKey];
   // A main turn is serialized per task (chat lock), so "busy" is task-wide: while any
   // main segment is mid-turn the active composer is disabled. Clear it the moment the
@@ -1301,10 +1352,14 @@ export function SessionsTab({ taskId }: { taskId: string }) {
     }
   }, [activeKey]);
 
-  const focusKey = approvalFocus.state?.source?.session;
+  // focusKey 来自后端（source.session），格式是 `main:N` / `plan` / `intent:ID`
+  // ——**没有任务前缀**。它要作为 store key 用，所以必须转成 task-scoped；
+  // 发给后端时用原始的 focusWireKey（后端只认无前缀格式）。
+  const focusWireKey = approvalFocus.state?.source?.session;
+  const focusKey = focusWireKey ? taskScopedKey(taskId, focusWireKey) : undefined;
   const loadFocusPage = React.useCallback(
-    (before: number) => api.activityHistory(taskId, focusKey ?? "main", before, PAGE),
-    [taskId, focusKey],
+    (before: number) => api.activityHistory(taskId, focusWireKey ?? "main", before, PAGE),
+    [taskId, focusWireKey],
   );
   const mergeFocusPage = React.useCallback(
     (page: { items: Activity[]; hasMore: boolean }) => {
@@ -1689,7 +1744,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                           active={s.id === activeId}
                           displayTitle={meta?.title ?? s.title}
                           hasPending={hasPendingForSession(s)}
-                          unread={store[keyForSession(s)]?.unread}
+                          unread={store[keyForSession(s, taskId)]?.unread}
                           onClick={() => {
                             approvalFocus.close();
                             setActiveId(s.id);
