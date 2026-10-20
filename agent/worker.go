@@ -488,9 +488,18 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		// 工具调用可观测：worker 的工具调用此前完全不可观测——journal 里只有 planner
 		// 心跳，worker 死活要靠翻 transcripts/*.jsonl 的 mtime 才确认得到。日志层套在
 		// 拦截链外侧（先记后转发），纯旁路不影响 steer/拦截决策。
-		opts.Hooks = wrapToolLog(hooks, KindWorker, fmt.Sprintf("%s · #%d", name, intent.ID))
+		//
+		// 最外层再套一层 idleStop：连续多轮无写回就要求收场。判据是产出率而不是
+		// 时长——持续产出的 worker 不会被它打断（深度探索不受影响），空转的会被收。
+		// 详见 agent/idlestop.go 的注释。
+		logged := wrapToolLog(hooks, KindWorker, fmt.Sprintf("%s · #%d", name, intent.ID))
+		opts.Hooks = wrapIdleStop(logged, tsx.Writes, func(reason string) {
+			logIdleStop(name, taskID, intent.ID, reason)
+		})
 	} else {
-		opts.Hooks = toolLogSink(KindWorker)
+		opts.Hooks = wrapIdleStop(toolLogSink(KindWorker), tsx.Writes, func(reason string) {
+			logIdleStop(name, taskID, intent.ID, reason)
+		})
 	}
 	if w.tx != nil { // persist raw LLM conversation; one file per worked intent
 		opts.Transcript = w.tx
