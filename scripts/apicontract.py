@@ -43,6 +43,13 @@ AUTH_EXEMPT_EXACT = ("/api/health",)
 # 只读方法：做完整的 C 段检查
 READ_METHODS = ("GET",)
 
+# 「外部依赖未就绪」不是本系统的缺陷。ScopeSentry 这类集成在用户没配置数据源
+# 时必然失败——前端有专门的 status 接口显示「未配置」。把它算成 5xx bug 会
+# 让真问题被淹没。识别方式：5xx + 错误消息里出现下列配置类措辞。
+UNCONFIGURED_MARKERS = (
+    "未配置", "请先配置", "不存在，请先创建", "未初始化",
+)
+
 # 路径参数替换表。{key} 等用真实存在的名字。
 PATH_PARAM_RE = re.compile(r"\{([^}]+)\}")
 
@@ -168,6 +175,19 @@ def discover_ids(base_url, token):
     return ids
 
 
+def is_stream_path(path):
+    """SSE 长连接路由：请求会一直挂着，直到客户端断开。
+
+    这类路由不能用普通的「请求完成」语义来测——它本来就该挂着。所以
+    超时反而说明流正常建立了。
+    """
+    return path.endswith("/stream")
+
+
+def route_timeout(path):
+    return 4 if is_stream_path(path) else 15
+
+
 def fill_path(path, ids):
     """把 {param} 换成真实值。返回 (filled_path, unresolved_params)。"""
     missing = []
@@ -181,6 +201,13 @@ def fill_path(path, ids):
 
     filled = PATH_PARAM_RE.sub(sub, path)
     return filled, missing
+
+
+def is_unconfigured(body):
+    """判断错误消息是否属于「外部依赖未配置」而非真 bug。"""
+    if not body:
+        return False
+    return any(m in body for m in UNCONFIGURED_MARKERS)
 
 
 def check_route(route, base_url, token, ids, do_read):
@@ -198,11 +225,12 @@ def check_route(route, base_url, token, ids, do_read):
         "anon_status": None,
         "empty_status": None,
         "read_status": None,
+        "unconfigured": False,
         "issues": [],
     }
 
     # A. 未授权
-    st, body, err = fetch(url, method=method, body={} if method != "GET" else None)
+    st, body, err = fetch(url, method=method, body={} if method != "GET" else None, timeout=route_timeout(path))
     rec["anon_status"] = st
     exempt = path.startswith(AUTH_EXEMPT_PREFIXES) or path in AUTH_EXEMPT_EXACT
     if st == 0:
@@ -219,21 +247,36 @@ def check_route(route, base_url, token, ids, do_read):
         return rec
 
     # B. 空参数（带 token，故意不给必填参数）
-    st, body, err = fetch(url, method=method, token=token, body={} if method != "GET" else None)
+    st, body, err = fetch(url, method=method, token=token, body={} if method != "GET" else None, timeout=route_timeout(path))
     rec["empty_status"] = st
-    if st >= 500:
+    if st >= 500 and is_unconfigured(body):
+        rec["unconfigured"] = True
+    elif st >= 500:
         rec["issues"].append(f"空参数返回 5xx: {st} {body[:300]}")
     if st == 0:
-        rec["issues"].append(f"空参数请求失败: {err}")
+        if is_stream_path(path):
+            # SSE 是长连接，等不到结束就超时是预期的，不算问题。
+            rec["empty_status"] = 200
+            rec["empty_stream"] = True
+            rec["issues"] = [i for i in rec["issues"] if "空参数请求失败" not in i]
+        else:
+            rec["issues"].append(f"空参数请求失败: {err}")
 
     # C. 正常只读
     if do_read and method in READ_METHODS:
-        st, body, err = fetch(url, method=method, token=token)
+        st, body, err = fetch(url, method=method, token=token, timeout=route_timeout(path))
         rec["read_status"] = st
-        if st >= 500:
+        if st >= 500 and is_unconfigured(body):
+            rec["unconfigured"] = True
+        elif st >= 500:
             rec["issues"].append(f"正常 GET 返回 5xx: {st} {body[:300]}")
         if st == 0:
-            rec["issues"].append(f"正常 GET 请求失败: {err}")
+            if is_stream_path(path):
+                rec["read_status"] = 200
+                rec["read_stream"] = True
+                rec["issues"] = [i for i in rec["issues"] if "正常 GET 请求失败" not in i]
+            else:
+                rec["issues"].append(f"正常 GET 请求失败: {err}")
 
     return rec
 
@@ -243,13 +286,22 @@ def summarize(results):
     empty = Counter(str(r["empty_status"]) for r in results if r["empty_status"] is not None)
     read = Counter(str(r["read_status"]) for r in results if r["read_status"] is not None)
     with_issues = [r for r in results if r["issues"]]
+    unconfigured = [r for r in results if r.get("unconfigured")]
+    # 外部依赖未就绪的路由不进 server_errors，但要单独报出来。
+    unconfigured_paths = {r["path"] for r in unconfigured}
+    server_errors = [
+        r for r in results
+        if ((r["empty_status"] or 0) >= 500 or (r["read_status"] or 0) >= 500)
+        and r["path"] not in unconfigured_paths
+    ]
     return {
         "total": len(results),
         "anon_status_dist": dict(anon),
         "empty_status_dist": dict(empty),
         "read_status_dist": dict(read),
         "issue_count": len(with_issues),
-        "server_errors": [r for r in results if (r["empty_status"] or 0) >= 500 or (r["read_status"] or 0) >= 500],
+        "server_errors": server_errors,
+        "unconfigured": unconfigured,
         "auth_leaks": [r for r in results if r["anon_status"] not in (401, 0) and not (
             r["path"].startswith(AUTH_EXEMPT_PREFIXES) or r["path"] in AUTH_EXEMPT_EXACT)],
         "issues": with_issues,
@@ -312,6 +364,12 @@ def main():
             log(f"  {r['method']} {r['path']}  empty={r['empty_status']} read={r['read_status']}")
             for i in r["issues"]:
                 log(f"      {i}")
+
+    if s["unconfigured"]:
+        log("")
+        log(f"外部依赖未就绪（非缺陷）{len(s['unconfigured'])} 条:")
+        for r in s["unconfigured"][:10]:
+            log(f"  {r['method']} {r['path']}  empty={r['empty_status']} read={r['read_status']}")
 
     if s["auth_leaks"]:
         log("")

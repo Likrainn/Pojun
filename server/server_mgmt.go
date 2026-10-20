@@ -877,6 +877,12 @@ func (s *Server) pgSaveMCP(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	// transport 受 DB CHECK 约束（stdio/http/sse）。前置校验，非法值返回 400
+	// 而不是让 DB 约束以 500 的形式冒出来。
+	if msg := checkEnum("transport", m.Transport, validMCPTransports); msg != "" {
+		writeErr(w, 400, msg)
+		return
+	}
 	isNew := m.ID == 0
 	id, err := pg.SaveMCP(&m)
 	if err != nil {
@@ -1816,6 +1822,13 @@ func (s *Server) pgSaveProfile(w http.ResponseWriter, r *http.Request) {
 	p := body.LLMProfile
 	p.APIKey = body.APIKey
 	p.Streaming = body.Streaming == nil || *body.Streaming
+	// format 受 DB CHECK 约束（openai/anthropic/openai-responses）。非法值在
+	// 这里就挡掉，否则会以 500 + SQLSTATE 23514 的形式甩给用户，前端只能显示
+	// 「服务器内部错误」，看不出是自己填错了。
+	if msg := checkEnum("format", p.Format, validLLMProfileFormats); msg != "" {
+		writeErr(w, 400, msg)
+		return
+	}
 	// 输出上限:负数无意义,归零(= 不发送该字段)。字段名开关只有 Chat Completions
 	// 用得上——anthropic 与 openai-responses 各自定死了字段名,存下来只会误导后续读者,
 	// 故非 openai 格式一律清空。未知取值同样清空,避免把 DB CHECK 的报错甩给用户。
@@ -1937,6 +1950,11 @@ func (s *Server) pgActivateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := pg.SetActiveProfile(body.ID); err != nil {
+		// 找不到 profile 是调用方的错（4xx），不是服务端故障。
+		if errors.Is(err, db.ErrLLMProfileNotFound) {
+			writeErr(w, 404, "LLM 配置不存在")
+			return
+		}
 		writeErr(w, 500, err.Error())
 		return
 	}
