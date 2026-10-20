@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+## [0.3.58] - 2026-10-20
+
+### 修复的问题
+
+- **v0.3.56 的 thinking 降级改错了层，从未触发过**。上一版降级改的是
+  `llm.CompletionRequest.Thinking`——但 thinking 参数是在 **provider 配置层**注入的
+  （`llm.Config.ThinkingType`，见 `agent/provider.go` 的 `NewProvider`），不在请求里。
+  请求里的 `req.Thinking` 是「本次调用覆盖 profile 设置」用的请求级开关，默认恒为空，
+  于是降级条件永远为假。
+  - **实测证据**：把 profile 的 `thinking_type` 设成 `disabled` 后，2013 错误如期出现
+    **23 次**，而降级日志 **0 次**。
+  - 改为正确降级：**换 provider**。`agent.Config` 新增 `SuppressThinking`（强制不发
+    `thinking.type`）；`taskLLMStreamHooks` 新增 `withoutThinking`，按 `current()` 同样的
+    优先级（绑定 → 任务链 → 全局）解析配置后重建 provider。
+  - 重建的 provider **不进 provider 缓存**——它只服务这一次降级重试，缓存进去等于
+    悄悄改掉了用户的配置。
+  - 降级后配置除 `ThinkingType` 外完全不变（BaseURL/APIKey/Model/ReasoningEffort/
+    MaxTokens/ContextWindowK 都不动），有测试守着。
+
 ## [0.3.57] - 2026-10-20
 
 ### 修复的问题
