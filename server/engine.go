@@ -788,6 +788,27 @@ func (e *Engine) Run(ctx context.Context, t *Task) {
 	}
 }
 
+// plannerRoundTimeout 是**一轮规划**自身的墙钟上限（与任务 deadline 无关）。
+//
+// 为什么必须有（实测事故 2026-10-20 线上）：
+//
+//	planner 的 MaxDuration = clampMaxDuration(deadline, 0)，任务没有 deadline 时
+//	就是 0 = 不限时；而 SDK 的 MaxDuration 只在轮边界检查、且只约束**工具执行**
+//	（LLM 调用用的是无 deadline 的 l.ctx）。于是一次上游半开连接（连上了但
+//	永不返回）就让 Plan() 永不返回。
+//
+//	而 runRound 是**串行**的：它没返回，后续所有唤醒（边沿 + 10 分钟心跳）就
+//	全堵在里面出不来 → planner 永久哑火。
+//
+//	实测症状：14:30 启动后 planner 跑到 14:42（任务3）/ 15:45（任务4）就没再出
+//	规划轮；worker 自己把剩余意图跑完（最后一个 exhausted 在 16:53）；此后 6
+//	小时零规划轮、零新意图——「运行中 Worker」恒为 0，任务状态仍是 running
+//	却什么都不干。重启服务立即恢复。
+//
+//	15 分钟的由来：实测一轮规划（1M 上下文 + 几十次工具调用）3–5 分钟，15 分钟
+//	给三倍冗余；同时保证「上游卡死」最多浪费 15 分钟就自愈，不会无限期哑火。
+const plannerRoundTimeout = 15 * time.Minute
+
 // plannerHeartbeatInterval 解析任务的 planner 心跳间隔。db.CreateTask 已归一
 // (低于 600 一律抬到 600);这里再兜一次底,防内存态异常值。
 func plannerHeartbeatInterval(t *Task) time.Duration {
@@ -879,6 +900,25 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		if ectx.Err() != nil || e.IsDeleting(t.ID) {
 			return
 		}
+		// 规划轮自身的墙钟上限（与任务 deadline 无关）。
+		//
+		// 为什么必须有：planner 的 MaxDuration 来自 clampMaxDuration(deadline, 0)，
+		// 任务没有 deadline 时它就是 0 = **不限时**；而 SDK 的 MaxDuration 只在
+		// **轮边界**检查、且只约束**工具执行**——LLM 调用用的是无 deadline 的
+		// l.ctx。一次上游半开连接（连接建立但永不返回）就会让 Plan() 永不返回，
+		// runRound 永不结束，而 runRound 是**串行**的：后续所有唤醒（边沿 + 心跳）
+		// 都堵在同一个 runRound 里出不来。
+		//
+		// 实测后果（线上 2026-10-20）：14:30 启动后 planner 跑到 14:42/15:45 就
+		// 不再出规划轮，worker 自己把剩余意图跑完（最后一个 exhausted 在 16:53），
+		// 此后 6 小时零规划轮、零新意图——「运行中 Worker」恒为 0，任务看着还在
+		// running 却什么都不干。重启服务即恢复。
+		//
+		// 15 分钟的由来：实测一轮规划（1M 上下文 + 几十次工具调用）3–5 分钟；
+		// 15 分钟给它三倍冗余，同时保证「上游卡死」最多浪费 15 分钟就能自愈，
+		// 不会像之前那样无限期哑火。
+		roundCtx, roundCancel := context.WithTimeout(ectx, plannerRoundTimeout)
+		defer roundCancel()
 		log.Printf("[planner] task %s 规划中…(%s 触发)", t.ID, src)
 		// round marker: each Plan() is one planner round; emit a boundary so the
 		// UI can separate rounds in the transcript (kind='round').
@@ -889,9 +929,16 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		triggers := t.drainTriggers()
 		taskIDInt, _ := strconv.ParseInt(t.ID, 10, 64)
 		e.BeginLLMCall(t.ID)
-		met, reason, err := planner.Plan(ectx, taskIDInt, e.m.assets, t.Store, t.Goal, triggers, emit)
+		met, reason, err := planner.Plan(roundCtx, taskIDInt, e.m.assets, t.Store, t.Goal, triggers, emit)
 		e.EndLLMCall(t.ID)
 		switch {
+		case err != nil && roundCtx.Err() != nil && ectx.Err() == nil:
+			// 规划轮超时（本轮自身的墙钟上限到了，不是任务 deadline）。
+			//
+			// 这一支必须能走到：超时时 Plan 返回 ctx 错误，runRound 正常结束，
+			// planner 恢复响应——下次唤醒再规划一轮。**不能**让它走进下面的
+			// "规划出错"分支后被静默吞掉，否则会退回「永久哑火」的旧症状。
+			log.Printf("[planner] task %s 规划轮超时(%s)，本轮作废，等下次唤醒重试", t.ID, plannerRoundTimeout)
 		case err != nil && ectx.Err() == nil:
 			log.Printf("[planner] task %s 规划出错: %v", t.ID, err)
 		case met:
