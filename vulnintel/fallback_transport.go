@@ -38,6 +38,11 @@ func parseProxyURL(raw string) (*url.URL, error) {
 
 func newFallbackTransport(proxyURL string) (http.RoundTripper, error) {
 	direct := http.DefaultTransport.(*http.Transport).Clone()
+	// 直连必须真的直连。http.DefaultTransport 会读环境变量
+	// HTTP_PROXY / HTTPS_PROXY —— 服务进程带着这些变量启动（systemd 的
+	// Environment=），克隆出来的 transport 依然带着代理，于是「回退直连」
+	// 又回到同一个坏代理上，等于没回退。显式清掉 Proxy 才是真的直连。
+	direct.Proxy = nil
 	t := strings.TrimSpace(proxyURL)
 	if t == "" {
 		return direct, nil

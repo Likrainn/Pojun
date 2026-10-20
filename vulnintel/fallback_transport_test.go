@@ -130,3 +130,40 @@ func TestFallbackTransportWithoutProxyIsDirect(t *testing.T) {
 		t.Fatal("nil transport")
 	}
 }
+
+// 「回退直连」必须是真的直连。
+//
+// http.DefaultTransport 会读环境变量 HTTP_PROXY / HTTPS_PROXY，服务进程
+// 带着这些变量启动（systemd Environment=），克隆出来的 transport 依然带着
+// 代理——于是「回退直连」又回到同一个坏代理上，等于没回退。实测踩过：
+// 单元测试全绿（测试进程没有这些环境变量），线上照样 EOF。
+func TestFallbackDirectIgnoresEnvProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://10.255.255.1:1")
+	t.Setenv("HTTPS_PROXY", "http://10.255.255.1:1")
+	t.Setenv("http_proxy", "http://10.255.255.1:1")
+	t.Setenv("https_proxy", "http://10.255.255.1:1")
+
+	tr, err := newFallbackTransport("http://10.10.70.14:7897")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fb, ok := tr.(*fallbackTransport)
+	if !ok {
+		t.Fatalf("expected *fallbackTransport, got %T", tr)
+	}
+	direct, ok := fb.direct.(*http.Transport)
+	if !ok {
+		t.Fatalf("direct transport should be *http.Transport, got %T", fb.direct)
+	}
+	if direct.Proxy != nil {
+		t.Error("direct transport must not carry the environment proxy")
+	}
+	// 代理那一路则必须带代理
+	proxied, ok := fb.proxy.(*http.Transport)
+	if !ok {
+		t.Fatalf("proxy transport should be *http.Transport, got %T", fb.proxy)
+	}
+	if proxied.Proxy == nil {
+		t.Error("proxy transport must carry the configured proxy")
+	}
+}
