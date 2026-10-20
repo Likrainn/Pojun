@@ -1476,6 +1476,12 @@ CREATE INDEX IF NOT EXISTS idx_vuln_pocs_cve ON vuln_pocs(cve_id);
 
 -- 同步水位：每个数据源一行。cursor 存 NVD lastModStartDate（ISO8601），
 -- KEV 无游标语义（全量覆盖），cursor 留空。
+--
+-- page_cursor 存**窗口内的分页进度**（格式 "<窗口起>|<startIndex>"）。NVD 的
+-- 一个 120 天窗口能到十几万条（71 页 × 约 17 秒 + 限速延时），单轮 30 分钟
+-- 的 MaxRuntime 跑不完；而游标只按「窗口」推进，窗口内失败就整窗重跑——游标
+-- 永远卡在同一个窗口，每轮都白跑。实测：游标停在 2026-06-10，最后那个窗口
+-- 反复超时，NVD 的 40 万条目录补了 14 万条就再也补不上。
 CREATE TABLE IF NOT EXISTS vuln_sync_state (
     source        TEXT PRIMARY KEY,
     last_sync_at  TIMESTAMPTZ,
@@ -1484,3 +1490,4 @@ CREATE TABLE IF NOT EXISTS vuln_sync_state (
     last_error    TEXT NOT NULL DEFAULT '',
     enabled       BOOLEAN NOT NULL DEFAULT true
 );
+ALTER TABLE vuln_sync_state ADD COLUMN IF NOT EXISTS page_cursor TEXT NOT NULL DEFAULT '';

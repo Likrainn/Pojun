@@ -286,6 +286,9 @@ type SyncState struct {
 	TotalSynced int64      `json:"total_synced"`
 	LastError   string     `json:"last_error"`
 	Enabled     bool       `json:"enabled"`
+	// PageCursor 存窗口内的分页进度（"<窗口起>|<startIndex>"），让中断的窗口
+	// 从断掉的那一页续跑，而不是整窗重跑。
+	PageCursor string `json:"page_cursor"`
 }
 
 // GetSyncState returns the row for source, zero-value (enabled=true mirrors the
@@ -295,9 +298,9 @@ func (s *Store) GetSyncState(ctx context.Context, source string) (SyncState, err
 	// to_char forces ISO-8601 on the way out; the ::text cast would return
 	// Postgres's own "2024-05-06 07:08:09+00" which nothing here parses.
 	var lastSync string
-	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(to_char(last_sync_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),''), cursor, total_synced, last_error, enabled
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(to_char(last_sync_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),''), cursor, total_synced, last_error, enabled, page_cursor
 		FROM vuln_sync_state WHERE source=$1`, source).
-		Scan(&lastSync, &st.Cursor, &st.TotalSynced, &st.LastError, &st.Enabled)
+		Scan(&lastSync, &st.Cursor, &st.TotalSynced, &st.LastError, &st.Enabled, &st.PageCursor)
 	if err != nil {
 		if isNoRows(err) {
 			return st, nil
@@ -312,12 +315,13 @@ func (s *Store) GetSyncState(ctx context.Context, source string) (SyncState, err
 
 // SaveSyncState upserts the watermark row.
 func (s *Store) SaveSyncState(ctx context.Context, st SyncState) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO vuln_sync_state (source, last_sync_at, cursor, total_synced, last_error, enabled)
-		VALUES ($1, COALESCE($2::timestamptz, now()), $3, $4, $5, $6)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO vuln_sync_state (source, last_sync_at, cursor, total_synced, last_error, enabled, page_cursor)
+		VALUES ($1, COALESCE($2::timestamptz, now()), $3, $4, $5, $6, $7)
 		ON CONFLICT (source) DO UPDATE SET
 		  last_sync_at=COALESCE($2::timestamptz, now()), cursor=EXCLUDED.cursor,
-		  total_synced=EXCLUDED.total_synced, last_error=EXCLUDED.last_error, enabled=EXCLUDED.enabled`,
-		st.Source, st.LastSyncAt, st.Cursor, st.TotalSynced, st.LastError, st.Enabled)
+		  total_synced=EXCLUDED.total_synced, last_error=EXCLUDED.last_error, enabled=EXCLUDED.enabled,
+		  page_cursor=EXCLUDED.page_cursor`,
+		st.Source, st.LastSyncAt, st.Cursor, st.TotalSynced, st.LastError, st.Enabled, st.PageCursor)
 	return err
 }
 

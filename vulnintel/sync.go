@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -221,7 +223,16 @@ func syncNVD(ctx context.Context, st *Store, cfg Config) error {
 		if !winEnd.Before(now) {
 			winEnd = now
 		}
-		n, err := syncNVDWindow(ctx, client, st, winStart, winEnd, cfg.PageDelay)
+		// Resume inside the window when a previous run stopped mid-window.
+		// Without this the window restarts at page 0 every time, and a window
+		// that needs more than one run's MaxRuntime NEVER completes — the
+		// cursor stays pinned to the same window forever.
+		startIndex := 0
+		if ws, idx, ok := parsePageCursor(state.PageCursor); ok && ws.Equal(winStart) {
+			startIndex = idx
+			log.Printf("[vulnintel] nvd 续跑窗口 %s，startIndex=%d", winStart.Format("2006-01-02"), idx)
+		}
+		n, err := syncNVDWindow(ctx, client, st, winStart, winEnd, cfg.PageDelay, startIndex, &state)
 		total += n
 		state.TotalSynced += int64(n)
 		if err != nil {
@@ -232,6 +243,7 @@ func syncNVD(ctx context.Context, st *Store, cfg Config) error {
 		// Window completed: advance the cursor so an interrupted later window
 		// doesn't replay this one (the 24h overlap on resume keeps it safe).
 		state.Cursor = winEnd.UTC().Format(time.RFC3339)
+		state.PageCursor = ""
 		state.LastError = ""
 		if err := st.SaveSyncState(ctx, state); err != nil {
 			return err
@@ -240,6 +252,7 @@ func syncNVD(ctx context.Context, st *Store, cfg Config) error {
 	}
 	state.LastSyncAt = nowPtr()
 	state.Cursor = now.UTC().Format(time.RFC3339)
+	state.PageCursor = ""
 	state.LastError = ""
 	state.Enabled = true
 	if err := st.SaveSyncState(ctx, state); err != nil {
@@ -249,15 +262,46 @@ func syncNVD(ctx context.Context, st *Store, cfg Config) error {
 	return nil
 }
 
+// formatPageCursor encodes "window start | next startIndex" for the page-level
+// resume watermark.
+func formatPageCursor(winStart time.Time, startIndex int) string {
+	return winStart.UTC().Format(time.RFC3339) + "|" + strconv.Itoa(startIndex)
+}
+
+// parsePageCursor decodes the page-level watermark. ok=false when absent or
+// malformed (the caller then starts the window from page 0).
+func parsePageCursor(raw string) (time.Time, int, bool) {
+	if raw == "" {
+		return time.Time{}, 0, false
+	}
+	i := strings.LastIndex(raw, "|")
+	if i <= 0 {
+		return time.Time{}, 0, false
+	}
+	t, err := time.Parse(time.RFC3339, raw[:i])
+	if err != nil {
+		return time.Time{}, 0, false
+	}
+	idx, err := strconv.Atoi(raw[i+1:])
+	if err != nil || idx < 0 {
+		return time.Time{}, 0, false
+	}
+	return t, idx, true
+}
+
 // syncNVDWindow pages one ≤120-day window to exhaustion, upserting each record.
-func syncNVDWindow(ctx context.Context, client *NvdClient, st *Store, start, end time.Time, delay time.Duration) (int, error) {
+//
+// startIndex lets the caller resume mid-window; state (a *SyncState) receives the
+// page-level watermark after every successful page, so a run cut short by
+// MaxRuntime continues from the next page instead of replaying the whole window.
+func syncNVDWindow(ctx context.Context, client *NvdClient, st *Store, start, end time.Time, delay time.Duration, startIndex int, state *SyncState) (int, error) {
 	const pageSize = 2000
 	total := 0
-	for startIndex := 0; ; startIndex += pageSize {
+	for idx := startIndex; ; idx += pageSize {
 		if err := ctx.Err(); err != nil {
 			return total, err
 		}
-		resp, err := client.FetchPage(ctx, startIndex, pageSize, start, end)
+		resp, err := client.FetchPage(ctx, idx, pageSize, start, end)
 		if err != nil {
 			var rl *RateLimited
 			if errors.As(err, &rl) {
@@ -272,7 +316,7 @@ func syncNVDWindow(ctx context.Context, client *NvdClient, st *Store, start, end
 				}
 				continue // retry same page
 			}
-			return total, fmt.Errorf("window %s..%s @%d: %w", start.Format("2006-01-02"), end.Format("2006-01-02"), startIndex, err)
+			return total, fmt.Errorf("window %s..%s @%d: %w", start.Format("2006-01-02"), end.Format("2006-01-02"), idx, err)
 		}
 		for _, w := range resp.Vulnerabilities {
 			c, ok := ToCVE(w)
@@ -284,7 +328,15 @@ func syncNVDWindow(ctx context.Context, client *NvdClient, st *Store, start, end
 			}
 			total++
 		}
-		if startIndex+resp.ResultsPerPage >= resp.TotalResults || len(resp.Vulnerabilities) == 0 {
+		// Page done: persist the resume point before moving on. The next page
+		// is the one to re-fetch if this run dies.
+		if state != nil {
+			state.PageCursor = formatPageCursor(start, idx+pageSize)
+			if serr := st.SaveSyncState(ctx, *state); serr != nil {
+				return total, serr
+			}
+		}
+		if idx+resp.ResultsPerPage >= resp.TotalResults || len(resp.Vulnerabilities) == 0 {
 			return total, nil
 		}
 		select {
