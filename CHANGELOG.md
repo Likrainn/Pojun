@@ -4,6 +4,43 @@
 
 ## [Unreleased]
 
+## [0.3.57] - 2026-10-20
+
+### 修复的问题
+
+- **任务页的会话串号：session key 不含任务维度**。store / `reqTokenRef` / `loadingKeysRef` / `activeKeyRef`
+  全部按会话 key 索引，而 key 原本是 `main:<seg>` / `plan` / `system` / `intent:<id>`——**前三个不含任务维度**。
+  于是任务 3 与任务 4 的主会话 key 字面上都是 `"main:0"`，切任务时：
+  reset 把 `loadingKeysRef` 置成 `new Set(["main:0"])`（预留）→ boot 时若新任务当前段恰是 0 则
+  `delete("main:0")` 不执行 → 用户点开主会话时 `loadSession("main:0")` 命中预留项**直接 return、不发请求**
+  → 界面显示的是上一个任务的残留会话。
+  - 所有 store key 改为 `t{taskId}:<key>`，不同任务的 key 永不相同，守卫/令牌/缓存自然隔离。
+  - 发给后端的 session 参数剥掉任务前缀（后端 `parseActivitySession` 只认 `main:N`/`plan`/`intent:ID`）。
+  - 审批聚焦的 `source.session`（后端格式、无前缀）此前被直接当 store key 用，一并转成 task-scoped。
+
+### 架构调整：让 worker 自己知道什么时候该收手
+
+实测数据（改动前，线上 205 条意图）：意图平均跑 1712–2365 秒、最长 6828 秒；终态分布
+done 18 / exhausted 99 / blocked 82——**exhausted 是 done 的 5.5 倍**，说明绝大多数探测是**被掐断的**而不是跑完的；
+意图 summary 平均 737 字、最长 2267 字；接续链出现过三代（#635 → #578 → #660）。
+
+- **无增量自动收尾（新增 `agent/idlestop.go`）**：worker 连续 3 轮没有任何写回（fact/asset/finding）
+  就主动收场。判据是**产出率而不是时长**——持续产出的 worker 不会被它打断（深度探索不受影响），
+  空转的才会被收。
+  - 第一次触发是**提示模型把已确认的结果写回**（`blocking` 机制，SDK 会注入成 user 消息再跑一轮），
+    不是直接终止——直接终止会把模型手里「探到了但还没写回」的东西全丢掉。
+  - 起跑 3 分钟宽限期：worker 刚起手的前几轮可能在做准备工作，不写回是正常的。
+- **接续代数上限**：`add_intent` 新增 `continues` 字段（结构化记录接续自哪条意图）。
+  此前接续关系只存在于 summary 的自然语言里（「接续被预算掐断的意图 #432」），**代数算不出来**——
+  线上 #660 的 parent 是 #14（一个 fact），接续关系在数据层根本没表达。
+  - 同一条方向最多接续 3 次，超了直接拒绝并提示换打法或换方向。
+  - 接续代数落进 `continuation_depth` 字段，planner 能直接读。
+- **意图 summary 长度上限 400 字**：超长截断并保留头部（目标+做什么在开头）。
+  为什么要限：summary 越长 → planner 越容易觉得「信息这么丰富，快到了，再给一次机会」→
+  续派 → 意图更长 → summary 更长，是个正反馈。细节该写进 fact 的 `detail`。
+- **planner 提示词区分两种 exhausted**：「连续N轮无写回」（探到边界，**不要接续**）与
+  「撞步数上限/运行超时」（还有明确的下一步，可以接续但须带增量承诺）。
+
 ## [0.3.56] - 2026-10-20
 
 ### 修复的问题
