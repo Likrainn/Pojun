@@ -1,7 +1,9 @@
 "use client";
 
 import * as React from "react";
+
 import {
+  ChevronRightIcon,
   DownloadIcon,
   Loader2Icon,
   MonitorCog,
@@ -14,26 +16,13 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
-import type { HostTool, HostenvStatus, InstallJob, ProxyCheckResult } from "@/lib/types";
+import type { HostenvStatus, HostTool, InstallJob, ProxyCheckResult } from "@/lib/types";
 
 const TERMINAL_STATES = new Set(["done", "failed", "cancelled"]);
 
@@ -42,6 +31,36 @@ const KIND_LABEL: Record<HostTool["kind"], string> = {
   github: "GitHub Release",
   pip: "pip",
   manual: "手工安装",
+};
+
+// 攻击面分类。顺序按攻击流程排：先摸清面(网络/DNS)→ 再打(Web/凭据)
+// → 深入(代码/利用)→ 辅助(隧道/外带/资料/通用)。
+const CATEGORY_ORDER: HostTool["category"][] = [
+  "network",
+  "dns",
+  "web",
+  "cred",
+  "code",
+  "exploit",
+  "pivot",
+  "oob",
+  "material",
+  "runtime",
+  "",
+];
+
+const CATEGORY_LABEL: Record<HostTool["category"], string> = {
+  network: "网络与主机",
+  dns: "子域名与 DNS",
+  web: "Web 应用",
+  cred: "凭据与口令",
+  code: "代码与密钥",
+  exploit: "漏洞利用",
+  pivot: "内网与隧道",
+  oob: "外带与回连",
+  material: "资料与字典",
+  runtime: "通用与运行时",
+  "": "其他",
 };
 
 // 宿主环境:工具体检。二进制部署形态下系统里装了什么,agent 就能经 Bash
@@ -95,7 +114,7 @@ export default function HostEnvPage() {
 
   React.useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [job?.log]);
+  }, []);
 
   const saveProxy = async () => {
     setSavingProxy(true);
@@ -151,6 +170,37 @@ export default function HostEnvPage() {
   const missing = inv?.tools.filter((t) => !t.available) ?? [];
   const installerReady = inv?.installer.available ?? false;
   const installing = job !== null && !TERMINAL_STATES.has(job.state);
+
+  // 按攻击面分组。目录里有近 40 个工具，平铺成一张表没法看——用户要回答的是
+  // 「Web 侧我有哪些家伙、缺哪些」，不是「一共有 39 行」。分组顺序固定按攻击流程，
+  // 不随可用状态变化，避免刷新后行位置跳动。
+  const grouped = React.useMemo(() => {
+    const tools = inv?.tools ?? [];
+    const byCat = new Map<HostTool["category"], HostTool[]>();
+    for (const t of tools) {
+      const c = t.category ?? "";
+      const arr = byCat.get(c);
+      if (arr) arr.push(t);
+      else byCat.set(c, [t]);
+    }
+    const groups: { category: HostTool["category"]; tools: HostTool[] }[] = [];
+    for (const c of CATEGORY_ORDER) {
+      const ts = byCat.get(c);
+      if (ts && ts.length > 0) groups.push({ category: c, tools: ts });
+    }
+    return groups;
+  }, [inv?.tools]);
+
+  // 折叠状态：默认全展开。用户来这里通常是查「缺什么」，藏起来反而添乱。
+  const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
+  const toggleCat = React.useCallback((c: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(c)) next.delete(c);
+      else next.add(c);
+      return next;
+    });
+  }, []);
 
   return (
     <div className="flex flex-col gap-4 p-4 lg:p-6">
@@ -252,8 +302,7 @@ export default function HostEnvPage() {
                 )}
                 <p className="text-muted-foreground text-xs">
                   国内环境装 nuclei 这类走 GitHub Release 的工具通常需要它；与「全局代理」（Agent
-                  目标流量）互不影响。代理随时可改，改完点「测试」确认通路——代理会失效，
-                  装工具失败时先来这里看。
+                  目标流量）互不影响。代理随时可改，改完点「测试」确认通路——代理会失效， 装工具失败时先来这里看。
                 </p>
               </div>
 
@@ -271,78 +320,100 @@ export default function HostEnvPage() {
 
               {installerReady && inv?.installer.upgrade_required && (
                 <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-                  助手版本较旧，不具备自我换装能力，因此无法随主程序自动升级。
-                  在服务器上重跑一次 <code className="font-mono">install.sh</code> 完成引导后，
-                  之后每次发版助手都会自动跟随。
+                  助手版本较旧，不具备自我换装能力，因此无法随主程序自动升级。 在服务器上重跑一次{" "}
+                  <code className="font-mono">install.sh</code> 完成引导后， 之后每次发版助手都会自动跟随。
                 </div>
               )}
 
               <p className="text-muted-foreground text-sm">
-                可用 <span className="font-medium text-foreground">{available.length}</span> /{" "}
-                {inv?.tools.length ?? 0}
+                可用 <span className="font-medium text-foreground">{available.length}</span> / {inv?.tools.length ?? 0}
                 {missing.length > 0 && (
                   <span className="ml-3">
-                    缺失 {missing.length} 项
-                    {installerReady && "，可一键安装"}
+                    缺失 {missing.length} 项{installerReady && "，可一键安装"}
                   </span>
                 )}
               </p>
 
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-32">工具</TableHead>
-                    <TableHead>用途</TableHead>
-                    <TableHead className="w-24">状态</TableHead>
-                    <TableHead>安装方式 / 提示</TableHead>
-                    <TableHead className="w-28 text-right">操作</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(inv?.tools ?? []).map((t) => (
-                    <TableRow key={t.id}>
-                      <TableCell className="font-mono text-sm">{t.bin}</TableCell>
-                      <TableCell className="text-muted-foreground text-sm">{t.purpose}</TableCell>
-                      <TableCell>
-                        {t.available ? (
-                          <Badge>可用</Badge>
-                        ) : (
-                          <Badge variant="outline">缺失</Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-xs">
-                        {t.available ? (
-                          "—"
-                        ) : (
-                          // break-all：缺失项的提示里可能带长 URL（如 msfconsole 的官方文档），
-                          // 不换行会把表格撑到横向溢出，需要左右拖动才看得到第一列。
-                          <span className="break-all">
-                            <span className="mr-1 text-foreground/70">{KIND_LABEL[t.kind]}</span>
-                            {t.install}
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {!t.available && t.installable && installerReady && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={installing || busyTool === t.id}
-                            onClick={() => install(t)}
-                          >
-                            {busyTool === t.id ? (
-                              <Loader2Icon className="animate-spin" />
-                            ) : (
-                              <DownloadIcon />
-                            )}
-                            安装
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <div className="flex flex-col gap-3">
+                {grouped.map((g) => {
+                  const isCollapsed = collapsed.has(g.category);
+                  const okCount = g.tools.filter((t) => t.available).length;
+                  return (
+                    <div key={g.category} className="rounded-lg border">
+                      <button
+                        type="button"
+                        onClick={() => toggleCat(g.category)}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50"
+                      >
+                        <ChevronRightIcon
+                          className={
+                            "size-4 shrink-0 text-muted-foreground transition-transform" +
+                            (isCollapsed ? "" : "rotate-90")
+                          }
+                        />
+                        <span className="font-medium text-sm">{CATEGORY_LABEL[g.category]}</span>
+                        <span className="text-muted-foreground text-xs">
+                          {okCount}/{g.tools.length} 可用
+                          {g.tools.length - okCount > 0 && (
+                            <span className="ml-1 text-amber-600 dark:text-amber-400">
+                              缺 {g.tools.length - okCount}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                      {!isCollapsed && (
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-32">工具</TableHead>
+                              <TableHead>用途</TableHead>
+                              <TableHead className="w-24">状态</TableHead>
+                              <TableHead>安装方式 / 提示</TableHead>
+                              <TableHead className="w-28 text-right">操作</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {g.tools.map((t) => (
+                              <TableRow key={t.id}>
+                                <TableCell className="font-mono text-sm">{t.bin}</TableCell>
+                                <TableCell className="text-muted-foreground text-sm">{t.purpose}</TableCell>
+                                <TableCell>
+                                  {t.available ? <Badge>可用</Badge> : <Badge variant="outline">缺失</Badge>}
+                                </TableCell>
+                                <TableCell className="text-muted-foreground text-xs">
+                                  {t.available ? (
+                                    "—"
+                                  ) : (
+                                    // break-all：缺失项的提示里可能带长 URL（如 msfconsole 的官方文档），
+                                    // 不换行会把表格撑到横向溢出，需要左右拖动才看得到第一列。
+                                    <span className="break-all">
+                                      <span className="mr-1 text-foreground/70">{KIND_LABEL[t.kind]}</span>
+                                      {t.install}
+                                    </span>
+                                  )}
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  {!t.available && t.installable && installerReady && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      disabled={installing || busyTool === t.id}
+                                      onClick={() => install(t)}
+                                    >
+                                      {busyTool === t.id ? <Loader2Icon className="animate-spin" /> : <DownloadIcon />}
+                                      安装
+                                    </Button>
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </>
           )}
         </CardContent>
@@ -358,13 +429,7 @@ export default function HostEnvPage() {
               </CardTitle>
               <CardDescription className="mt-1 flex items-center gap-2">
                 <Badge
-                  variant={
-                    job.state === "done"
-                      ? "default"
-                      : job.state === "failed"
-                        ? "destructive"
-                        : "secondary"
-                  }
+                  variant={job.state === "done" ? "default" : job.state === "failed" ? "destructive" : "secondary"}
                 >
                   {job.state}
                 </Badge>

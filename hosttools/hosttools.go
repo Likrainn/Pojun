@@ -30,17 +30,70 @@ const (
 	KindManual Kind = "manual" // 不提供一键安装
 )
 
+// Category 攻击面分类。Kind 说「怎么装」,Category 说「干什么用在哪」——
+// 目录里有 39 个工具,平铺成一张表没法看:用户要回答的是「Web 侧我有哪些家伙」,
+// 而不是「一共有 39 行」。页面上按 Category 分组,模型侧的清单不受影响。
+type Category string
+
+const (
+	CatNetwork  Category = "network"  // 端口扫描/连通性/基础网络
+	CatWeb      Category = "web"      // Web 侧的探测、爆破、扫描
+	CatDNS      Category = "dns"      // 资产测绘与域名枚举
+	CatCred     Category = "cred"     // 在线爆破、离线破解、横向移动
+	CatCode     Category = "code"     // 源码/密钥泄露、代码审计
+	CatPivot    Category = "pivot"    // 内网穿透、代理转发
+	CatOOB      Category = "oob"      // 带外通道、通知
+	CatExploit  Category = "exploit"  // 框架与二进制利用
+	CatMaterial Category = "material" // 字典、语料
+	CatRuntime  Category = "runtime"  // 脚本、证书、HTTP 等基础能力
+)
+
+// categoryOrder 决定页面上的分组顺序——按攻击流程排：先摸清面(网络/DNS)→
+// 再打(Web/凭据)→ 深入(代码/利用)→ 辅助(隧道/外带/资料/通用)。
+var categoryOrder = []Category{
+	CatNetwork, CatDNS, CatWeb, CatCred, CatCode,
+	CatExploit, CatPivot, CatOOB, CatMaterial, CatRuntime,
+}
+
+// CategoryLabel 分类的中文标签(页面展示)。
+func CategoryLabel(c Category) string {
+	switch c {
+	case CatNetwork:
+		return "网络与主机"
+	case CatWeb:
+		return "Web 应用"
+	case CatDNS:
+		return "子域名与 DNS"
+	case CatCred:
+		return "凭据与口令"
+	case CatCode:
+		return "代码与密钥"
+	case CatPivot:
+		return "内网与隧道"
+	case CatOOB:
+		return "外带与回连"
+	case CatExploit:
+		return "漏洞利用"
+	case CatMaterial:
+		return "资料与字典"
+	case CatRuntime:
+		return "通用与运行时"
+	default:
+		return "其他"
+	}
+}
 // Tool 一条体检结果 + 安装配方。
 type Tool struct {
 	ID   string `json:"id"`   // 稳定标识(与 Bin 相同)
 	Name string `json:"name"` // 工具名(展示用)
 	Bin  string `json:"bin"`  // PATH 里探测的二进制名
 
-	Available   bool   `json:"available"`
-	Installable bool   `json:"installable"`      // 能否一键安装
-	Purpose     string `json:"purpose"`          // 干什么用(给模型看)
-	Install     string `json:"install,omitempty"` // 缺失时展示的安装提示
-	Kind        Kind   `json:"kind"`
+	Available   bool     `json:"available"`
+	Installable bool     `json:"installable"`      // 能否一键安装
+	Purpose     string   `json:"purpose"`          // 干什么用(给模型看)
+	Install     string   `json:"install,omitempty"` // 缺失时展示的安装提示
+	Kind        Kind     `json:"kind"`
+	Category    Category `json:"category"` // 攻击面分类(页面分组用)
 
 	// kind=apt: 各包管理器下的包名
 	Apt string `json:"-"`
@@ -59,55 +112,55 @@ type Tool struct {
 // catalog 常用渗透工具目录。安装方式优先选「自包含」的:能用 GitHub Release
 // 单文件就不依赖 go install(宿主未必有 Go 工具链)。
 var catalog = []Tool{
-	{Name: "nmap", Purpose: "端口扫描/服务指纹", Kind: KindApt, Apt: "nmap", Dnf: "nmap"},
-	{Name: "masscan", Purpose: "大规模端口快扫", Kind: KindApt, Apt: "masscan", Dnf: "masscan"},
-	{Name: "sqlmap", Purpose: "SQL 注入检测与利用", Kind: KindApt, Apt: "sqlmap", Dnf: "sqlmap"},
-	{Name: "ffuf", Purpose: "目录/参数模糊枚举", Kind: KindApt, Apt: "ffuf", Dnf: "ffuf"},
-	{Name: "gobuster", Purpose: "目录/DNS/vhost 爆破", Kind: KindApt, Apt: "gobuster", Dnf: "gobuster"},
-	{Name: "nikto", Purpose: "Web 服务器常见问题扫描", Kind: KindApt, Apt: "nikto", Dnf: "nikto"},
-	{Name: "whatweb", Purpose: "Web 指纹识别", Kind: KindApt, Apt: "whatweb", Dnf: "whatweb"},
-	{Name: "hydra", Purpose: "在线口令爆破(ssh/登录表单等)", Kind: KindApt, Apt: "hydra", Dnf: "hydra"},
-	{Name: "john", Purpose: "离线口令破解", Kind: KindApt, Apt: "john", Dnf: "john"},
-	{Name: "hashcat", Purpose: "GPU 口令破解", Kind: KindApt, Apt: "hashcat", Dnf: "hashcat"},
-	{Name: "curl", Purpose: "HTTP 请求与调试", Kind: KindApt, Apt: "curl", Dnf: "curl"},
-	{Name: "openssl", Purpose: "TLS 证书检查/加解密", Kind: KindApt, Apt: "openssl", Dnf: "openssl"},
-	{Name: "python3", Purpose: "脚本执行/自定义 PoC", Kind: KindApt, Apt: "python3", Dnf: "python3"},
-	{Name: "nc", Purpose: "TCP/UDP 连接与监听(反连交互)", Kind: KindApt, Apt: "netcat-openbsd", Dnf: "nmap-ncat"},
-	{Name: "dig", Purpose: "DNS 查询", Kind: KindApt, Apt: "dnsutils", Dnf: "bind-utils"},
-	{Name: "ssh", Purpose: "登录验证/隧道", Kind: KindApt, Apt: "openssh-client", Dnf: "openssh-clients"},
-	{Name: "testssl.sh", Bin: "testssl", Purpose: "TLS 配置弱项扫描", Kind: KindApt, Apt: "testssl.sh", Dnf: "testssl"},
+	{Name: "nmap", Purpose: "端口扫描/服务指纹", Kind: KindApt, Category: CatNetwork, Apt: "nmap", Dnf: "nmap"},
+	{Name: "masscan", Purpose: "大规模端口快扫", Kind: KindApt, Category: CatNetwork, Apt: "masscan", Dnf: "masscan"},
+	{Name: "sqlmap", Purpose: "SQL 注入检测与利用", Kind: KindApt, Category: CatWeb, Apt: "sqlmap", Dnf: "sqlmap"},
+	{Name: "ffuf", Purpose: "目录/参数模糊枚举", Kind: KindApt, Category: CatWeb, Apt: "ffuf", Dnf: "ffuf"},
+	{Name: "gobuster", Purpose: "目录/DNS/vhost 爆破", Kind: KindApt, Category: CatWeb, Apt: "gobuster", Dnf: "gobuster"},
+	{Name: "nikto", Purpose: "Web 服务器常见问题扫描", Kind: KindApt, Category: CatWeb, Apt: "nikto", Dnf: "nikto"},
+	{Name: "whatweb", Purpose: "Web 指纹识别", Kind: KindApt, Category: CatWeb, Apt: "whatweb", Dnf: "whatweb"},
+	{Name: "hydra", Purpose: "在线口令爆破(ssh/登录表单等)", Kind: KindApt, Category: CatCred, Apt: "hydra", Dnf: "hydra"},
+	{Name: "john", Purpose: "离线口令破解", Kind: KindApt, Category: CatCred, Apt: "john", Dnf: "john"},
+	{Name: "hashcat", Purpose: "GPU 口令破解", Kind: KindApt, Category: CatCred, Apt: "hashcat", Dnf: "hashcat"},
+	{Name: "curl", Purpose: "HTTP 请求与调试", Kind: KindApt, Category: CatRuntime, Apt: "curl", Dnf: "curl"},
+	{Name: "openssl", Purpose: "TLS 证书检查/加解密", Kind: KindApt, Category: CatNetwork, Apt: "openssl", Dnf: "openssl"},
+	{Name: "python3", Purpose: "脚本执行/自定义 PoC", Kind: KindApt, Category: CatRuntime, Apt: "python3", Dnf: "python3"},
+	{Name: "nc", Purpose: "TCP/UDP 连接与监听(反连交互)", Kind: KindApt, Category: CatNetwork, Apt: "netcat-openbsd", Dnf: "nmap-ncat"},
+	{Name: "dig", Purpose: "DNS 查询", Kind: KindApt, Category: CatDNS, Apt: "dnsutils", Dnf: "bind-utils"},
+	{Name: "ssh", Purpose: "登录验证/隧道", Kind: KindApt, Category: CatNetwork, Apt: "openssh-client", Dnf: "openssh-clients"},
+	{Name: "testssl.sh", Bin: "testssl", Purpose: "TLS 配置弱项扫描", Kind: KindApt, Category: CatNetwork, Apt: "testssl.sh", Dnf: "testssl"},
 	// nodejs 连 npx 一起装：MCP 里用 `npx @playwright/mcp` 启动 browser 服务器，
 	// 机器上没有 node 时那个 MCP 永远连不上（实测每次 worker 启动都报
 	// "npx: executable file not found in $PATH"）。
-	{Name: "nodejs", Bin: "node", Purpose: "Node 运行时(npx 随装,供 MCP 服务器用)", Kind: KindApt, Apt: "nodejs", Dnf: "nodejs"},
+	{Name: "nodejs", Bin: "node", Purpose: "Node 运行时(npx 随装,供 MCP 服务器用)", Kind: KindApt, Category: CatRuntime, Apt: "nodejs", Dnf: "nodejs"},
 
-	{Name: "nuclei", Purpose: "基于模板的漏洞扫描(漏洞情报联动)", Kind: KindGitHub,
+	{Name: "nuclei", Purpose: "基于模板的漏洞扫描(漏洞情报联动)", Kind: KindGitHub, Category: CatWeb,
 		Repo: "projectdiscovery/nuclei", AssetTmpl: "nuclei_{ver}_linux_{arch}.zip"},
-	{Name: "httpx", Purpose: "Web 存活/指纹批量探测(projectdiscovery 版)", Kind: KindGitHub,
+	{Name: "httpx", Purpose: "Web 存活/指纹批量探测(projectdiscovery 版)", Kind: KindGitHub, Category: CatWeb,
 		Repo: "projectdiscovery/httpx", AssetTmpl: "httpx_{ver}_linux_{arch}.zip"},
-	{Name: "subfinder", Purpose: "子域名枚举", Kind: KindGitHub,
+	{Name: "subfinder", Purpose: "子域名枚举", Kind: KindGitHub, Category: CatDNS,
 		Repo: "projectdiscovery/subfinder", AssetTmpl: "subfinder_{ver}_linux_{arch}.zip"},
 	// ProjectDiscovery 系另外三个：naabu(端口扫)、dnsx(DNS 解析/爆破)、
 	// katana(爬虫)、tlsx(TLS 证书探测)。资产命名与上面三个同构
 	// （{tool}_{ver}_linux_{arch}.zip），所以一个 AssetTmpl 模板就够。
-	{Name: "naabu", Purpose: "快速端口扫描(与 httpx 联动筛存活)", Kind: KindGitHub,
+	{Name: "naabu", Purpose: "快速端口扫描(与 httpx 联动筛存活)", Kind: KindGitHub, Category: CatNetwork,
 		Repo: "projectdiscovery/naabu", AssetTmpl: "naabu_{ver}_linux_{arch}.zip"},
-	{Name: "dnsx", Purpose: "DNS 解析/爆破/记录提取", Kind: KindGitHub,
+	{Name: "dnsx", Purpose: "DNS 解析/爆破/记录提取", Kind: KindGitHub, Category: CatDNS,
 		Repo: "projectdiscovery/dnsx", AssetTmpl: "dnsx_{ver}_linux_{arch}.zip"},
-	{Name: "katana", Purpose: "Web 爬虫(爬深层路径与参数)", Kind: KindGitHub,
+	{Name: "katana", Purpose: "Web 爬虫(爬深层路径与参数)", Kind: KindGitHub, Category: CatWeb,
 		Repo: "projectdiscovery/katana", AssetTmpl: "katana_{ver}_linux_{arch}.zip"},
-	{Name: "tlsx", Purpose: "TLS 证书信息提取(证书/ SAN / 过期)", Kind: KindGitHub,
+	{Name: "tlsx", Purpose: "TLS 证书信息提取(证书/ SAN / 过期)", Kind: KindGitHub, Category: CatNetwork,
 		Repo: "projectdiscovery/tlsx", AssetTmpl: "tlsx_{ver}_linux_{arch}.zip"},
 
-	{Name: "wafw00f", Purpose: "WAF 识别", Kind: KindPip, Pip: "wafw00f"},
+	{Name: "wafw00f", Purpose: "WAF 识别", Kind: KindPip, Category: CatWeb, Pip: "wafw00f"},
 	// impacket 是 SMB/NTLM/票据的 Python 库(提供 msmfmap、ntlmrelay、secretsdump
 	// 等脚本)。apt 源里的包名是 python3-impacket,Debian/Ubuntu 都有。
-	{Name: "impacket", Purpose: "SMB/NTLM 协议工具集(secretsdump/ntlmrelay 等)", Kind: KindApt,
+	{Name: "impacket", Purpose: "SMB/NTLM 协议工具集(secretsdump/ntlmrelay 等)", Kind: KindApt, Category: CatCred,
 		Apt: "python3-impacket", Dnf: "python3-impacket"},
 	// SecLists 是最大的通用字典集(目录爆破/参数 fuzz 的语料)。apt 源里没有
 	// 稳定包名,只能从 GitHub 克隆——但它是目录而非单文件,GitHub 配方装不了,
 	// 所以走 KindManual 并在 install.sh 里单独克隆。
-	{Name: "seclists", Purpose: "通用字典集(目录/参数/用户名爆破语料)", Kind: KindManual,
+	{Name: "seclists", Purpose: "通用字典集(目录/参数/用户名爆破语料)", Kind: KindManual, Category: CatMaterial,
 		Install: "git clone --depth 1 https://github.com/danielmiessler/SecLists.git /opt/SecLists"},
 
 	// ── 资产命名与上面不同的项目 ──
@@ -116,37 +169,37 @@ var catalog = []Tool{
 	// 这些资产名都是 2026-10 实测 GitHub API 得到的，不是猜的。
 
 	// gitleaks：资产名用 x64（不是 x86_64），且是 .tar.gz。
-	{Name: "gitleaks", Purpose: "代码/配置里的密钥扫描(检测硬编码凭据)", Kind: KindGitHub,
+	{Name: "gitleaks", Purpose: "代码/配置里的密钥扫描(检测硬编码凭据)", Kind: KindGitHub, Category: CatCode,
 		Repo: "gitleaks/gitleaks", AssetTmpl: "gitleaks_{ver}_linux_{arch4}.tar.gz"},
 	// chisel：内网穿透/隧道工具（SOCKS 隧道、反向隧道都靠它）。
-	{Name: "chisel", Purpose: "内网穿透与隧道(TCP/UDP/SOCKS 隧道)", Kind: KindGitHub,
+	{Name: "chisel", Purpose: "内网穿透与隧道(TCP/UDP/SOCKS 隧道)", Kind: KindGitHub, Category: CatPivot,
 		Repo: "jpillora/chisel", AssetTmpl: "chisel_{ver}_linux_{arch}.gz"},
 	// amass：子域名枚举（OWASP）。资产名里**没有版本号**，所以模板不带 {ver}。
-	{Name: "amass", Purpose: "子域名枚举(OWASP,主动+被动解析)", Kind: KindGitHub,
+	{Name: "amass", Purpose: "子域名枚举(OWASP,主动+被动解析)", Kind: KindGitHub, Category: CatDNS,
 		Repo: "OWASP/Amass", AssetTmpl: "amass_linux_{arch}.tar.gz"},
 	// dalfox：XSS 扫描与利用。资产名带 v 前缀、架构用 x86_64/aarch64。
-	{Name: "dalfox", Purpose: "XSS 扫描与利用(反射型/存储型/DOM)", Kind: KindGitHub,
+	{Name: "dalfox", Purpose: "XSS 扫描与利用(反射型/存储型/DOM)", Kind: KindGitHub, Category: CatWeb,
 		Repo: "hahwul/dalfox", AssetTmpl: "dalfox-{verv}-linux-{arch2}.tar.gz"},
 	// feroxbuster：目录/文件爆破（Rust 版 gobuster 替代）。
 	// 注意它的资产名**架构在前**，且 amd64 用 x86_64、arm64 用 aarch64。
-	{Name: "feroxbuster", Purpose: "目录/文件爆破(Rust 版,支持多线程与递归)", Kind: KindGitHub,
+	{Name: "feroxbuster", Purpose: "目录/文件爆破(Rust 版,支持多线程与递归)", Kind: KindGitHub, Category: CatWeb,
 		Repo: "epi052/feroxbuster", AssetTmpl: "{arch2}-linux-feroxbuster.tar.gz"},
 	// notify：外带/回连数据接收（DNS/HTTP/TLS 多种通道）。
-	{Name: "notify", Purpose: "外带数据接收(DNS/HTTP/TLS 多通道)", Kind: KindGitHub,
+	{Name: "notify", Purpose: "外带数据接收(DNS/HTTP/TLS 多通道)", Kind: KindGitHub, Category: CatOOB,
 		Repo: "projectdiscovery/notify", AssetTmpl: "notify_{ver}_linux_{arch}.zip"},
 	// interactsh-client：OOB 交互式探测的客户端（配合 nuclei 的 oob 模板）。
-	{Name: "interactsh-client", Bin: "interactsh-client", Purpose: "OOB 回连客户端(配合 nuclei 的 oob 模板)", Kind: KindGitHub,
+	{Name: "interactsh-client", Bin: "interactsh-client", Purpose: "OOB 回连客户端(配合 nuclei 的 oob 模板)", Kind: KindGitHub, Category: CatOOB,
 		Repo: "projectdiscovery/interactsh", AssetTmpl: "interactsh-client_{ver}_linux_{arch}.zip"},
 	// netexec：SMB/Windows 协议横移（CrackMapExec 的现代替代）。
 	// 只在 PyPI 发版，没有 GitHub Release，所以走 pip 配方。
-	{Name: "netexec", Bin: "netexec", Purpose: "SMB/WinRM 横移与凭据喷洒(现代版 CrackMapExec)", Kind: KindPip,
+	{Name: "netexec", Bin: "netexec", Purpose: "SMB/WinRM 横移与凭据喷洒(现代版 CrackMapExec)", Kind: KindPip, Category: CatCred,
 		Pip: "netexec"},
 	// semgrep：SAST 规则扫描（对下载到的源码做规则匹配）。
-	{Name: "semgrep", Purpose: "源码静态规则扫描(SAST)", Kind: KindPip, Pip: "semgrep"},
+	{Name: "semgrep", Purpose: "源码静态规则扫描(SAST)", Kind: KindPip, Category: CatCode, Pip: "semgrep"},
 	// pwntools：漏洞利用脚本框架（agent 写 exploit 时用）。
-	{Name: "pwntools", Bin: "pwntools", Purpose: "漏洞利用脚本框架(写 exploit 用)", Kind: KindPip, Pip: "pwntools"},
+	{Name: "pwntools", Bin: "pwntools", Purpose: "漏洞利用脚本框架(写 exploit 用)", Kind: KindPip, Category: CatExploit, Pip: "pwntools"},
 
-	{Name: "msfconsole", Purpose: "Metasploit 框架(exploit/encoder)", Kind: KindManual,
+	{Name: "msfconsole", Purpose: "Metasploit 框架(exploit/encoder)", Kind: KindManual, Category: CatExploit,
 		Install: "官方安装包(需交互): https://docs.rapid7.com/metasploit/installing-the-metasploit-framework/"},
 }
 

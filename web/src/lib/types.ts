@@ -1639,6 +1639,8 @@ export interface HostTool {
   purpose: string;
   install?: string;
   kind: "apt" | "github" | "pip" | "manual";
+  /** 攻击面分类，页面按它分组。 */
+  category: "network" | "dns" | "web" | "cred" | "code" | "pivot" | "oob" | "exploit" | "material" | "runtime" | "";
 }
 
 /** 一键安装是否可用，取决于特权助手 artex-hostd 是否在线（Docker 部署下不在线）。 */
