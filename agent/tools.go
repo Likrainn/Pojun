@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	acperm "github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
@@ -261,6 +262,79 @@ func pidList(raw []json.RawMessage) []int64 {
 		}
 	}
 	return out
+}
+
+// maxIntentSummaryRunes 是意图 summary 的长度上限（rune 数）。
+//
+// 为什么要限：线上实测 205 条意图的 summary 平均 737 字、最长 2267 字——
+// 远超「一句话描述方向」的设计意图。超长带来两个具体问题：
+//
+//  1. **planner 的判断会失真**。planner 靠 summary 判断「这个方向是不是快
+//     挖到了」——summary 越长、细节越多，planner 越容易觉得「信息这么丰富，
+//     肯定快到了，再给一次机会」。而实测线上 exhausted(99) 远多于 done(18)，
+//     接续链还出现了三代（#635→#578→#660）。长 summary → 更容易续派 → 意图更长
+//     → summary 更长，这是个正反馈。
+//  2. **写回被挤掉**。summary 越长，worker 花在组织语言上的 token 越多，
+//     而 detail 字段才是放细节的地方。
+//
+// 400 字的由来：中文一句完整的技术描述大约 100-200 字，400 字足够写清
+// 「目标 + 做什么 + 为什么值得做 + 上次到哪了」——还能带上一次接续的上下文。
+// 超过这个长度的信息量，多出来的基本是重复叙述。
+//
+// 超限的处理是**截断并保留头部**（目标+做什么在开头），而不是拒绝——拒绝会让
+// planner 白跑一轮拿不到任何意图，代价更大。截断后末尾追加标记，让 planner
+// 知道这里被截过。
+const maxIntentSummaryRunes = 400
+
+// clampIntentSummary 把过长的 summary 截到上限，头部保留（目标+做什么在
+// 开头），末尾追加截断标记。
+func clampIntentSummary(s string) string {
+	s = strings.TrimSpace(s)
+	if utf8.RuneCountInString(s) <= maxIntentSummaryRunes {
+		return s
+	}
+	head := string([]rune(s)[:maxIntentSummaryRunes])
+	return head + "…（summary 超长已截断，细节请写进 fact 的 detail）"
+}
+
+// maxContinuationDepth 是同一条方向上允许的最大接续代数。
+//
+// 3 的由来：接续不是坏事——一条方向被预算掐断、但确实有明确的下一步时，
+// 接一次是对的（实测线上 205 条意图里 26 条是接续）。问题在于**没有闸**：
+// 线上出现过三代接续（#635 → #578 → #660），每一代都从零重建上下文、重复读
+// 同一批文件、重复扫同一批资产。
+//
+// 3 意味着：一条方向最多被接续 3 次（首探 + 3 次接续 = 4 代）。到这个数还
+// 没拿到结果，说明问题不在「时间不够」而在「这条路本身不通」或「打法不对」，
+// 该换方向了，不该继续接。
+//
+// 刻意不取 2：接续两次是常见且合理的（被重启打断 + 被预算掐断），卡太紧会
+// 误杀正当的深挖。
+const maxContinuationDepth = 3
+
+// continuationDepthOf 读一个意图节点上记录的接续代数。
+//
+// 老的意图（功能上线前创建的）payload 里没有这个字段，返回 1（当作首探）——
+// 它们本来就没有结构化的接续关系，不该被代数限制误伤。
+func continuationDepthOf(n *db.Node) int {
+	if n == nil {
+		return 1
+	}
+	var p map[string]any
+	if err := json.Unmarshal(n.Payload, &p); err != nil {
+		return 1
+	}
+	switch v := p["continuation_depth"].(type) {
+	case float64:
+		if v >= 1 {
+			return int(v)
+		}
+	case int:
+		if v >= 1 {
+			return v
+		}
+	}
+	return 1
 }
 
 func obj(props map[string]any, required ...string) map[string]any {
@@ -1033,6 +1107,22 @@ type intentItem struct {
 	AssetIDs  []json.RawMessage `json:"asset_ids"`
 	ParentIDs []json.RawMessage `json:"parent_ids"`
 	Priority  int               `json:"priority"`
+	// Continues 是本意图【接续】的上游意图 id（0/1/多个）。
+	//
+	// 为什么需要它：接续链此前只存在于 summary 的**自然语言**里（「接续被预算
+	// 掐断的意图 #432」「接续两次被后端重启打断的 #635/#578」）。实测线上 205
+	// 条意图里有 26 条是接续（12.7%），而 #660 的 summary 直接写着「接续两次」。
+	//
+	// 文字形态接续有两个坏处：
+	//  1. **算不出代数**。#660 接续 #635、#635 接续 #578，但图里 #660 的 parent
+	//     是 #14（一个 fact）——接续关系在数据层根本没表达，所以「这条链已经接了
+	//     几代」无法回答。而接续代数正是防止无限续派的关键闸门。
+	//  2. **查不了**。想找「所有接续自 #578 的意图」只能全表扫 summary 文本。
+	//
+	// 结构化之后：接续代数可算、可查、可限。parent_ids 语义不变（只能挂
+	// fact/finding，意图必须锚在已确认知识上）——continues 是**额外**的接续
+	// 标记，不替代 parent_ids。
+	Continues []json.RawMessage `json:"continues"`
 }
 
 // addOneIntent 创建一条意图节点并连上游血缘，返回 id。
@@ -1040,7 +1130,8 @@ type intentItem struct {
 // 节点（不能挂在别的意图/目标/提示上）。顶层全新方向留空 parent_ids，兜底连 origin fact。
 // 这样"每个意图都连到 fact 节点、且是发现驱动而非凭空规划"从创建路径上被强制。
 func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
-	if strings.TrimSpace(it.Summary) == "" {
+	summary := clampIntentSummary(it.Summary)
+	if strings.TrimSpace(summary) == "" {
 		return 0, fmt.Errorf("summary 不能为空")
 	}
 	// 先校验锚点（建节点前，避免坏锚点留下孤儿意图）。
@@ -1058,6 +1149,35 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 	if priority == 0 {
 		priority = 5
 	}
+	// 接续校验 + 代数计算。
+	//
+	// 约束：continues 只能指向**已存在的意图**节点（接续的是一条探索方向，
+	// 不是一条事实）。代数 = 1 + 上游接续链上的最大代数。
+	//
+	// 为什么要有代数上限：接续链一旦没有闸就会无限拉长。线上实测到三代接续
+	// ——#635 → #578 → #660，摘要在说「接续两次被后端重启打断的 #635/#578 继续
+	// 攻 ZStack 管理 API 凭据这条皇冠链（#635 上一轮已跑到 56 轮/28 分钟）」。
+	// 每一代都从零重建上下文、重复读同一批文件、重复扫同一批资产，而接续的那
+	// 条链可能压根不值得继续。
+	continues := pidList(it.Continues)
+	depth := 1
+	for _, cid := range continues {
+		cn, err := t.ts.GetNodeWithSources(cid)
+		if err != nil || cn == nil {
+			return 0, fmt.Errorf("continues %d 不存在：continues 只能填已存在的【意图】节点 id", cid)
+		}
+		if cn.Kind != db.KindIntent {
+			return 0, fmt.Errorf("continues %d 是 %q 节点，不能作为接续来源：continues 只能填【意图】id（接续的是一条探索方向）", cid, cn.Kind)
+		}
+		if d := continuationDepthOf(cn); d+1 > depth {
+			depth = d + 1
+		}
+	}
+	if depth > maxContinuationDepth {
+		return 0, fmt.Errorf("接续代数已达上限（%d 代）：这条方向已经被接续了 %d 次，继续接下去大概率是在重复劳动。"+
+			"请改为：①换一种本质不同的打法（换入口/换方法/换目标面）；②或直接放弃这个方向，转向尚未覆盖的方向",
+			maxContinuationDepth, depth)
+	}
 	anchors := pidList(it.AssetIDs)
 	// 资产拦截：意图绑定的资产若命中系统资产拦截规则，则禁止下发该意图。
 	if t.as != nil && len(anchors) > 0 {
@@ -1074,13 +1194,18 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 			return 0, fmt.Errorf("%s", b.String())
 		}
 	}
-	payload := map[string]any{"summary": it.Summary}
+	payload := map[string]any{"summary": summary}
 	if len(anchors) > 0 {
 		payload["asset_ids"] = anchors
 	}
+	if len(continues) > 0 {
+		// 存成结构化字段，接续代数可算可查（见 intentItem.Continues 的注释）。
+		payload["continues"] = continues
+		payload["continuation_depth"] = depth
+	}
 	// 派发去重：同任务里已有高度相似的 open/running 意图就不再重复下发——两条并行
 	// worker 干同一件事纯属浪费；planner 能看到提示并改写差异。
-	if existID, existSum, similar, err := t.ts.FindSimilarOpenIntent(it.Summary); err == nil && similar {
+	if existID, existSum, similar, err := t.ts.FindSimilarOpenIntent(summary); err == nil && similar {
 		return 0, fmt.Errorf("已存在高度相似的未完成意图 #%d「%s」，未重复下发；若确实要做不同的事，请在 summary 里写清区别",
 			existID, firstLine(existSum, 60))
 	}
@@ -1112,6 +1237,7 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 			"summary":    str("[单条] 一句话描述这个探索方向：做什么+为什么。已写清方向即可，不依赖资产 id。"),
 			"asset_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "本方向要测试/攻击的【目标资产 id】（**尽量传**，0/1/多个；是 list_assets 返回的资产 id，不是探索节点 id）：这条探索方向针对哪些资产（站点/接口/参数/主机等）。只要方向围绕某些具体资产就务必传上——它是「这条探索打哪些目标」的结构化标记，用于覆盖去重、把意图连入资产链路。仅当纯全局侦察、确实没有具体目标资产时才留空。"},
 			"parent_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "上游锚点 id（可选，0/1/多个）：本方向由哪些【已确认的事实(fact)/发现(finding)】综合得出。**只能填已存在的 fact/finding 节点 id,不能填意图/目标/提示**——意图必须锚在已确认知识上,发现驱动而非凭空规划。多个事实共同产生一个新意图就传多个;顶层全新侦察方向请留空（会自动挂到任务起点 origin fact）。"},
+			"continues": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "【仅当本方向是接续某条旧方向时填】上游【意图】节点 id（0/1/多个）——即本方向要接着哪条被掐断/被收口的意图继续做。**只在 summary 里明说「接续/继续 #NNN」时才填**，且必须与 summary 里提到的意图 id 一致。接续代数有上限（最多接 3 次），超了会被拒绝——到那时请换一种本质不同的打法或转向别的方向，别再接。顶层全新方向留空。"},
 			"priority":   intp("优先级 0-10，默认5"),
 		}),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
