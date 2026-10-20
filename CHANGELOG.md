@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [0.3.51] - 2026-10-20
+
+> 没有可观测性，调优就是闭眼调——这条把「看得见」补上。
+
+### 新增的能力
+
+- **工具调用进 journal**：planner / worker / mainagent / chat 的每次工具调用现在都会记录到 journal（`[tool]` 前缀），含「谁调用了什么工具 + 结果是 ok/error/blocked + 本轮怎么收场」。
+  - **此前完全没有**：journal 里只有 planner 的心跳和 vulnintel 的刷屏，worker 到底在不在干活、卡在哪一步、有没有报错，只能去翻 `transcripts/*.jsonl` 的文件 mtime 才能确认。
+  - **实测缺口**：一次 30 分钟观察窗内 8 个 worker 的 transcript 都在更新，而 journal 记的 37 行里**没有一行反映 worker 的动作**。
+  - 日志层是**纯旁路**：套在拦截链外侧（先记后转发），不影响 steer 纠偏与拦截裁决（有测试守住这条契约）。
+  - 摘要而非原文：命令只取首行并限长 96 字符，工具输出只记字节数 + 三态分类，避免把 journal 撑爆。
+
+### 顺带
+
+- `RunInfo` 增 `Kind` 字段区分 planner / worker / main / chat —— 原有 id 三元组区分不出 planner 与 mainagent（都是 TaskID+ExplorationID 且无 IntentID），而「planner 20 分钟没调工具」和「mainagent 20 分钟没调工具」是两种不同的故障。
+
 ## [0.3.50] - 2026-10-20
 
 ### 修复的问题
