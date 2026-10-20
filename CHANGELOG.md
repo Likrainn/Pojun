@@ -4,6 +4,40 @@
 
 ## [Unreleased]
 
+## [0.3.62] - 2026-10-21
+
+### 修复的问题
+
+- **流量证据绑定整体空转：100 条发现的 HTTP 证据全靠文字字段撑着**。线上实测
+  `traffic_evidence_snapshots` 与 `finding_traffic_bindings` **都是 0 条**，而 agent 明明
+  调了 14–18 次 `traffic_search`、3.1G 流量也确实采集了。
+  - **根因是唯一的断点**：`agent_traffic_binding` 这条设置在线上**根本不存在**，
+    `GetBool` 取默认值 `false` → 自动绑定全程关闭 → 报告 Agent 既拿不到
+    `traffic_search`/`traffic_get`，也没有 `bind_finding_traffic` 可用。
+    链路上其余环节（reporter agent、`report_finding` 触发器、工具绑定、迁移标志）**全部齐备**，
+    唯独开关是关的。
+  - 开启前先修了两处**会导致已确认漏洞丢失**的缺陷（否则开关一开就是净损失）：
+
+    1. **`report_finding` 的 `traffic_refs` 里任一 ID 无效 → 整个上报回滚**。模型猜错一个
+       流量 ID，已确认的漏洞就直接从库里消失。这与代码里已有的语义（「关闭时忽略 evidence
+       参数，绝不因多余参数丢掉已确认漏洞」）直接矛盾——是开启状态下的漏设计。
+       改成**尽力而为**：逐条解析，ID 不存在的跳过并列入返回值的 `skipped_traffic_refs`，
+       其余引用照常绑定，**漏洞本身照常入库**；报告 Agent 看到 `partially_bound` 就知道要去
+       `traffic_get` 核实真实 ID 再补绑。**存储故障**（证据目录不可写、正文不可读、数据库不可用）
+       仍整体失败——磁盘满时静默丢证据比报错更糟。
+    2. **重复上报（指纹命中）不绑定任何流量**：二次确认常带着更新后的复现包（不同响应码/新载荷），
+       但去重分支只并文字证据、把新带来的流量包整个丢弃。现在也挂到**原记录**上。
+
+- **`bind_finding_traffic` 工具描述与实际行为不符**：描述写「同批引用全部成功或全部失败」，
+  实际已改为尽力而为。描述与返回值同步更新（新增 `skipped_traffic_refs` 与说明）。
+
+### 变更
+
+- 开启「Agent 自动绑定流量」后，报告 Agent 在漏洞入库后自动核对并绑定流量，再按最新
+  `evidence_version` 写报告。**Token 消耗上升**（要查阅请求/响应正文），这是换取报告里
+  能给出真实请求/响应证据的代价。
+- `db.RecordedFinding` / `db.FindingTraffic` 新增 `skipped_traffic_refs` 字段。
+
 ## [0.3.61] - 2026-10-20
 
 ### 修复的问题

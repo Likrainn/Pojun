@@ -106,6 +106,9 @@ type FindingTraffic struct {
 	Version       int64                   `json:"version"`
 	ReportVersion int64                   `json:"report_version"`
 	Bindings      []FindingTrafficBinding `json:"bindings"`
+	// SkippedRefs 是本次请求里无法解析的流量引用。绑定是尽力而为:有效的
+	// 照常挂上,无效的记在这里,已有的绑定不受影响。
+	SkippedRefs []TrafficRef `json:"skipped_traffic_refs,omitempty"`
 }
 
 type PreparedTrafficEvidence struct {
@@ -340,6 +343,10 @@ type RecordedFinding struct {
 	// Duplicate=true 表示本次上报命中了同任务内已有的同指纹漏洞,证据已合并
 	// 进原记录(而不是新建);调用方应据此提示模型停止重复上报。
 	Duplicate bool `json:"-"`
+	// SkippedRefs 是本次提交里无法解析(流量 ID 不存在/正文不可读)的引用。
+	// 漏洞本身照常入库——猜错一个 ID 不该丢掉已确认的漏洞——但调用方要把
+	// 这些 ID 原样回给模型,让它知道哪些证据没挂上。
+	SkippedRefs []TrafficRef `json:"skipped_traffic_refs,omitempty"`
 }
 
 // FindingFingerprint 归一化 (vulnclass, name, sorted asset_ids) 为上报指纹。
@@ -420,6 +427,11 @@ func RecordFindingTx(ctx context.Context, tx *sql.Tx, in RecordFindingInput, pre
 				}
 			}
 			out := &RecordedFinding{FindingID: dupeID, NodeID: dupeNode, Duplicate: true}
+			// 重复上报同样要把本次带来的流量挂到原记录上:二次确认往往带着
+			// 更新后的复现包(不同响应码/新载荷),只并文字证据会把它丢掉。
+			if err := AddFindingTrafficTx(tx, dupeID, prepared); err != nil {
+				return nil, err
+			}
 			out.Traffic, err = FindingTrafficTx(tx, dupeID)
 			return out, err
 		}
