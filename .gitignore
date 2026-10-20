@@ -48,3 +48,7 @@ Thumbs.db
 /bench/
 /Dockerfile.bench
 /Dockerfile.bench.v2
+
+# Python 缓存
+__pycache__/
+*.pyc
