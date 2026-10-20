@@ -225,9 +225,12 @@ var secretPatterns = []struct {
 	{regexp.MustCompile(`(?i)(authorization\s*:\s*(?:bearer|basic)\s+)('[^']*'|"[^"]*"|\S+)`), "${1}***"},
 	// URL 里的 user:pass@host（保留 scheme 与 user，只打码口令）
 	{regexp.MustCompile(`(?i)(://[^:/@\s]+:)([^@\s/]+)(@)`), "${1}***${3}"},
-	// mysql/psql 的 -p 口令形式：值必须**不是纯端口**。端口号/端口列表是有用信息，
-	// 不能误伤（`nmap -p 80,443,8080` 是端口扫描，不是口令）。
-	{regexp.MustCompile(`(\s-p\s*)('[^']*'|"[^"]*"|[^\s]*[^\s0-9,.\-][^\s]*)`), "${1}***"},
+	// mysql/psql 的 -p 口令形式。
+	//
+	// **必须限定命令**：`--password` 这类带字母的写法没有歧义，但裸 `-p` 在不同
+	// 命令里含义不同——sshpass/mysql/psql 的 -p 是口令，mkdir/tar 的 -p 是
+	// "parents"/"preserve"。通用化会误伤，实测 `mkdir -p /some/dir` 的路径被打成 ***。
+	{regexp.MustCompile(`(?i)((?:^|[\s;|&])(?:mysql|mysqldump|psql|pg_dump|mariadb)\s+[^\n;|&]*?\s-p\s*)('[^']*'|"[^"]*"|\S+)`), "${1}***"},
 }
 
 func trunc(s string, n int) string {

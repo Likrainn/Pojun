@@ -17,6 +17,8 @@ func TestRedactSecretsHidesCredentials(t *testing.T) {
 		{"sshpass -p plainpass ssh user@h", "plainpass", "sshpass"},
 		{"mysql -uroot -p'S3cret!' -h127.0.0.1", "S3cret!", "-uroot"},
 		{"psql postgresql://u:p4ss@host/db", "p4ss", "postgresql://"},
+		{"mysql -h127.0.0.1 -uroot -pTr0ub4dor", "Tr0ub4dor", "-uroot"},
+		{"psql -h 10.0.0.1 -U postgres -p hunter2 -d app", "hunter2", "-U postgres"},
 		{"curl -H 'Authorization: Bearer abc123XYZ' http://x", "abc123XYZ", "Authorization"},
 		{"curl -H 'Authorization: Basic dXNlcjpwYXNz' http://x", "dXNlcjpwYXNz", "Authorization"},
 		{"--password=sup3rsecret user@host", "sup3rsecret", "--password="},
@@ -44,6 +46,11 @@ func TestRedactSecretsKeepsBenignArgs(t *testing.T) {
 		"curl -s http://example.com/path?a=1&b=2",
 		"grep -r 'password' /opt/app/config.yaml",
 		"cd /opt/artex/data/tasks/3/i653 && ls -la",
+		// 裸 -p 在不同命令里含义不同：mkdir/tar 的 -p 是 parents/preserve，
+		// 不是口令。通用化会误伤——实测 `mkdir -p /some/dir` 的路径被打成 ***。
+		"mkdir -p /opt/artex/data/tasks/3/i661 && pwd",
+		"tar -p -czf backup.tgz /opt/data",
+		"cp -p /etc/hosts /tmp/hosts.bak",
 	}
 	for _, in := range benign {
 		if got := redactSecrets(in); got != in {
