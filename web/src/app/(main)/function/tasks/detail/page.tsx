@@ -221,9 +221,27 @@ function TaskDetailInner() {
       .catch(() => setProfiles([]));
   }, []);
 
+  // 任务不存在时停止**所有**与该任务相关的轮询。
+  //
+  // 为什么：任务被删/归档后，/api/tasks/{id} 一直返回 404，但页面仍每 5 秒
+  // 拉一次 —— 实测一个已删除的任务详情页在 50 秒内发了 10 次 404（外加同样
+  // 次数的 stats 404），全程没有任何信息量。UI 本来就能显示「任务已被删除」
+  // （见下面的 !task 分支），所以停掉轮询不会丢任何用户可见的信息。
+  //
+  // 只在 404（资源确实不存在）时停：网络抖动、5xx 属于临时故障，继续重试。
+  //
+  // 这个标志是**共享**的：本页有两处与任务相关的轮询（任务本身 + 该任务的
+  // 待审批数），两处都要停——漏一处就等于没修。
+  // 用 state 而不是 ref：两个轮询（任务本身 + 该任务的待审批数）是两个独立
+  // 的 effect，用 ref 的话「谁先拿到 404」就变成竞态——拦截那个 API 对不存在的
+  // 任务返回的是 200 空列表（不是 404），它自己永远发现不了任务没了。
+  // 做成 state 后，任务轮询一旦确认缺失，另一个 effect 立即重建并停掉。
+  const [taskMissing, setTaskMissing] = React.useState(false);
+
   React.useEffect(() => {
+    if (taskMissing) return;
     let alive = true;
-    const load = () =>
+    const load = () => {
       api
         .interceptTask(id)
         .then((rows) => {
@@ -232,27 +250,18 @@ function TaskDetailInner() {
         .catch(() => {
           // Polling is best-effort; the next interval retries automatically.
         });
+    };
     void load();
     const t = setInterval(load, 5000);
     return () => {
       alive = false;
       clearInterval(t);
     };
-  }, [id]);
+  }, [id, taskMissing]);
 
   const taskLoadInFlight = React.useRef<string | null>(null);
-  // 任务不存在时停止轮询。
-  //
-  // 为什么：任务被删/归档后，/api/tasks/{id} 一直返回 404，但页面仍每 5 秒
-  // 拉一次 —— 实测一个已删除的任务详情页在 50 秒内发了 10 次 404（外加同样
-  // 次数的 stats 404），全程没有任何信息量。UI 本来就能显示「任务已被删除」
-  // （见下面的 !task 分支），所以停掉轮询不会丢任何用户可见的信息。
-  //
-  // 只在 404（资源确实不存在）时停：网络抖动、5xx 属于临时故障，继续重试。
-  const taskMissing = React.useRef(false);
   const load = React.useCallback(() => {
     if (taskLoadInFlight.current === id) return;
-    if (taskMissing.current) return;
     taskLoadInFlight.current = id;
     Promise.all([api.task(id), api.stats(id).catch(() => null)])
       .then(([task, s]) => {
@@ -273,7 +282,7 @@ function TaskDetailInner() {
         const status = (err as { status?: number } | null)?.status;
         if (status === 404) {
           // 任务真的不在了：停轮询，UI 显示「已被删除」。
-          taskMissing.current = true;
+          setTaskMissing(true);
         }
         // 其他错误（含 5xx/网络）保留上一次渲染状态，下一轮继续试。
       })
