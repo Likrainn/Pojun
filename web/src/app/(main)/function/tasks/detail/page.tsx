@@ -262,6 +262,9 @@ function TaskDetailInner() {
   const taskLoadInFlight = React.useRef<string | null>(null);
   const load = React.useCallback(() => {
     if (taskLoadInFlight.current === id) return;
+    // 任务已确认不存在 → 不再拉。taskMissing 进依赖后，这个 useCallback 会重建，
+    // 上面的 effect 也会随之重建（用的是新的 load），轮询就此停下。
+    if (taskMissing) return;
     taskLoadInFlight.current = id;
     Promise.all([api.task(id), api.stats(id).catch(() => null)])
       .then(([task, s]) => {
@@ -292,7 +295,7 @@ function TaskDetailInner() {
           setLoaded(true);
         }
       });
-  }, [id]);
+  }, [id, taskMissing]);
   React.useEffect(() => {
     load();
     const timer = setInterval(load, 5000);
