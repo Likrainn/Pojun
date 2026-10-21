@@ -147,7 +147,10 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // Keep the status-based fallback for empty or non-JSON error responses.
     }
-    throw new Error(message);
+    // 带上网关状态码：调用方要能区分「资源不存在(404)」与「服务端临时故障(5xx)」——
+    // 前者的正确反应是**停止**对它的轮询，后者的正确反应是继续重试。原来只有
+    // 一句 message，两者无法区分，页面只能对 404 也一直轮询下去。
+    throw Object.assign(new Error(message), { status: r.status });
   }
   if (r.status === 204) return undefined as T;
   return r.json();
