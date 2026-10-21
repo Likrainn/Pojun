@@ -448,6 +448,33 @@ function ProfileSheet({
       });
       if (isNew) toast.success(`已新建：${name.trim()}（在卡片上「设为激活」以启用）`);
       else toast.success(profile?.is_default ? "已保存，激活配置即时生效，无需重启" : "已保存");
+      // 保存成功 ≠ 跑得通。base_url 与 key 不匹配时（常见：中转网关的 key 配到
+      // 官方端点上）保存照样成功，但每个任务都会 403 "Request not allowed"——
+      // 直到任务跑不动才看得见。这里保存后立刻实测一次，失败就明确说清楚。
+      //
+      // profile_id 传新 id：已存的 key 不回传浏览器，测试时由后端从库里取。
+      try {
+        const t = await api.testLLM(
+          format,
+          model.trim(),
+          baseUrl.trim(),
+          apiKey,
+          proxy.trim(),
+          toStore(thinkingType),
+          toStore(effort),
+          Number(id),
+          streaming,
+          sessionHeaderKey.trim(),
+        );
+        if (!t.ok) {
+          toast.error(
+            `已保存，但实测失败：${t.error ?? "未知错误"}（配置已生效前请检查 base_url 与 API Key 是否匹配）`,
+            { duration: 12000 },
+          );
+        }
+      } catch {
+        // 实测本身失败（网络/超时）不该掩盖「保存成功」这个事实——保存已经生效。
+      }
       onSaved(String(id));
       onOpenChange(false);
     } catch (e) {
