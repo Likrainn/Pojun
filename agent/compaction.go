@@ -432,7 +432,20 @@ func (c *Compactor) tryStart(expID int64) bool {
 	if c.running[expID] {
 		return false
 	}
-	if t, ok := c.lastRun[expID]; ok && time.Since(t) < c.cooldownFor(expID) {
+	// cooldownForLocked, not cooldownFor: this method already holds c.mu, and
+	// sync.Mutex is NOT reentrant — calling cooldownFor here would try to lock
+	// c.mu a second time and self-deadlock forever.
+	//
+	// How it stayed hidden so long: the branch is only reached once
+	// c.lastRun[expID] exists, and lastRun is only set by finish() when a
+	// compaction goroutine completes. So the first compaction of an exploration
+	// is fine; the next planner round after it completed deadlocks — and
+	// because a deadlocked mutex ignores ctx cancellation, the planner's
+	// wall-clock timeout could not break it either. Symptom: the task goes
+	// permanently silent (no new intents, no planner log at all) while the
+	// service keeps running. A service restart cleared it, which is why it
+	// looked like an upstream/LLM problem.
+	if t, ok := c.lastRun[expID]; ok && time.Since(t) < c.cooldownForLocked(expID) {
 		return false
 	}
 	c.running[expID] = true
@@ -440,12 +453,20 @@ func (c *Compactor) tryStart(expID int64) bool {
 }
 
 // cooldownFor 返回该探索当前的冷却时长(成功=基础值,连续失败则指数退避)。
+//
+// 这是**不持锁**时的入口；已经持有 c.mu 的调用方必须用 cooldownForLocked
+// （sync.Mutex 不可重入，再加一次锁就是自死锁）。
 func (c *Compactor) cooldownFor(expID int64) time.Duration {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.cooldownForLocked(expID)
 }
 
+// cooldownForLocked 返回该探索当前的冷却时长(成功=基础值,连续失败则指数退避)。
+//
+// 必须是 Locked 版：调用方持有 c.mu 时再调一个会加锁的同名函数就是自死锁
+// （sync.Mutex 不可重入），而 ctx 取消救不了它——死锁的 goroutine 不会返回，
+// planner 的墙钟上限也就跟着失效。热路径 tryStart 用的就是这一个。
 func (c *Compactor) cooldownForLocked(expID int64) time.Duration {
 	fails := c.consecFails[expID]
 	if fails <= 0 {
