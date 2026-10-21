@@ -21,7 +21,7 @@ import (
 // 实测出来的问题：
 //
 //  1. **收尾是被动的**：worker 不知道「该收手了」，只知道「时间快到了赶紧写」。
-//     线上实测意图 summary 平均 737 字、最长 2267 字——它把��有东西都倒出来，
+//     线上实测意图 summary 平均 737 字、最长 2267 字——它把有东西都倒出来，
 //     因为死线强制它这么做。
 //  2. **耗尽远多于完成**：线上意图终态分布是 done 18 / exhausted 99 /
 //     blocked 82。exhausted 是 done 的 5.5 倍，说明绝大多数探测是**被掐断的**，
@@ -43,14 +43,25 @@ import (
 //
 // 产出率直接对应「这个方向还有没有价值」，而时长不。
 //
-// ## 为什么放在 Stop hook
+// ## 挂在哪个钩子上（2026-10-21 修正）
 //
-// harness.HookRunner.Stop 在**每个 assistant 回合之后**被调用（见 norma 的
-// harness/query.go），返回 prevent=true 会终止这一轮 run。这正好是「轮边界」
-// 的语义——与 SDK 自己的 MaxTurns/MaxDuration 判定在同一位置。
+// 原先只挂在 **Stop** hook 上，注释写的是「harness.HookRunner.Stop 在每个
+// assistant 回合之后被调用」——**这个前提是错的**。SDK 实际只在
+// `len(toolUses) == 0`（模型该轮没调任何工具）时才调 Stop
+// （harness/query.go:466）。于是：
 //
-// 另一个可选钩子 SystemReminderFunc 不可用：它只在 Prompt() 时调用一次，
-// 不是每轮。
+//	持续干活的 worker（每轮都调工具）→ Stop 永远不被调用
+//	→ 空转判据形同虚设
+//
+// 线上实测：任务 5 的 5 个意图跑了 34~58 轮、**一次写回都没有**，却一直
+// 不被收场；journal 里「无增量自动收场」一条都没有。
+//
+// 现在**两处都挂**：
+//   - **PreToolUse**（harness/tools.go:78，每次工具调用前都调）——主判据。
+//     达到阈值就**阻止本次工具调用**并把「请把已确认的写回并收手」回传给
+//     模型（与 steer_work 的纠偏机制同一个模式：block=true + message）。
+//     一个持续干活的 worker 走的正是这条路，所以它收得住。
+//   - **Stop**（模型该轮没调工具时）——保留，覆盖「模型只是想说话」的场景。
 //
 // ## 为什么不影响「深度优先」
 //
@@ -95,6 +106,10 @@ type idleStopper struct {
 	start time.Time
 	// stopped 标记是否已经要求过收场（只要求一次）。
 	stopped bool
+	// nudged 记录是否已经给过「请写回并收手」的提示。提示过一次后若仍不停，
+	// 下一次才真收场。跟 idleStopHooks.nudged 是同一件事的两份计数——stopper
+	// 里的这份用于「有写回后重置」（恢复后允许再提示一次）。
+	nudged bool
 	// mu 保护并发访问（Stop 可能与工具执行并发）。
 	mu sync.Mutex
 	// reason 记录收场原因，落日志/落库用。
@@ -110,25 +125,18 @@ func newIdleStopper(writes func() WriteCounts) *idleStopper {
 // messages 参数不使用——判据只看写回增量，不看模型说了什么。看文本会有两个
 // 坏处：模型可以自己宣称「我已经探完了」来骗过判据；而一个正在认真做
 // 多步利用链的 worker 会说很多话，被误判成「还在产出」。
+//
+// 「一轮」的口径：**一次工具执行**（PreToolUse 放行 → PostToolUse 记一次）。
+// 早期版本把「一轮」定义成 assistant 回合，但 SDK 只在「该轮没调工具」时才
+// 调 Stop，那个口径在持续干活的 worker 上永远推进不了（见文件头注释）。
 func (s *idleStopper) check() (prevent bool, reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	total := 0
-	if s.writes != nil {
-		total = s.writes().Total()
-	}
-	// 写回增量 > 0 → 有产出，重置连续计数。
-	if total > s.lastWrites {
-		s.lastWrites = total
-		s.rounds = 0
-		s.stopped = false
+	// 先看有没有新写回——有就清零（这一轮是产出的）。
+	if s.refreshLocked() {
 		return false, ""
 	}
-	// 已经达过阈值：持续返回 prevent，直到「阶段」由调用方推进
-	// （idleStopHooks 用 nudged 区分「先提示写回」与「真的收场」）。
-	if s.stopped {
-		return true, s.reason
-	}
+	// 这一轮过去了，计数 +1。
 	s.rounds++
 	// 起跑宽限期内不收场。
 	if time.Since(s.start) < idleStopMinElapsed {
@@ -137,10 +145,76 @@ func (s *idleStopper) check() (prevent bool, reason string) {
 	if s.rounds < idleStopRounds {
 		return false, ""
 	}
+	// 已经达过阈值：持续返回 prevent。
+	if s.stopped {
+		return true, s.reason
+	}
 	s.stopped = true
-	s.reason = fmt.Sprintf("连续%d轮无写回（本轮写回 %d 条，产出率已归零）", s.rounds, total)
+	s.reason = fmt.Sprintf("连续%d轮无写回（本轮写回 %d 条，产出率已归零）", s.rounds, s.totalLocked())
 	return true, s.reason
 }
+
+// peek 判断「当前是否已经空转到该收场的程度」，**不推进计数**。
+//
+// 为什么要单独的 peek：check() 的语义是「调用即推进一轮」（Stop 路径靠这个
+// 推进）。而 PreToolUse 在一次工具执行前也会被调用——如果它也用 check()，
+// 同一轮就会被推进两次（PreToolUse 一次、随后的 Stop 又一次），阈值从
+// 「连续 3 轮」缩成「连续 1.5 轮」，太激进，会误杀正在准备写回的 worker。
+func (s *idleStopper) peek() (prevent bool, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.refreshLocked() {
+		return false, ""
+	}
+	if s.stopped {
+		return true, s.reason
+	}
+	if time.Since(s.start) < idleStopMinElapsed {
+		return false, ""
+	}
+	if s.rounds < idleStopRounds {
+		return false, ""
+	}
+	return true, fmt.Sprintf("连续%d轮无写回（本轮写回 %d 条，产出率已归零）", s.rounds, s.totalLocked())
+}
+
+// advance 记一轮过去（一次工具执行）。
+//
+// 计数由 PostToolUse 推进——它是**每轮都调工具的 worker** 唯一会走的路径。
+// Stop 路径另有一次推进（见 check），两者互斥：一条回合要么调了工具
+// （PostToolUse 推进、Stop 不被调），要么没调（Stop 推进），不会重复计数。
+func (s *idleStopper) advance() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.refreshLocked() {
+		// 这一轮有产出 → refreshLocked 已清零，不再 +1。
+		return
+	}
+	s.rounds++
+}
+
+// refreshLocked 在有新增写回时清零计数，返回「本轮是否有产出」。
+// 调用方必须持有 s.mu。
+func (s *idleStopper) refreshLocked() bool {
+	total := s.totalLocked()
+	if total > s.lastWrites {
+		s.lastWrites = total
+		s.rounds = 0
+		s.stopped = false
+		s.nudged = false
+		return true
+	}
+	return false
+}
+
+// totalLocked 读当前累计写回数。调用方必须持有 s.mu。
+func (s *idleStopper) totalLocked() int {
+	if s.writes == nil {
+		return 0
+	}
+	return s.writes().Total()
+}
+
 
 // idleStopHooks 把 idleStopper 挂在 harness 的 hook 链上。
 //
@@ -178,17 +252,68 @@ type idleStopHooks struct {
 	mu sync.Mutex
 }
 
+// PreToolUse 是空转判据的**主挂点**：SDK 每次工具执行前都调它
+// （harness/tools.go:78），而 Stop 只在「该轮没调工具」时才调。
+//
+// 达到阈值时：阻止本次工具调用，并把「请把已确认的结果写回、然后收手」
+// 作为工具结果回传给模型（block=true + message，与 steer_work 纠偏同一个
+// 模式）。模型收到后可以用 record_fact / report_finding / insert_assets
+// 把成果写回——那三样**不经过**这个钩子（它们是普通工具调用，但写回本身
+// 会让计数归零）。
+//
+// 第一次拦是提示，模型若仍不停（继续调工具且仍零写回），第二次才真收场。
 func (h *idleStopHooks) PreToolUse(ctx context.Context, name string, input []byte) (bool, string, []byte) {
-	if h.inner != nil {
-		return h.inner.PreToolUse(ctx, name, input)
+	// 写回类工具直接放行：worker 正要把成果落库时拦它 = 把成果丢掉。
+	if idleStopWriteTools[name] {
+		if h.inner != nil {
+			return h.inner.PreToolUse(ctx, name, input)
+		}
+		return false, "", nil
 	}
-	return false, "", nil
+	// inner（guard 管控链）先走——空转判据不能绕过拦截规则。
+	if h.inner != nil {
+		if block, msg, updated := h.inner.PreToolUse(ctx, name, input); block {
+			return block, msg, updated
+		}
+	}
+	prevent, reason := h.stop.peek()
+	if !prevent {
+		return false, "", nil
+	}
+	h.mu.Lock()
+	alreadyNudged := h.nudged
+	h.nudged = true
+	h.mu.Unlock()
+	if !alreadyNudged {
+		// 第一次：拦住这次工具调用，提示模型写回并收手（它还有机会把成果落库）。
+		return true, idleStopMessage, nil
+	}
+	// 第二次：提示过还不停，真的收场。
+	if h.onStop != nil {
+		h.onStop(reason)
+	}
+	return true, idleStopMessage + "（已多次提示未收场，本轮就此结束）", nil
 }
 
+// PostToolUse 推进「一轮」的计数：一次工具执行 = 一轮。
+//
+// 为什么放在这里而不是 PreToolUse：PreToolUse 放行后工具**可能失败**（命令
+// 报错、网络不通），那仍然是一次「这一轮没产出」——应该计入。放在 PostToolUse
+// 能把成功和失败的工具调用都算上。
 func (h *idleStopHooks) PostToolUse(ctx context.Context, name string, input, result []byte, isErr bool) {
 	if h.inner != nil {
 		h.inner.PostToolUse(ctx, name, input, result, isErr)
 	}
+	// 写回类工具不推进计数（它是结束动作，见 idleStopWriteTools 的说明）。
+	if idleStopWriteTools[name] {
+		return
+	}
+	// 一次工具执行 = 一轮，推进计数。
+	//
+	// 为什么由这里推进：PreToolUse 只做判断（peek），Stop 只在「该轮没调工具」
+	// 时才被调用。持续干活的 worker 走的正是「每轮都调工具」这条路——它的
+	// 轮次计数只能由 PostToolUse 推进，否则计数永远停在 0，空转判据不成立。
+	h.stop.advance()
 }
 
 func (h *idleStopHooks) Stop(ctx context.Context, messages []llm.Message) (bool, []string, string) {
@@ -220,6 +345,19 @@ func (h *idleStopHooks) Stop(ctx context.Context, messages []llm.Message) (bool,
 // wrapIdleStop 把 idleStopper 套在已有 hook 链外层。
 func wrapIdleStop(inner harness.HookRunner, writes func() WriteCounts, onStop func(string)) *idleStopHooks {
 	return &idleStopHooks{inner: inner, stop: newIdleStopper(writes), onStop: onStop}
+}
+
+// idleStopWriteTools 是「写回类」工具：它们是**结束动作**而不是探测动作。
+//
+// 为什么它们不参与空转判据：
+//   - 绝不能被拦。worker 攒了一堆成果正要 record_fact 写回，这时拦住它 =
+//     把成果全丢掉——那比空转更糟。
+//   - 不推进计数。写回会让 writes 增长，计数自然被 refreshLocked 清零；
+//     再额外推进一次等于把「有产出」的一轮算成两轮。
+var idleStopWriteTools = map[string]bool{
+	"record_fact":     true,
+	"insert_assets":   true,
+	"report_finding":  true,
 }
 
 // idleStopMessage 是收场时给模型的说明。
