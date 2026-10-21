@@ -211,7 +211,18 @@ def is_unconfigured(body):
 
 
 def check_route(route, base_url, token, ids, do_read):
-    """对一条路由跑三段检查，返回一条结果记录。"""
+    """对一条路由跑检查，返回一条结果记录。
+
+    ★ 写操作（POST/PUT/PATCH/DELETE）**绝不带 token 发真实请求**。
+
+    原因（实测事故 2026-10-21）：这些接口不是幂等也不是无副作用的——
+      POST /api/llm      空 body 会把「全局激活 LLM 配置」改掉（provider
+                          落成默认 anthropic、base_url 清空、api_key 回落到
+                          当前内存里的旧 key），随后所有 LLM 调用 403；
+      POST /api/tasks    空 body 会真的建出一个任务。
+    巡检脚本的任务是「看路由契约对不对」，不是「改线上配置」。写接口只做
+    未授权段（段 A）：那时没有 token，服务不会执行任何副作用。
+    """
     method = route["method"]
     path = route["path"]
     filled, missing = fill_path(path, ids)
@@ -226,10 +237,11 @@ def check_route(route, base_url, token, ids, do_read):
         "empty_status": None,
         "read_status": None,
         "unconfigured": False,
+        "skipped_write": False,
         "issues": [],
     }
 
-    # A. 未授权
+    # A. 未授权（对所有路由都做；没有 token 时服务端不会执行副作用）
     st, body, err = fetch(url, method=method, body={} if method != "GET" else None, timeout=route_timeout(path))
     rec["anon_status"] = st
     exempt = path.startswith(AUTH_EXEMPT_PREFIXES) or path in AUTH_EXEMPT_EXACT
@@ -246,7 +258,12 @@ def check_route(route, base_url, token, ids, do_read):
     if token is None:
         return rec
 
-    # B. 空参数（带 token，故意不给必填参数）
+    if method not in READ_METHODS:
+        # 写接口：到此为止。带 token 的请求会真的改线上状态。
+        rec["skipped_write"] = True
+        return rec
+
+    # B. 空参数（只读路由：带 token，故意不给必填参数）
     st, body, err = fetch(url, method=method, token=token, body={} if method != "GET" else None, timeout=route_timeout(path))
     rec["empty_status"] = st
     if st >= 500 and is_unconfigured(body):
@@ -263,35 +280,35 @@ def check_route(route, base_url, token, ids, do_read):
             rec["issues"].append(f"空参数请求失败: {err}")
 
     # C. 正常只读
-    if do_read and method in READ_METHODS:
-        st, body, err = fetch(url, method=method, token=token, timeout=route_timeout(path))
-        rec["read_status"] = st
-        if st >= 500 and is_unconfigured(body):
-            rec["unconfigured"] = True
-        elif st >= 500:
-            rec["issues"].append(f"正常 GET 返回 5xx: {st} {body[:300]}")
-        if st == 0:
-            if is_stream_path(path):
-                rec["read_status"] = 200
-                rec["read_stream"] = True
-                rec["issues"] = [i for i in rec["issues"] if "正常 GET 请求失败" not in i]
-            else:
-                rec["issues"].append(f"正常 GET 请求失败: {err}")
+    st, body, err = fetch(url, method=method, token=token, timeout=route_timeout(path))
+    rec["read_status"] = st
+    if st >= 500 and is_unconfigured(body):
+        rec["unconfigured"] = True
+    elif st >= 500:
+        rec["issues"].append(f"正常 GET 返回 5xx: {st} {body[:300]}")
+    if st == 0:
+        if is_stream_path(path):
+            rec["read_status"] = 200
+            rec["read_stream"] = True
+            rec["issues"] = [i for i in rec["issues"] if "正常 GET 请求失败" not in i]
+        else:
+            rec["issues"].append(f"正常 GET 请求失败: {err}")
 
     return rec
 
 
 def summarize(results):
     anon = Counter(str(r["anon_status"]) for r in results)
-    empty = Counter(str(r["empty_status"]) for r in results if r["empty_status"] is not None)
-    read = Counter(str(r["read_status"]) for r in results if r["read_status"] is not None)
+    empty = Counter(str(r["empty_status"]) for r in results if r.get("empty_status") is not None)
+    read = Counter(str(r["read_status"]) for r in results if r.get("read_status") is not None)
     with_issues = [r for r in results if r["issues"]]
     unconfigured = [r for r in results if r.get("unconfigured")]
+    skipped_write = [r for r in results if r.get("skipped_write")]
     # 外部依赖未就绪的路由不进 server_errors，但要单独报出来。
     unconfigured_paths = {r["path"] for r in unconfigured}
     server_errors = [
         r for r in results
-        if ((r["empty_status"] or 0) >= 500 or (r["read_status"] or 0) >= 500)
+        if ((r.get("empty_status") or 0) >= 500 or (r.get("read_status") or 0) >= 500)
         and r["path"] not in unconfigured_paths
     ]
     return {
@@ -302,6 +319,7 @@ def summarize(results):
         "issue_count": len(with_issues),
         "server_errors": server_errors,
         "unconfigured": unconfigured,
+        "skipped_write_count": len(skipped_write),
         "auth_leaks": [r for r in results if r["anon_status"] not in (401, 0) and not (
             r["path"].startswith(AUTH_EXEMPT_PREFIXES) or r["path"] in AUTH_EXEMPT_EXACT)],
         "issues": with_issues,
@@ -338,7 +356,8 @@ def main():
     ids = discover_ids(args.base_url, token) if token else {}
 
     do_read = not args.anon_only
-    log(f"开始巡检（{'含只读段' if do_read else '仅未授权段'}，并发 {args.workers}）...")
+    log(f"开始巡检（只读段：只有 GET 会带 token 发请求；写操作只做未授权检查，"
+        f"不碰线上状态），并发 {args.workers}...")
     t0 = time.time()
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         results = list(pool.map(
@@ -353,8 +372,9 @@ def main():
     log(f"总路由: {s['total']}")
     log(f"未授权状态分布: {s['anon_status_dist']}")
     if do_read:
-        log(f"空参数状态分布: {s['empty_status_dist']}")
+        log(f"空参数状态分布（仅 GET）: {s['empty_status_dist']}")
         log(f"正常 GET 状态分布: {s['read_status_dist']}")
+    log(f"写操作（只做未授权检查，未发真实请求）: {s['skipped_write_count']} 条")
     log(f"问题路由数: {s['issue_count']}")
 
     if s["server_errors"]:
