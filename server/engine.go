@@ -809,6 +809,58 @@ func (e *Engine) Run(ctx context.Context, t *Task) {
 //	给三倍冗余；同时保证「上游卡死」最多浪费 15 分钟就自愈，不会无限期哑火。
 const plannerRoundTimeout = 15 * time.Minute
 
+// plannerRoundTimeoutOverride 让测试能用秒级上限验证「规划轮卡住也不拖死
+// planner 循环」。生产路径不设置它（保持 plannerRoundTimeout）。
+var plannerRoundTimeoutOverride time.Duration
+
+// plannerRoundLimit 返回本轮规划生效的墙钟上限。
+func plannerRoundLimit() time.Duration {
+	if plannerRoundTimeoutOverride > 0 {
+		return plannerRoundTimeoutOverride
+	}
+	return plannerRoundTimeout
+}
+
+// plannerRoundOutcome 是一轮规划的结果。
+type plannerRoundOutcome struct {
+	met    bool
+	reason string
+	err    error
+}
+
+// runPlannerRound 在独立 goroutine 里跑一轮规划，并在 ctx 结束时**放弃这一轮**
+// 而不是等它。
+//
+// 为什么不能直接调 Plan：Plan 可能卡在**任何**不响应 ctx 的地方——最隐蔽的是
+// 死锁（死锁的 goroutine 永远不返回，ctx 取消对它无效）。而 planner 的
+// runRound 是串行的：它不返回，后续所有唤醒（边沿 + 心跳）都堵在里面，
+// planner 就永久哑火——服务还活着、任务状态还是 running、什么日志都没有。
+//
+// 实测（2026-10-21）：planner 哑火 1 小时 5 分钟，goroutine dump 显示它卡在
+// agent/compaction.go 的自死锁上。当时给规划轮加的 15 分钟墙钟上限对它**完全
+// 无效**（ctx 取消管不到死锁）。
+//
+// 放弃一轮的代价是那个 goroutine 泄漏（Go 无法杀死 goroutine）。相比「planner
+// 永久失声」，泄漏一个 goroutine 是小得多的代价。
+func runPlannerRound(ctx context.Context, plan func(context.Context) (bool, string, error)) plannerRoundOutcome {
+	type result struct {
+		met    bool
+		reason string
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		met, reason, err := plan(ctx)
+		done <- result{met: met, reason: reason, err: err}
+	}()
+	select {
+	case r := <-done:
+		return plannerRoundOutcome{met: r.met, reason: r.reason, err: r.err}
+	case <-ctx.Done():
+		return plannerRoundOutcome{err: ctx.Err()}
+	}
+}
+
 // plannerHeartbeatInterval 解析任务的 planner 心跳间隔。db.CreateTask 已归一
 // (低于 600 一律抬到 600);这里再兜一次底,防内存态异常值。
 func plannerHeartbeatInterval(t *Task) time.Duration {
@@ -917,7 +969,7 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		// 15 分钟的由来：实测一轮规划（1M 上下文 + 几十次工具调用）3–5 分钟；
 		// 15 分钟给它三倍冗余，同时保证「上游卡死」最多浪费 15 分钟就能自愈，
 		// 不会像之前那样无限期哑火。
-		roundCtx, roundCancel := context.WithTimeout(ectx, plannerRoundTimeout)
+		roundCtx, roundCancel := context.WithTimeout(ectx, plannerRoundLimit())
 		defer roundCancel()
 		log.Printf("[planner] task %s 规划中…(%s 触发)", t.ID, src)
 		// round marker: each Plan() is one planner round; emit a boundary so the
@@ -929,24 +981,38 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		triggers := t.drainTriggers()
 		taskIDInt, _ := strconv.ParseInt(t.ID, 10, 64)
 		e.BeginLLMCall(t.ID)
-		met, reason, err := planner.Plan(roundCtx, taskIDInt, e.m.assets, t.Store, t.Goal, triggers, emit)
+		// Plan runs on its own goroutine so that NOTHING it can get stuck on can
+		// stop the planner loop.
+		//
+		// Why this matters (2026-10-21 real incident): the planner went silent
+		// for over an hour while the service kept running. The goroutine dump
+		// showed it blocked on a self-deadlock inside the compactor
+		// (agent/compaction.go: tryStart held c.mu and called a lock-taking
+		// cooldownFor). A deadlocked goroutine never returns, so **ctx
+		// cancellation cannot break it** — the wall-clock deadline below was
+		// powerless against it, and the planner's serial runRound kept every
+		// later wake-up (edge + heartbeat) stuck behind it.
+		//
+		// Selecting on the result channel means the loop gives up on a stuck
+		// round after plannerRoundTimeout and keeps serving wake-ups. The stuck
+		// goroutine leaks (Go cannot kill one), which is the lesser evil: one
+		// leaked goroutine per stuck round versus a permanently mute planner.
+		res := runPlannerRound(roundCtx, func(ctx context.Context) (bool, string, error) {
+			return planner.Plan(ctx, taskIDInt, e.m.assets, t.Store, t.Goal, triggers, emit)
+		})
 		e.EndLLMCall(t.ID)
 		switch {
-		case err != nil && roundCtx.Err() != nil && ectx.Err() == nil:
+		case res.err != nil && roundCtx.Err() != nil && ectx.Err() == nil:
 			// 规划轮超时（本轮自身的墙钟上限到了，不是任务 deadline）。
 			//
-			// 这一支必须能走到：超时时 Plan 返回 ctx 错误，runRound 正常结束，
+			// 这一支必须能走到：超时时本轮作废，runRound 正常结束，
 			// planner 恢复响应——下次唤醒再规划一轮。**不能**让它走进下面的
 			// "规划出错"分支后被静默吞掉，否则会退回「永久哑火」的旧症状。
-			log.Printf("[planner] task %s 规划轮超时(%s)，本轮作废，等下次唤醒重试", t.ID, plannerRoundTimeout)
-		case err != nil && ectx.Err() == nil:
-			log.Printf("[planner] task %s 规划出错: %v", t.ID, err)
-		case met:
-			log.Printf("[planner] task %s 判定目标达成: %s", t.ID, reason)
-			// 所有目标达成 → 持久化任务状态为 done（前端 DTO 会优先展示该终态）。
-			if err := e.m.SetTaskStatus(t.ID, "done"); err != nil {
-				log.Printf("[planner] task %s 标记完成落库失败: %v", t.ID, err)
-			}
+			log.Printf("[planner] task %s 规划轮超时(%s)，本轮作废，等下次唤醒重试", t.ID, plannerRoundLimit())
+		case res.err != nil && ectx.Err() == nil:
+			log.Printf("[planner] task %s 规划出错: %v", t.ID, res.err)
+		case res.met:
+			log.Printf("[planner] task %s 判定目标达成: %s", t.ID, res.reason)
 			// 任务已判完成 → 立刻取消在跑的 worker：它们手头的意图跑出来也没意义了。
 			// 下一轮 worker 循环撞终态门就不再领新意图;被取消的这批走下方"任务已完成"分支
 			// 归为 stopped(而非 blocked)。
