@@ -18,9 +18,19 @@ import (
 //   ④ 等在跑 worker drain(受 grace) → ⑤ 终局一轮 planner 判定 → ⑥ 定终态(带守卫)
 
 const (
-	settleDrainGrace     = 90 * time.Second // 等在跑 worker 优雅收尾的上限;超过则硬 cancel
-	deadlinePollInterval = 2 * time.Second  // deadline 未盖章/LLM 未就绪时的轮询间隔
-	deadlineMaxSleep     = 30 * time.Second // 单次最长睡眠(便于周期复查终态)
+	// settleDrainGrace 是等在跑 worker 优雅收尾的上限;超过则硬 cancel。
+	//
+	// 为什么从 90s 提到 300s(2026-10-21 实测修正)：任务到点时可能同时有
+	// **12 个 worker** 在跑(worker 数就是并发上限),每个都要走一遍 SDK 的
+	// settlement(注入收尾词 + 禁 Bash + 写回成果 + 收尾总结)——那至少是
+	// 1 轮 LLM 调用,而思考型模型(minimax-m3.1)一轮就要 30~60 秒。
+	//
+	// 实测线上任务 3：13:42:23 到点，13:43:53 就 drain 超时硬砍——90 秒里
+	// 12 个 worker 只来得及各写回 1~3 条事实，正在写的成果直接丢了。
+	// 收尾窗口必须按「并发 worker 数 × 单轮 LLM 耗时」来给，不能按单 worker 给。
+	settleDrainGrace     = 300 * time.Second // 等在跑 worker 优雅收尾的上限;超过则硬 cancel
+	deadlinePollInterval = 2 * time.Second   // deadline 未盖章/LLM 未就绪时的轮询间隔
+	deadlineMaxSleep     = 30 * time.Second  // 单次最长睡眠(便于周期复查终态)
 )
 
 // ---------- settling 状态 ----------

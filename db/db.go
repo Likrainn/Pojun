@@ -178,7 +178,7 @@ type builtinAgent struct {
 	key, name, role, desc string
 	vars                  []promptVar
 	interactiveShell      bool // 建行时的默认交互式 shell 开关；ON CONFLICT 不覆盖用户后续手动开关
-	runSeconds            *int // 建行时的单次 run 墙钟上限(秒)；nil=用种子默认(3600)，0=不限时
+	runSeconds            *int // 建行时的单次 run 墙钟上限(秒)；nil=用种子默认(1200)，0=不限时
 }
 
 type promptVar struct{ name, desc, example, source string }
@@ -220,7 +220,7 @@ func (d *DB) seedBuiltins() error {
 		var agentID int64
 		err := d.QueryRow(`
 INSERT INTO agents(key, name, description, role, builtin, enabled, interactive_shell, run_seconds)
-VALUES ($1, $2, NULLIF($3,''), $4, true, true, $5, COALESCE($6, 3600))
+VALUES ($1, $2, NULLIF($3,''), $4, true, true, $5, COALESCE($6, 1200))
 ON CONFLICT (key) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description
 RETURNING id`, a.key, a.name, a.desc, a.role, a.interactiveShell, a.runSeconds).Scan(&agentID)
 		if err != nil {
@@ -805,23 +805,45 @@ func (d *DB) migrateContextWindowK() error {
 	return d.SetSetting(flag, "done")
 }
 
-// migrateAgentRunSeconds 把各 agent 的单次 run 墙钟预算从 1200s 提到 3600s。
+// migrateAgentRunSeconds 把各 agent 的单次 run 墙钟预算从 3600s 调回 1200s。
 //
-// 起因：1200s(20 分钟)对一条渗透意图太短——挖一个目标的多个漏洞经常做不完。
-// run 到点即判 exhausted，而 exhausted 是**终态**、不会被自动重新领取，
-// 于是这条线索就断了（已发现的事实/资产/漏洞仍会写回，但没做完的部分没了）。
-// 实测生产环境里 89 个意图 exhausted vs 8 个 done。
+// 背景：2026-10-20 的迁移（agents_run_seconds_3600_v1）把 1200s 提到 3600s，
+// 当时的判断是「给太紧」——实测生产环境里 89 个意图 exhausted vs 8 个 done。
 //
-// 只改仍是默认值 1200 的行：用户自己调过的实例保持不变。
+// 那个归因是错的。exhausted 不是失败信号，是「这一小步没做完」的信号：上游
+// (ARTEX-upstream) 的种子默认就是 1200s，靠「短 run → exhausted → 规划者看
+// trace 判进度 → 续派或换打法」形成小步快跑的闭环，从来不需要长 run。
+//
+// 拉长到 3600s 反而把这个闭环拆了：run 拖到 1 小时，撞的几乎都是硬上限，
+// 规划者看到的一律是「运行超时」→ 续派同一条链 → 2026-10-21 实测 26 个意图
+// 里 4 个跑满 3600s 后 exhausted，合计 4.1 小时机时且零事实产出。
+//
+// 另一个当时的干扰因素已被单独修掉：上下文窗口从 200K 提到 1M。压缩过早
+// 触发会烧掉一整轮 LLM 预算，间接让意图显得「做不完」——那是上下文的问题，
+// 不是墙钟的问题。两个一起调，等于把两个变量混在一起归因到一个。
+//
+// 只改仍是 3600 的行：用户自己调过的实例保持不变。
 func (d *DB) migrateAgentRunSeconds() error {
-	const flag = "agents_run_seconds_3600_v1"
+	const flag = "agents_run_seconds_1200_v2"
 	if v, _, _ := d.GetSetting(flag); v == "done" {
 		return nil
 	}
-	if _, err := d.Exec(`UPDATE agents SET run_seconds=3600 WHERE run_seconds=1200`); err != nil {
-		return fmt.Errorf("agent run seconds: %w", err)
+	if err := d.applyAgentRunSeconds(3600, 1200); err != nil {
+		return err
 	}
 	return d.SetSetting(flag, "done")
+}
+
+// applyAgentRunSeconds 把 run_seconds=from 的行改成 to。
+//
+// 单独抽出来是为了能直接测「迁移方向」这个不变量：之前那个 1200→3600 的迁移
+// 就是走弯路的根源，而它是【一次性迁移】——跑过就没了，事后无从验证方向对错。
+// 保持它是可测的纯逻辑（而不是藏在一次性 flag 后面），才能用单测锁住。
+func (d *DB) applyAgentRunSeconds(from, to int) error {
+	if _, err := d.Exec(`UPDATE agents SET run_seconds=$2 WHERE run_seconds=$1`, from, to); err != nil {
+		return fmt.Errorf("agent run seconds %d->%d: %w", from, to, err)
+	}
+	return nil
 }
 
 // migrateJudgeTimeoutSeconds 把模型裁决的墙钟上限从 90s 提到 180s。
