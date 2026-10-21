@@ -72,6 +72,10 @@ type ToolSet struct {
 	GoalMet   bool
 	Reason    string
 	writes    WriteCounts
+	// lastMissingAssets holds the asset ids referenced by the most recent
+	// record_fact call that do NOT exist in the asset table. The tool result
+	// reports them back so the model stops reusing a fabricated id.
+	lastMissingAssets []int64
 	// killWork, if set, terminates a running work by intent id (engine callback,
 	// wired by the planner). nil = the kill_work tool reports unavailable.
 	killWork func(intentID int64) error
@@ -1519,7 +1523,9 @@ func (t *ToolSet) recordOneFact(it factItem, defaultIntent int64) (int64, error)
 		}
 	}
 	// a fact is its OWN node kind (distinct from a vuln finding).
-	id, err := t.ts.AddNode(db.KindFact, payload, 5, "confirmed", t.worker, pidList(it.AssetIDs))
+	assetIDs := pidList(it.AssetIDs)
+	missing := t.missingAssetIDs(assetIDs)
+	id, err := t.ts.AddNode(db.KindFact, payload, 5, "confirmed", t.worker, assetIDs)
 	if err != nil {
 		return 0, err
 	}
@@ -1527,7 +1533,39 @@ func (t *ToolSet) recordOneFact(it factItem, defaultIntent int64) (int64, error)
 		_ = t.ts.Link(intent, db.RelYields, id) // chain: intent -> fact
 	}
 	t.writes.Facts++
+	// 事实已经写下去了，但锚点里指向不存在资产的边被丢弃了。把这件事告诉模型，
+	// 它下次就知道该 asset id 根本不存在——否则它会一直用同一个假 id，
+	// 而 planner 看到的资产链路里会少掉本该关联的资产。
+	if len(missing) > 0 {
+		t.lastMissingAssets = append(t.lastMissingAssets, missing...)
+	}
 	return id, nil
+}
+
+// missingAssetIDs returns the subset of ids that do NOT exist in the asset
+// table. Used to tell the model "this asset id is not real" instead of silently
+// dropping the anchor.
+func (t *ToolSet) missingAssetIDs(ids []int64) []int64 {
+	if len(ids) == 0 || t.as == nil {
+		return nil
+	}
+	found, err := t.as.GetByIDs(ids)
+	if err != nil {
+		return nil
+	}
+	have := make(map[int64]bool, len(found))
+	for _, a := range found {
+		if a != nil {
+			have[a.ID] = true
+		}
+	}
+	var missing []int64
+	for _, id := range ids {
+		if !have[id] {
+			missing = append(missing, id)
+		}
+	}
+	return missing
 }
 
 func (t *ToolSet) recordFact() actool.CoreTool {
@@ -1562,6 +1600,7 @@ func (t *ToolSet) recordFact() actool.CoreTool {
 
 			ids := make([]int64, len(items))
 			errs := map[string]string{}
+			t.lastMissingAssets = nil
 			for i, it := range items {
 				id, err := t.recordOneFact(it, defaultIntent)
 				if err != nil {
@@ -1570,19 +1609,35 @@ func (t *ToolSet) recordFact() actool.CoreTool {
 				}
 				ids[i] = id
 			}
+			missing := t.lastMissingAssets
 
 			if !batch { // 单条：保持原返回
 				if e, bad := errs["0"]; bad {
 					return actool.Errorf(e), nil
 				}
-				return actool.Text(fmt.Sprintf("fact recorded: %d", ids[0])), nil
+				return actool.Text(factRecordText(ids[0], missing)), nil
 			}
 			out := map[string]any{"ids": ids}
 			if len(errs) > 0 {
 				out["errors"] = errs
 			}
+			if len(missing) > 0 {
+				out["skipped_asset_ids"] = missing
+				out["note"] = fmt.Sprintf("以下 asset id 不存在，锚点已跳过（事实本身已写入）：%v", missing)
+			}
 			return jsonResult(out)
 		})
+}
+
+// factRecordText renders the record_fact single-item result. Missing asset ids
+// are reported explicitly: silently dropping the anchor would leave the model
+// convinced it linked the fact to an asset, and it would keep reusing the same
+// fabricated id on every later write-back.
+func factRecordText(id int64, missing []int64) string {
+	if len(missing) == 0 {
+		return fmt.Sprintf("fact recorded: %d", id)
+	}
+	return fmt.Sprintf("fact recorded: %d（注意：asset id %v 不存在，锚点已跳过；事实本身已保存。请用 list_assets 查真实 id）", id, missing)
 }
 
 type hintItem struct {

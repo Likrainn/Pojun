@@ -194,6 +194,17 @@ func (s *ExplorationStore) Root() (description, goal string, err error) {
 }
 
 // AddNode writes a typed reasoning node with optional anchors to asset ids.
+//
+// Anchors that point at assets which no longer exist are **skipped**, not fatal.
+// Why: exploration_anchors.asset_id is FK REFERENCES assets(id), and the anchor
+// insert shares a transaction with the node insert. A dangling asset id (the
+// model guessed an id, or the asset was deleted between the model's list_assets
+// call and its write-back) therefore used to abort the WHOLE transaction — the
+// fact/intent node was rolled back with it and the model's findings silently
+// vanished, so the planner re-explored the same direction for nothing.
+//
+// An anchor is a provenance edge, not the payload. Losing a dangling edge is
+// correct; losing the node is not.
 func (s *ExplorationStore) AddNode(kind string, payload map[string]any, priority int, state, origin string, anchors []int64) (int64, error) {
 	raw, _ := json.Marshal(payload)
 	tx, err := s.db.Begin()
@@ -208,12 +219,54 @@ VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
 		s.expID, kind, string(raw), priority, state, origin).Scan(&id); err != nil {
 		return 0, err
 	}
-	for _, a := range anchors {
+	for _, a := range s.existingAssetIDs(tx, anchors) {
 		if _, err := tx.Exec(`INSERT INTO exploration_anchors(node_id, asset_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, id, a); err != nil {
 			return 0, err
 		}
 	}
 	return id, tx.Commit()
+}
+
+// existingAssetIDs filters the requested anchor ids down to the ones that
+// actually exist in `assets`. Unknown ids are dropped (the FK would reject
+// them); duplicates are collapsed so the same asset is not anchored twice.
+func (s *ExplorationStore) existingAssetIDs(tx *sql.Tx, ids []int64) []int64 {
+	if len(ids) == 0 {
+		return nil
+	}
+	uniq := make([]int64, 0, len(ids))
+	seen := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		uniq = append(uniq, id)
+	}
+	if len(uniq) == 0 {
+		return nil
+	}
+	placeholders := make([]string, len(uniq))
+	args := make([]any, len(uniq))
+	for i, id := range uniq {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+	rows, err := tx.Query(`SELECT id FROM assets WHERE id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	if err != nil {
+		// 校验失败不能挡住节点写入——退化成「全部锚点都跳过」。
+		return nil
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return out
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 // AddIntent is a convenience: an open intent.
