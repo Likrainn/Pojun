@@ -136,6 +136,19 @@ const (
 	settingVulnIntelFastLaneMinutes = "vulnintel_fast_lane_interval_minutes"
 	// settingVulnIntelFastLaneWindowDays 是快通道的回看窗口（天）。
 	settingVulnIntelFastLaneWindowDays = "vulnintel_fast_lane_window_days"
+	// settingVulnIntelGhsaCursor 是 GHSA 同步的游标（上次同步到的最新 updated 时间）。
+	settingVulnIntelGhsaCursor = "vulnintel_ghsa_cursor"
+)
+
+// vulnintelSourceGhsa 是 GHSA 这个数据源在 vuln_sync_state 里的 source 名。
+const vulnintelSourceGhsa = "ghsa"
+
+const (
+	// defaultVulnIntelGhsaMaxPages 是 GHSA 单轮最多拉几页。
+	//
+	// 3 页 × 100 条 = 300 条/轮，30 分钟一轮足够——GHSA 的价值是补版本区间，
+	// 不是补全历史目录（历史由 NVD 主同步负责）。
+	defaultVulnIntelGhsaMaxPages = 3
 )
 
 const (
@@ -172,8 +185,8 @@ func (m *Manager) fastLaneEnabled() bool {
 // fastLaneConfig 组装快通道配置。
 func (m *Manager) fastLaneConfig() vulnintel.FastLaneConfig {
 	cfg := vulnintel.FastLaneConfig{
-		ProxyURL:   m.vulnIntelProxy(),
-		NvdAPIKey:  strings.TrimSpace(settingString(m.pg, settingNvdApiKey)),
+		ProxyURL:  m.vulnIntelProxy(),
+		NvdAPIKey: strings.TrimSpace(settingString(m.pg, settingNvdApiKey)),
 		WindowDays: intSetting(m.pg, settingVulnIntelFastLaneWindowDays,
 			defaultVulnIntelFastLaneWindowDays),
 		MaxRuntime: defaultVulnIntelFastLaneMaxRuntime,
@@ -253,6 +266,105 @@ func (m *Manager) fastLaneOnce() {
 	if res.Truncated {
 		log.Printf("[vulnintel] 快通道本轮未拉完（页数/时间上限），游标 %s 已保留", res.Cursor)
 	}
+
+	// GHSA 补充版本区间（第二数据源）。
+	//
+	// 为什么要接：NVD 对新披露的 CVE 常常不填版本区间（PHP 那两个 CVE 就是
+	// `cpe:2.3:a:php:php:*:*`），我们只能标「版本待定」——那是止损不是解法。
+	// GHSA 的版本区间是必填的，能补上这块。
+	//
+	// 放在快通道里而不是主同步里：GHSA 的价值就是「及时补上版本区间」，
+	// 而快通道的定位正是「刚披露的漏洞优先」。
+	m.syncGhsaVersions(ctx)
+}
+
+// syncGhsaVersions 跑一轮 GHSA 同步，补版本区间。
+//
+// 复用已有的 GitHub token（settingVulnIntelGitHubToken）——同一套凭据，
+// 不新增配置项。token 为空也能用（GHSA 公开 advisory 匿名可读，限速较松）。
+//
+// 失败不影响主流程：GHSA 只是补充来源，挂了不该让 NVD 同步跟着挂。
+func (m *Manager) syncGhsaVersions(ctx context.Context) {
+	if m == nil || m.vulnintel == nil {
+		return
+	}
+	token := strings.TrimSpace(settingString(m.pg, settingVulnIntelGitHubToken))
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
+	}
+	client, err := vulnintel.NewGhsaClient(token, m.vulnIntelProxy())
+	if err != nil {
+		log.Printf("[vulnintel] GHSA 客户端初始化失败: %v", err)
+		return
+	}
+	// 游标：上次同步时间。首轮用「7 天前」——GHSA 的 updated_at 排序配合
+	// since 过滤就是增量；首轮不追历史（历史补全交给 NVD 主同步）。
+	since := time.Now().Add(-7 * 24 * time.Hour)
+	if v := strings.TrimSpace(settingString(m.pg, settingVulnIntelGhsaCursor)); v != "" {
+		if t, perr := time.Parse(time.RFC3339, v); perr == nil {
+			since = t
+		}
+	}
+	res, err := m.vulnintel.SyncGhsa(ctx, client, since, defaultVulnIntelGhsaMaxPages)
+	if err != nil {
+		log.Printf("[vulnintel] GHSA 同步失败: %v", err)
+		m.recordGhsaState(ctx, since, 0, err)
+		return
+	}
+	if res.Upserted > 0 || res.Merged > 0 {
+		log.Printf("[vulnintel] GHSA: 拉 %d 条，新增 %d 条，补版本区间 %d 条",
+			res.Fetched, res.Upserted, res.Merged)
+	}
+	if len(res.Errors) > 0 {
+		log.Printf("[vulnintel] GHSA 本轮 %d 条出错（首个: %s）", len(res.Errors), res.Errors[0])
+	}
+	// 记游标：取本轮最晚的 updated。
+	latest := m.latestGhsaUpdated(ctx)
+	if latest.After(since) {
+		_ = m.pg.SetSetting(settingVulnIntelGhsaCursor, latest.UTC().Format(time.RFC3339))
+		since = latest
+	}
+	m.recordGhsaState(ctx, since, int64(res.Upserted+res.Merged), nil)
+}
+
+// recordGhsaState 记 GHSA 这个源的同步状态（状态页按源展示）。
+//
+// 失败时把错误写进 last_error —— 状态页会据此给人话建议。
+func (m *Manager) recordGhsaState(ctx context.Context, cursor time.Time, total int64, syncErr error) {
+	if m == nil || m.pg == nil {
+		return
+	}
+	st, err := m.vulnintel.GetSyncState(ctx, vulnintelSourceGhsa)
+	if err != nil {
+		return
+	}
+	st.Source = vulnintelSourceGhsa
+	st.Enabled = true
+	st.Cursor = cursor.UTC().Format(time.RFC3339)
+	st.TotalSynced += total
+	if syncErr != nil {
+		st.LastError = syncErr.Error()
+	} else {
+		st.LastError = ""
+	}
+	_ = m.vulnintel.SaveSyncState(ctx, st)
+}
+
+// latestGhsaUpdated 查最近一次同步到的 GHSA 条目的 updated 时间。
+func (m *Manager) latestGhsaUpdated(ctx context.Context) time.Time {
+	if m == nil || m.pg == nil {
+		return time.Time{}
+	}
+	var v string
+	err := m.pg.QueryRowContext(ctx, `SELECT COALESCE(MAX(modified_at)::text,'') FROM vuln_cves WHERE source='ghsa'`).Scan(&v)
+	if err != nil || v == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 // vulnIntelPassLocked is one full pass: CVE/KEV/PoC sync → asset linking →

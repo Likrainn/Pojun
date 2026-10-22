@@ -31,6 +31,7 @@ func (s *Store) StatusSnapshot(ctx context.Context) map[string]any {
 		"cves": `SELECT count(*) FROM vuln_cves`,
 		"kev":  `SELECT count(*) FROM vuln_cves WHERE kev`,
 		"pocs": `SELECT count(*) FROM vuln_pocs`,
+		"ghsa": `SELECT count(*) FROM vuln_cves WHERE source='ghsa'`,
 	} {
 		var n int64
 		_ = s.db.QueryRowContext(ctx, q).Scan(&n)

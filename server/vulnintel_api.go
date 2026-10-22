@@ -299,6 +299,9 @@ func (s *Server) vulnintelProbe(w http.ResponseWriter, r *http.Request) {
 		{"nvd", "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=1"},
 		{"kev", "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"},
 		{"github", "https://api.github.com/rate_limit"},
+		// GHSA 的真实端点：advisories API 匿名可读。探它而不是探
+		// api.github.com 根路径——根路径能通不代表 advisory 能取到。
+		{"ghsa", "https://api.github.com/advisories?per_page=1"},
 	}
 	results := make([]probeResult, 0, len(checks)+1)
 	for _, c := range checks {
@@ -377,7 +380,6 @@ func vulnIntelErrorHint(err string) string {
 		return "看完整错误；先点「测试连通性」区分是网络/代理问题还是数据源问题。"
 	}
 }
-
 
 // egressHint / egressPortMap 读回连配置(settings;读失败按空串处理)。
 func egressHint(pg *pgdb.DB) string {

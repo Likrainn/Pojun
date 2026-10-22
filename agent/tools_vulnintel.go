@@ -40,11 +40,17 @@ func SetNucleiTemplatesDir(dir string) { nucleiTemplatesDir = dir }
 func (t *ToolSet) searchVulns() actool.CoreTool {
 	return readTool(
 		"search_vulns",
-		"按组件名检索【公开已知漏洞】库（NVD + CISA KEV 在野利用清单）。识别出目标组件"+
-			"（Web 中间件/框架/服务/固件等）后先查这里：有 KEV 标记=已在野利用、优先考虑；"+
-			"结果里的 cvss_score 与 severity 用于排优先级。version 参数可给已知版本号做粗筛"+
-			"（version_seen_in_criteria=精确命中过 CPE 版本段）；版本是否真正落在影响区间，"+
-			"用 get_vuln 看 cpe_criteria 的版本区间语法（versionEndExcluding 等）自行判断。"+
+		"按组件名检索【公开已知漏洞】库（NVD + GitHub Advisory Database + CISA KEV 在野利用清单）。"+
+			"识别出目标组件（Web 中间件/框架/服务/固件等）后先查这里：有 KEV 标记=已在野利用、优先考虑；"+
+			"结果里的 cvss_score 与 severity 用于排优先级。\n"+
+			"给 version 参数可做版本判定：\n"+
+			"  - version_in_range=true → 目标版本**落在受影响区间内**（该打）\n"+
+			"  - version_in_range=false → 目标版本**不在**受影响区间（通常不用打）\n"+
+			"  - 该字段缺失 → 无结构化区间，版本是否受影响需自行判断（用 get_vuln 看 cpe_criteria 的版本区间语法）\n"+
+			"**version_in_range=false 不等于安全**——有些库的版本区间本身就填错或缺失，"+
+			"拿不准时用 get_vuln 看原始区间与参考链接。\n"+
+			"source 字段标明这条来自 nvd 还是 ghsa：GHSA 的版本区间是必填的（可信度更高），"+
+			"NVD 对新披露的 CVE 常留空。\n"+
 			"返回条数有限，命中多时提高 limit 或加 vendor 收窄。",
 		obj(map[string]any{
 			"product": str("组件名，如 httpd / nginx / thinkphp / tomcat / weblogic；支持 % 通配"),

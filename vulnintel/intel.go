@@ -29,7 +29,7 @@ type CVE struct {
 	ID          string
 	Title       string
 	Description string
-	Severity    string  // CRITICAL/HIGH/MEDIUM/LOW/NONE/UNKNOWN
+	Severity    string // CRITICAL/HIGH/MEDIUM/LOW/NONE/UNKNOWN
 	Score       *float64
 	Vector      string
 	Published   time.Time
@@ -144,6 +144,11 @@ type VulnHit struct {
 	// VersionInRange 三态:nil=无法判断(无结构化区间);true/false=结构化区间
 	// 判定结果(任一 cpeMatch 区间命中即 true)。
 	VersionInRange *bool `json:"version_in_range,omitempty"`
+	// Source 是这条记录的数据来源:nvd / ghsa。
+	//
+	// 为什么要标：GHSA 的版本区间是**必填**的（NVD 常留空），两边对同一条
+	// CVE 的判定可能不同——模型需要知道"这个区间是哪个源给的"才能权衡。
+	Source string `json:"source,omitempty"`
 }
 
 // SearchVulns 按组件名（可带厂商限定）检索已知漏洞。product 匹配 CPE product
@@ -170,7 +175,8 @@ SELECT c.cve_id, c.severity, c.cvss_score, c.kev, COALESCE(c.published_at::text,
          SELECT string_agg(DISTINCT p.vendor || '/' || p.product, ', ')
          FROM vuln_cpe_products p WHERE p.cve_id = c.cve_id AND p.product ILIKE $1
        ), '') AS matched,
-       MIN(p.product) AS hit_product
+       MIN(p.product) AS hit_product,
+       c.source
 FROM vuln_cves c
 JOIN vuln_cpe_products p ON p.cve_id = c.cve_id AND p.product ILIKE $1
                         AND ($2 = '' OR p.vendor ILIKE '%' || $2 || '%')
@@ -189,7 +195,7 @@ LIMIT $4`, args...)
 		var h VulnHit
 		var kevRow bool
 		var matched, hitProduct string
-		if err := rows.Scan(&h.CVEID, &h.Severity, &h.Score, &h.KEV, &h.Published, &h.Title, &kevRow, &matched, &hitProduct); err != nil {
+		if err := rows.Scan(&h.CVEID, &h.Severity, &h.Score, &h.KEV, &h.Published, &h.Title, &kevRow, &matched, &hitProduct, &h.Source); err != nil {
 			return nil, err
 		}
 		if kevRow {
@@ -247,6 +253,48 @@ type VulnDetail struct {
 	Description string   `json:"description"`
 	Criteria    []string `json:"cpe_criteria,omitempty"`
 	Refs        []string `json:"references,omitempty"`
+	// Source 是数据来源:nvd / ghsa。
+	Source string `json:"source,omitempty"`
+	// VersionRanges 是结构化的受影响版本区间（每条对应一个组件）。
+	//
+	// 为什么单列出来:cpe_criteria 里 NVD 给的是 CPE 字符串（要模型自己读
+	// versionEndExcluding 语法），GHSA 给的是 "ghsa:composer/xxx < 3.10.0"
+	// ——两种形态模型都得再解析一遍。这里给出**归一后的**区间:
+	// VersionInRange 为 true 表示该组件受影响。
+	VersionRanges []VulnVersionRange `json:"version_ranges,omitempty"`
+}
+
+// VulnVersionRange 是一条归一后的受影响版本区间。
+type VulnVersionRange struct {
+	// Vendor / Product 是组件标识。
+	Vendor  string `json:"vendor"`
+	Product string `json:"product"`
+	// StartIncluding / StartExcluding / EndIncluding / EndExcluding 是边界
+	// （空串 = 该边界不存在）。语义与 NVD 的 cpeMatch 区间字段一致。
+	StartIncluding string `json:"start_including,omitempty"`
+	StartExcluding string `json:"start_excluding,omitempty"`
+	EndIncluding   string `json:"end_including,omitempty"`
+	EndExcluding   string `json:"end_excluding,omitempty"`
+	// Source 是这条区间的来源（nvd / ghsa）——同一条 CVE 可能两边都给了区间。
+	Source string `json:"source,omitempty"`
+	// Raw 是原始区间文本（展示用）。
+	Raw string `json:"raw,omitempty"`
+}
+
+// HasVersionRange 判断库里是否已有这条 CVE 的**结构化版本区间**。
+//
+// 与 VersionRangeUndetermined 的区别：那个只看 CVE 记录自带的 NVD 信息，
+// 这个查的是**落库后的实际状态**——GHSA 补进来的区间也算数。
+//
+// 用途：快通道统计「版本待定」时要用这个（合并判定），而不是只看 NVD。
+func (s *Store) HasVersionRange(ctx context.Context, cveID string) bool {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM vuln_cpe_products
+		WHERE cve_id=$1
+		  AND (version_start_incl IS NOT NULL OR version_start_excl IS NOT NULL
+		    OR version_end_incl IS NOT NULL OR version_end_excl IS NOT NULL)
+		LIMIT 1`, strings.ToUpper(strings.TrimSpace(cveID))).Scan(&n)
+	return err == nil && n > 0
 }
 
 // GetVuln returns the full record for one CVE (nil, nil when absent).
@@ -256,9 +304,9 @@ func (s *Store) GetVuln(ctx context.Context, cveID string) (*VulnDetail, error) 
 	var criteria, refs []byte
 	var pub, mod *time.Time
 	err := s.db.QueryRowContext(ctx, `SELECT cve_id, severity, cvss_score, COALESCE(cvss_vector,''),
-		kev, published_at, modified_at, title, description, cpe_criteria, refs
+		kev, published_at, modified_at, title, description, cpe_criteria, refs, source
 		FROM vuln_cves WHERE cve_id=$1`, cveID).
-		Scan(&d.CVEID, &d.Severity, &d.Score, &d.Vector, &d.KEV, &pub, &mod, &d.Title, &d.Description, &criteria, &refs)
+		Scan(&d.CVEID, &d.Severity, &d.Score, &d.Vector, &d.KEV, &pub, &mod, &d.Title, &d.Description, &criteria, &refs, &d.Source)
 	if err == nil {
 		if pub != nil {
 			d.Published = pub.UTC().Format(time.RFC3339)
@@ -268,6 +316,7 @@ func (s *Store) GetVuln(ctx context.Context, cveID string) (*VulnDetail, error) 
 		}
 		d.Criteria = unmarshalStringArray(criteria)
 		d.Refs = unmarshalStringArray(refs)
+		d.VersionRanges = s.versionRanges(ctx, cveID)
 		return &d, nil
 	}
 	if !isNoRows(err) {
@@ -276,6 +325,43 @@ func (s *Store) GetVuln(ctx context.Context, cveID string) (*VulnDetail, error) 
 	// KEV stub rows may live in vuln_pocs-adjacent state before NVD catches up;
 	// currently there is nothing else to read, so report absence plainly.
 	return nil, nil
+}
+
+// versionRanges 读某条 CVE 的结构化版本区间（归一后的）。
+func (s *Store) versionRanges(ctx context.Context, cveID string) []VulnVersionRange {
+	rows, err := s.db.QueryContext(ctx, `SELECT vendor, product,
+		COALESCE(version_start_incl,''), COALESCE(version_start_excl,''),
+		COALESCE(version_end_incl,''), COALESCE(version_end_excl,'')
+		FROM vuln_cpe_products WHERE cve_id=$1
+		ORDER BY vendor, product`, cveID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := []VulnVersionRange{}
+	for rows.Next() {
+		var r VulnVersionRange
+		if err := rows.Scan(&r.Vendor, &r.Product, &r.StartIncluding, &r.StartExcluding,
+			&r.EndIncluding, &r.EndExcluding); err != nil {
+			continue
+		}
+		if r.StartIncluding == "" && r.StartExcluding == "" &&
+			r.EndIncluding == "" && r.EndExcluding == "" {
+			continue // 没区间的索引行（只有 product 命中）
+		}
+		r.Raw = r.StartIncluding
+		if r.StartExcluding != "" {
+			r.Raw = r.StartExcluding
+		}
+		if r.EndIncluding != "" {
+			r.Raw = ">=" + r.StartIncluding + ", <=" + r.EndIncluding
+		}
+		if r.EndExcluding != "" {
+			r.Raw = "<" + r.EndExcluding
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // SyncState mirrors one vuln_sync_state row.

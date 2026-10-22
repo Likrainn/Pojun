@@ -283,8 +283,19 @@ func TestDiffResponsesURLModeWritesScript(t *testing.T) {
 	if !strings.Contains(cmd, "resp_a_body") || !strings.Contains(cmd, "resp_b_body") {
 		t.Errorf("命令应引用工作目录下的响应体文件: %s", cmd)
 	}
-	if strings.Contains(cmd, "/tmp/") {
-		t.Errorf("中间产物不应落 /tmp: %s", cmd)
+	// 产物必须落在【本次 run 的工作目录】里，而不是固定的 /tmp 路径。
+	//
+	// 断言方式：命令里的响应体路径必须在工作目录下。
+	// 不能断言"命令里不含 /tmp"——Linux 上 t.TempDir() 本身就是 /tmp/...，
+	// 那样断言会把测试临时目录也判成违规（CI 上就是这么挂的）。
+	if !strings.Contains(cmd, dir) {
+		t.Errorf("响应体文件应落在工作目录 %s 下: %s", dir, cmd)
+	}
+	// 也不该用固定的 /tmp 路径（那正是平台规约禁止的"中间产物落 /tmp"）。
+	for _, fixed := range []string{"/tmp/resp_a_body", "/tmp/resp_b_body", "/tmp/resp_diff.py"} {
+		if strings.Contains(cmd, fixed) {
+			t.Errorf("中间产物不应落在固定路径 %s: %s", fixed, cmd)
+		}
 	}
 	// 认证头要转义。
 	if !strings.Contains(cmd, "'Authorization: Bearer tk'") {

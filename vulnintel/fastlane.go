@@ -261,7 +261,13 @@ func RunFastLane(ctx context.Context, st *Store, cfg FastLaneConfig) (FastLaneRe
 					continue
 				}
 				res.Stored++
-				if VersionRangeUndetermined(c) {
+				// 「版本待定」按**两源合并**判定：NVD 没填区间不算待定，
+				// 如果 GHSA 已经补了区间（HasVersionRange 查的是落库后的
+				// 实际状态，含 GHSA 补进来的），那这条的版本范围是已知的。
+				//
+				// 只看 NVD 的 VersionRangeUndetermined(c) 会把「GHSA 已经
+				// 补上区间」的漏洞也算成待定——那正是 M10 要治的病。
+				if VersionRangeUndetermined(c) && !st.HasVersionRange(ctx, c.ID) {
 					res.VersionUndetermined++
 				}
 			}
