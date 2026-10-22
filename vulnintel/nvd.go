@@ -142,10 +142,100 @@ func (c *NvdClient) FetchPage(ctx context.Context, startIndex, resultsPerPage in
 	return &out, nil
 }
 
+// FetchByCVEID fetches one CVE by its exact ID.
+//
+// 为什么需要（2026-10-22 实测）：FetchPage 只能按 lastModifiedDate 划窗口，
+// 确认某个具体 CVE 是否存在只能扫几百天的窗口——实测 200 天扫描跑了 40 分钟
+// 还因代理 TLS 抖动中断。cveId 参数是一次精确查询，成本是窗口查询的零头。
+//
+// 不存在的 CVE 返回 0 条而不是错误（NVD 对未知 ID 返回 totalResults=0）。
+func (c *NvdClient) FetchByCVEID(ctx context.Context, cveID string) (*nvdResponse, error) {
+	id := strings.TrimSpace(cveID)
+	if id == "" {
+		return nil, fmt.Errorf("cve id 不能为空")
+	}
+	return c.fetch(ctx, url.Values{"cveId": {id}})
+}
+
+// FetchPublished fetches one page of CVEs **by publication date**.
+//
+// 与 FetchPage 的区别：FetchPage 按 lastModifiedDate 划窗口（≤120 天），
+// 那条路上「老 CVE 的元数据被更新」也会被算进来，且游标按 120 天窗口推进、
+// 一轮 MaxRuntime 翻不完——「刚披露的高危漏洞」因此进库很慢。
+//
+// 按发布时间划的是一个小窗口，只含「新披露的」——这正是近期快通道要的。
+//
+// 实测（2026-10-22）：7 天窗口 24513 条、17 秒拉完；反而 1~3 天的窗口会
+// 超时（NVD 对刚发布的记录还在索引，查询慢）。所以快通道的窗口不应小于
+// 7 天。
+func (c *NvdClient) FetchPublished(ctx context.Context, startIndex, resultsPerPage int, pubStart, pubEnd time.Time) (*nvdResponse, error) {
+	q := url.Values{}
+	q.Set("startIndex", strconv.Itoa(startIndex))
+	q.Set("resultsPerPage", strconv.Itoa(resultsPerPage))
+	if !pubStart.IsZero() {
+		q.Set("pubStartDate", pubStart.UTC().Format("2006-01-02T15:04:05.000"))
+	}
+	if !pubEnd.IsZero() {
+		q.Set("pubEndDate", pubEnd.UTC().Format("2006-01-02T15:04:05.000"))
+	}
+	return c.fetch(ctx, q)
+}
+
+// fetch 执行一次 NVD 查询并解码。
+func (c *NvdClient) fetch(ctx context.Context, q url.Values) (*nvdResponse, error) {
+	base := c.Base
+	if base == "" {
+		base = "https://services.nvd.nist.gov"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/rest/json/cves/2.0?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	if c.APIKey != "" {
+		req.Header.Set("apiKey", c.APIKey)
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		// Honor Retry-After when present; the sync loop re-calls at its own pace.
+		ra := resp.Header.Get("Retry-After")
+		return nil, &RateLimited{RetryAfter: parseSeconds(ra)}
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("nvd api status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var out nvdResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("nvd api decode: %w", err)
+	}
+	return &out, nil
+}
+
+// recentCriticalScoreThreshold 是近期快通道的 CVSS 分数门槛。
+//
+// 取 9.0：NVD 的 CRITICAL 档起点。低于它的不进快通道——每天新披露的 CVE
+// 上万条，不筛的话库和 hint 都会被中低危淹没，worker 也就不会真的去看。
+const recentCriticalScoreThreshold = 9.0
+
+// isRecentCritical 判断一条 CVE 是否够格进「近期快通道」。
+//
+// 判据：CVSS≥9.0，**或** CISA KEV 标记（已在野利用——分数可能不高但危害
+// 极大，KEV 优先于分数）。
+func isRecentCritical(severity string, score float64, kev bool) bool {
+	if kev {
+		return true
+	}
+	return score >= recentCriticalScoreThreshold
+}
+
 // RateLimited signals a 429 so the sync loop can back off without treating it
 // as a source failure.
 type RateLimited struct{ RetryAfter time.Duration }
-
 func (e *RateLimited) Error() string {
 	if e.RetryAfter > 0 {
 		return fmt.Sprintf("nvd rate limited, retry after %s", e.RetryAfter)
