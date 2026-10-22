@@ -251,7 +251,13 @@ configure_proxy
 #
 # --socks5-hostname vs --socks5：前者把域名也交给代理解析（= socks5h），
 # 后者在本地解析 DNS。国内环境里本地 DNS 常常解析不了境外域名，所以用前者。
-CURL=(curl -fsSL --retry 3)
+# --retry-all-errors：不加它，curl 的 --retry **只重试瞬时错误**（超时/429/5xx），
+# SSL 中断（SSL_read: unexpected eof）这类传输错误直接失败——实测 2026-10-22
+# 在一台真实服务器上经代理下载 17MB 发行包时，连接被切断后 curl 立刻放弃，
+# 重试参数形同虚设。
+#
+# --retry-delay：重试之间退避，避免连着打同一个不稳的出口。
+CURL=(curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --retry-max-time 1800)
 if [ -n "$INSTALL_PROXY" ]; then
   while IFS= read -r _parg; do
     [ -n "$_parg" ] && CURL+=("$_parg")
@@ -359,13 +365,22 @@ fetch_release(){
   local zip="artex-${VERSION#v}-${PKG_ARCH}.zip"
   info "下载 $zip"
   # 用原名落盘：SHA256SUMS 里写的就是这个名字，改名保存会让 sha256sum -c 找不到文件。
-  "${CURL[@]}" "https://github.com/$REPO/releases/download/$VERSION/$zip" -o "$TMP/$zip"
-  if "${CURL[@]}" "https://github.com/$REPO/releases/download/$VERSION/SHA256SUMS" -o "$TMP/SHA256SUMS" 2>/dev/null; then
-    ( cd "$TMP" && grep " $zip\$" SHA256SUMS | sha256sum -c - ) || die "SHA256 校验失败"
-    ok "SHA256 校验通过"
-  else
-    warn "未取到 SHA256SUMS，跳过校验"
-  fi
+  #
+  # -C - 是断点续传：17MB 的包经不稳的出口传输时断线是常态，续传比重下省时间
+  # （实测一次安装因 SSL 中断白等了 40 分钟）。
+  #
+  # 下载失败必须在这里 die：原来不判就往下走，最后报「解压失败（需要 unzip）」
+  # ——把网络问题误导成包损坏，用户会去查错方向。
+  "${CURL[@]}" "https://github.com/$REPO/releases/download/$VERSION/$zip" -C - -o "$TMP/$zip" \
+    || die "下载 $zip 失败（网络不通？代理不稳？可用 --install-proxy 指定代理）"
+
+  # SHA256SUMS 是供应链校验的凭据：取不到就**没有校验**，此时继续装等于
+  # 接受未经校验的二进制。原来只 warn 然后跳过校验——那是硬伤。
+  "${CURL[@]}" "https://github.com/$REPO/releases/download/$VERSION/SHA256SUMS" -o "$TMP/SHA256SUMS" \
+    || die "取不到 SHA256SUMS，无法校验 $zip（拒绝安装未经校验的二进制；可重试或用 --install-proxy 换出口）"
+  ( cd "$TMP" && grep " $zip\$" SHA256SUMS | sha256sum -c - ) || die "SHA256 校验失败"
+  ok "SHA256 校验通过"
+
   unzip -oq "$TMP/$zip" -d "$TMP/unpack" || die "解压失败（需要 unzip）"
 }
 

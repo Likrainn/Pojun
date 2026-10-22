@@ -232,6 +232,10 @@ type Manager struct {
 	vulnSyncMu        sync.Mutex
 	vulnSyncRunning   atomic.Bool
 	vulnSyncStartedAt atomic.Int64
+	// 近期高危快通道的互斥：与主同步【不共用锁】——主同步一轮最长 30 分钟，
+	// 快通道必须能在那期间照常把新披露的高危送进库（共用锁会被拖到 30 分钟
+	// 一次，等于没有快通道）。快通道自己内部也互斥，避免重复拉同一窗口。
+	vulnFastLaneMu sync.Mutex
 	// 代理池主动健康检查的开关与节流状态（proxypool_health_* settings）。
 	proxyCheckInFlight atomic.Bool
 	// proxyCheckMu 保护代理池「最近一次验证」的快照(页面回显用)。
@@ -581,6 +585,8 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	agent.SetNucleiTemplatesDir(m.nucleiDir)
 	if pg.GetBool(settingVulnIntelOn, true) {
 		go m.runVulnIntelSync()
+		// 近期高危快通道：独立 goroutine + 独立锁，不被主同步的 30 分钟一轮拖住。
+		go m.runVulnIntelFastLane()
 	} else {
 		log.Printf("[vulnintel] 同步已关闭（settings.%s=false），agent 工具将返回未启用", settingVulnIntelOn)
 	}

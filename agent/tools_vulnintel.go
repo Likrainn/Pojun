@@ -129,6 +129,76 @@ func (t *ToolSet) getVuln() actool.CoreTool {
 	)
 }
 
+// searchRecentCritical exposes "what critical CVEs came out recently".
+//
+// 与 search_vulns 的分工：
+//   - search_vulns 按**组件**查（已知「这是 nginx」，问 nginx 有哪些漏洞）；
+//   - 本工具按**时间**查（问「最近 7 天出了哪些高危」），不需要事先知道
+//     组件名或 CVE 号。
+//
+// 为什么需要它（2026-10-22 调研）：worker 扫到一个资产后，资产指纹往往是
+// 「PHP/8.1.2」这种形式，它知道该查 PHP，但**不知道刚出了什么**——而高危
+// 漏洞的价值窗口就是刚披露的那几天。有了这条工具，扫到组件就能直接问
+// 「最近 PHP 出了什么高危」。
+//
+// version_undetermined=true 表示 NVD 还没填受影响版本区间——这**不代表目标
+// 版本不受影响**，反而值得优先看（刚披露的高危通常还没补版本区间）。
+func (t *ToolSet) searchRecentCritical() actool.CoreTool {
+	return readTool(
+		"search_recent_critical",
+		"查【最近披露的高危漏洞】（CVSS≥9.0 或 CISA KEV 已在野利用）。"+
+			"用法：扫到某个组件/资产后（指纹形如 PHP/8.1.2、Apache httpd 2.4.49），"+
+			"用它问「最近这个方向出了什么高危」——不需要事先知道 CVE 号。"+
+			"结果里的 products 字段是受影响产品（vendor/product），用它和你的目标"+
+			"指纹比对；version_undetermined=true 表示 NVD 还没填受影响版本区间，"+
+			"【不代表你的版本不受影响】——这类刚披露的漏洞通常还没补版本信息，值得优先"+
+			"查厂商 advisory（用 get_vuln 看 refs 里的 GHSA/安全公告）确认受影响版本，"+
+			"再用 scan_with_nuclei 或手工构造验证。",
+		obj(map[string]any{
+			"days":  intp("回看天数(默认 7,最大 90)。刚披露的漏洞用小值(3~14)即可"),
+			"limit": intp("返回条数上限(默认 20,最大 100)"),
+		}),
+		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+			if vulnintelStore == nil {
+				return actool.Errorf("search_recent_critical 未启用: 漏洞情报库未初始化"), nil
+			}
+			var a struct {
+				Days  int `json:"days"`
+				Limit int `json:"limit"`
+			}
+			_ = json.Unmarshal(in, &a)
+			if a.Days < 0 {
+				return actool.Errorf("days 不能为负"), nil
+			}
+			if a.Days > 90 {
+				a.Days = 90
+			}
+			hits, err := vulnintelStore.SearchRecentCritical(context.Background(), a.Days, a.Limit)
+			if err != nil {
+				return actool.Errorf("查询近期高危漏洞失败: " + err.Error()), nil
+			}
+			if len(hits) == 0 {
+				return jsonResult(map[string]any{
+					"count": 0,
+					"note":  "最近窗口内情报库没有新的高危漏洞（快通道按 CVSS≥9.0 或 KEV 收录；库只收录公开同步的数据源）",
+				})
+			}
+			undet := 0
+			for _, h := range hits {
+				if h.VersionUndetermined {
+					undet++
+				}
+			}
+			return jsonResult(map[string]any{
+				"count":                   len(hits),
+				"version_undetermined":   undet,
+				"vulnerabilities":         hits,
+				"note":                    "version_undetermined=true 的条目表示 NVD 未填受影响版本区间——不等于不受影响，优先查厂商 advisory 确认",
+			})
+		},
+	)
+}
+
 // getPoc exposes aggregated PoC/EXP entries for one CVE.
 func (t *ToolSet) getPoc() actool.CoreTool {	return readTool(
 		"get_poc",

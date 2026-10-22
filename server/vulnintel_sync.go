@@ -114,6 +114,133 @@ func (m *Manager) runVulnIntelPass(ctx context.Context) error {
 	return m.vulnIntelPassLocked(ctx)
 }
 
+// ── 近期高危快通道 ──────────────────────────────────────────────────────
+//
+// 主同步走 lastModifiedDate 窗口（≤120 天），游标按窗口推进、一轮 MaxRuntime
+// 翻不完——这个结构适合「补全历史目录」，但对「刚爆出来的漏洞」是错的：
+// 一条昨天披露的 CRITICAL 要等主同步的游标爬到它那个窗口才进库。
+//
+// 快通道按 publishedDate 拉小窗口、只留 CVSS≥9.0 或 CISA KEV，把「刚披露
+// 的高危」压缩到几十分钟进库。它与主同步**共用 vuln_cves 表**（agent 查同一
+// 个库），但**游标独立**、**锁独立**（主同步一轮 30 分钟，快通道不该被它拖住，
+// 反之亦然）。
+//
+// 2026-10-22 的实测是两个真实靶子：CVE-2026-109618 / CVE-2026-109619
+// （昨天披露的 PHP CRITICAL RCE）——主同步还没爬到那个窗口，而它们的 NVD
+// 版本区间是空的（「版本待定」由 vulnintel.VersionRangeUndetermined 标记）。
+
+const (
+	// settingVulnIntelFastLaneOn 是快通道的独立开关。
+	settingVulnIntelFastLaneOn = "vulnintel_fast_lane_enabled"
+	// settingVulnIntelFastLaneMinutes 是快通道的轮询间隔（分钟）。
+	settingVulnIntelFastLaneMinutes = "vulnintel_fast_lane_interval_minutes"
+	// settingVulnIntelFastLaneWindowDays 是快通道的回看窗口（天）。
+	settingVulnIntelFastLaneWindowDays = "vulnintel_fast_lane_window_days"
+)
+
+const (
+	// defaultVulnIntelFastLaneInterval 是快通道默认轮询间隔。
+	//
+	// 30 分钟：实测 7 天窗口拉完只要 17 秒，间隔主要决定「多快能进库」。
+	// 15 分钟意义不大（NVD 侧对新记录的索引延迟是小时级），1 小时又太慢
+	// （「刚爆出来」的价值就在几小时内）。
+	defaultVulnIntelFastLaneInterval = 30 * time.Minute
+	// defaultVulnIntelFastLaneWindowDays 是快通道默认回看窗口。
+	//
+	// 下限由 vulnintel.fastLaneMinWindowDays 兜住（实测 1~3 天的窗口会超时）。
+	defaultVulnIntelFastLaneWindowDays = 7
+	// defaultVulnIntelFastLaneMaxRuntime 是快通道单轮墙钟上限。
+	//
+	// 比主同步短：快通道的价值在及时性，不该占满一整轮的预算。
+	defaultVulnIntelFastLaneMaxRuntime = 5 * time.Minute
+)
+
+// fastLaneEnabled reports whether the recent-critical fast lane is on.
+//
+// 跟随总开关（vulnintel_enabled）：情报同步整体关了，快通道也没必要跑。
+// 另有一个独立开关，用于「先关掉快通道观察主同步表现」的场景。
+func (m *Manager) fastLaneEnabled() bool {
+	if m == nil || m.pg == nil {
+		return false
+	}
+	if !m.pg.GetBool(settingVulnIntelOn, true) {
+		return false
+	}
+	return m.pg.GetBool(settingVulnIntelFastLaneOn, true)
+}
+
+// fastLaneConfig 组装快通道配置。
+func (m *Manager) fastLaneConfig() vulnintel.FastLaneConfig {
+	cfg := vulnintel.FastLaneConfig{
+		ProxyURL:  m.vulnIntelProxy(),
+		NvdAPIKey: strings.TrimSpace(settingString(m.pg, settingNvdApiKey)),
+		WindowDays: intSetting(m.pg, settingVulnIntelFastLaneWindowDays,
+			defaultVulnIntelFastLaneWindowDays),
+		MaxRuntime: defaultVulnIntelFastLaneMaxRuntime,
+		// NVD 匿名访问限速约 5 次/30s；快通道页小、页间隔给 1s 足够。
+		PageDelay: time.Second,
+	}
+	if cfg.NvdAPIKey == "" {
+		cfg.NvdAPIKey = strings.TrimSpace(os.Getenv("NVD_API_KEY"))
+	}
+	return cfg
+}
+
+// runVulnIntelFastLane drives the recent-critical fast lane.
+//
+// 独立 goroutine、独立锁：主同步一轮最长 30 分钟，快通道必须能在那期间照常
+// 把新披露的高危送进库。两者共用 vuln_cves 表，upsert 是幂等的，重叠拉到
+// 同一条记录不会出问题。
+func (m *Manager) runVulnIntelFastLane() {
+	// 起跑延迟错开主同步的 90s，避免同时打 NVD 撞限速。
+	time.Sleep(120 * time.Second)
+	for {
+		if m.fastLaneEnabled() {
+			m.fastLaneOnce()
+		}
+		interval := defaultVulnIntelFastLaneInterval
+		if m.pg != nil {
+			if mins := intSetting(m.pg, settingVulnIntelFastLaneMinutes, 0); mins > 0 {
+				interval = time.Duration(mins) * time.Minute
+			}
+		}
+		time.Sleep(interval)
+	}
+}
+
+// fastLaneOnce runs one fast-lane pass: pull → store → link assets.
+//
+// 与主同步一样，快通道拉完也要做资产联动——不然新漏洞进了库但任务那边
+// 看不到 hint，「刚爆出来的」就只停在库里。
+func (m *Manager) fastLaneOnce() {
+	if m == nil || m.vulnintel == nil {
+		return
+	}
+	// 独立锁：快通道之间自己也不该并发（会重复拉同一窗口）。
+	if !m.vulnFastLaneMu.TryLock() {
+		return
+	}
+	defer m.vulnFastLaneMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultVulnIntelFastLaneMaxRuntime+time.Minute)
+	defer cancel()
+
+	res, err := vulnintel.RunFastLane(ctx, m.vulnintel, m.fastLaneConfig())
+	if err != nil {
+		log.Printf("[vulnintel] 快通道本轮失败: %v", err)
+		return
+	}
+	if res.Stored > 0 {
+		log.Printf("[vulnintel] 快通道: 扫 %d 条，入库 %d 条（其中版本待定 %d 条），游标 %s",
+			res.Scanned, res.Stored, res.VersionUndetermined, res.Cursor)
+		// 新漏洞进了库 → 立刻做资产联动，让受影响的任务看到。
+		m.linkVulnIntelAssets()
+	}
+	if res.Truncated {
+		log.Printf("[vulnintel] 快通道本轮未拉完（页数/时间上限），游标 %s 已保留", res.Cursor)
+	}
+}
+
 // vulnIntelPassLocked is one full pass: CVE/KEV/PoC sync → asset linking →
 // nuclei template tree. The caller holds vulnSyncMu.
 func (m *Manager) vulnIntelPassLocked(ctx context.Context) error {
