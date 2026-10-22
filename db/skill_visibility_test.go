@@ -117,3 +117,33 @@ func shippedSkillDir(t *testing.T) string {
 	t.Fatal("找不到仓库的 skills/ 目录")
 	return ""
 }
+
+// 新增的内置 skill 必须在升级时自动绑定——不能让用户手动去页面里开。
+//
+// seedBuiltinSkillVisibility 没有 flag 门控，每次启动都跑，靠 ON CONFLICT
+// DO NOTHING 区分两种情况：
+//   - 新 skill（无冲突行）→ 插入绑定，升级即生效；
+//   - 已有 skill（有冲突行）→ 保留用户的开关状态，不复活用户的「关」。
+//
+// 这条测试锁住「新增 skill 会进 builtinSkillVisibility 表」这个前提——
+// 漏了就意味着新 skill 永远没人用。
+func TestNewBuiltinSkillsAreBoundByDefault(t *testing.T) {
+	// 每个 skill 至少要绑给一个 agent，否则它不会出现在任何 agent 的工具里。
+	for name, agents := range builtinSkillVisibility {
+		if len(agents) == 0 {
+			t.Errorf("内置 skill %q 没有绑定任何 agent", name)
+		}
+	}
+	// vuln-hunting 必须在内置表里（而不是只存在于文件里）。
+	if _, ok := builtinSkillVisibility["vuln-hunting"]; !ok {
+		t.Error("vuln-hunting 不在 builtinSkillVisibility 里——升级后不会自动绑定，没人用得了")
+	}
+	// 反向：表里的 skill 名必须都有对应的目录（否则绑了也没文件可加载）。
+	skillDir := shippedSkillDir(t)
+	for name := range builtinSkillVisibility {
+		p := filepath.Join(skillDir, name, "SKILL.md")
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("内置 skill %q 有绑定但没有文件: %v", name, err)
+		}
+	}
+}
