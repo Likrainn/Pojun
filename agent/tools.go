@@ -2290,6 +2290,8 @@ func (t *ToolSet) PlannerTools() []actool.CoreTool {
 		t.searchVulns(), t.getVuln(), t.getPoc(), t.scanWithNuclei(), t.netContext(),
 		// auth_request：用资产上已登记的凭据组装带认证的请求（横向/越权验证的前提）。
 		t.authRequest(),
+		// diff_responses：对比两个响应的结构性差异（越权/可枚举/状态机三类的共同基础）。
+		t.diffResponses(),
 		// search_recent_critical：按【时间】查最近披露的高危漏洞（不需先知道组件名/CVE 号）。
 		t.searchRecentCritical(),
 	}

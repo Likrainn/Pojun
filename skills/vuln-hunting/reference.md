@@ -116,14 +116,16 @@ curl -s -X POST "https://t/api/user/set-password" -H 'Content-Type: application/
 **重放（幂等性）**
 ```bash
 # 同一请求发两次，看是否重复扣款/重复发货/重复发券
-curl -s -X POST "https://t/api/coupon/redeem" -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"couponId":9}' > /tmp/r1.json
+# 响应存到本意图工作目录（平台规约：中间产物不落 /tmp）
+curl -s -i -X POST "https://t/api/coupon/redeem" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"couponId":9}' > redeem1.txt
 sleep 1
-curl -s -X POST "https://t/api/coupon/redeem" -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"couponId":9}' > /tmp/r2.json
-diff /tmp/r1.json /tmp/r2.json && echo "两次相同" || echo "两次不同 ← 看是否重复生效"
+curl -s -i -X POST "https://t/api/coupon/redeem" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"couponId":9}' > redeem2.txt
 ```
-**注意**：写中间产物要用**本意图工作目录**（平台规约），不要写 /tmp。
+再调 `diff_responses`（`file_a=redeem1.txt`、`file_b=redeem2.txt`）：
+**无结构性差异 = 幂等**；有值差异（尤其数量/余额/状态类字段）= **重复生效**。
+不要用 `diff` 逐字节比——响应里的时间戳/requestId 每次都不同，会误判成"两次不同"。
 
 ### 证据形态
 ```
@@ -292,11 +294,15 @@ done
 **存在性枚举**
 ```bash
 # 对比「不存在」与「存在但无权限」两种响应
-A=$(curl -s -w "\n%{http_code}" "https://t/api/user/999999")
-B=$(curl -s -w "\n%{http_code}" "https://t/api/user/1001")   # 别人的
-echo "不存在: $A"; echo "他人:   $B"
-# 状态码、响应长度、响应体任一不同 → 可枚举
+# 两个响应都存到本意图工作目录（平台规约：中间产物不落 /tmp）
+curl -s -i "https://t/api/user/999999" > user_999999.txt   # 不存在的
+curl -s -i "https://t/api/user/1001"  > user_1001.txt     # 别人的
 ```
+再调 `diff_responses`（给 `file_a=user_999999.txt`、`file_b=user_1001.txt`）：
+**状态码不同或 JSON 键集合不同 → 可枚举**。工具会滤掉时间戳/trace id 这类噪声，
+只留真正的结构性差异。
+（工具的 `enumerable` 字段直接给这个判断，但**差异本身不是漏洞**——还要确认
+"存在但无权限"返回的内容里没泄露他人数据；那才是越权。）
 
 **失败放行**
 ```python
@@ -385,7 +391,7 @@ curl -s -D - -o /dev/null "https://t/api/news/1" | grep -iE "cache|age|etag"
 | 拿基线流量 | `traffic_search`（必须指定 host）→ `traffic_get(id)` 看原文 |
 | 大响应 | `traffic_blob(hash)` 分段取 |
 | 并发脚本 | 写到**本意图工作目录**，用 `python3` 跑，2~5 并发 |
-| 参数差异对照 | 两个响应存成文件后 `diff` |
+| 参数差异对照 | 两个响应存成文件后用 `diff_responses` 工具（结构化差分，自动滤噪声；不要用 `diff` 逐字节比——时间戳不同就报"不同"） |
 | 目录/参数枚举 | `ffuf` / `feroxbuster` / `gobuster` |
 | 端点枚举 | `katana`（爬路径） |
 | 中间件协议 | 宿主环境页「中间件协议」组（gmqtt/pika/pymongo/zeep/netmiko…） |
