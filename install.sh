@@ -507,6 +507,15 @@ Description=ARTEX - AI Autonomous Penetration Testing System
 Documentation=https://github.com/${REPO}
 After=network-online.target postgresql.service
 Wants=network-online.target postgresql.service
+# 反复失败要能被 systemd 判为 failed，而不是无限重启。
+#
+# start.sh 自己也有崩溃次数上限（连续 5 次异常退出就放弃自拉起并非 0 退出），
+# 但那只是第一道防线：systemd 的 Restart=always 会立刻再拉起 start.sh，
+# 于是又变成「status 显示 active (running)、实际全挂」的状态（start.sh 活着，
+# artex 本体在崩）。这里的 StartLimit 是第二道：达到上限后单元真正进入
+# failed，运维一眼能看出服务是坏的，而不是被「running」骗过去。
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
