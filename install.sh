@@ -446,8 +446,22 @@ deploy_binary(){
     systemctl is-active --quiet postgresql || systemctl start postgresql
     local DB_PASS
     DB_PASS="$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
-    sudo -u "$PG_SUPER" psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='artex'" | grep -q 1 \
-      || sudo -u "$PG_SUPER" psql -c "CREATE ROLE artex LOGIN PASSWORD '$DB_PASS'"
+    # 角色已存在时**必须同步密码**，不能只跳过。
+    #
+    # 踩过的坑（2026-10-22 真实安装）：机器上残留了旧的 artex 角色（重装 /
+    # 换端口 / 忘了删角色），脚本走「角色已存在 → 跳过创建」这条分支，
+    # 于是 config.json 里写的是**新生成**的密码，而库里的角色还是**旧密码**
+    # → 服务起来就反复 SASL 认证失败退出，而报错完全指不到真因。
+    #
+    # 同步密码是安全的：config.json 由本脚本独占写入（不覆盖已有安装），
+    # 密码以它为准。角色已存在但 config.json 也在时，install.sh 根本不会
+    # 走到这里（见上面的「仅首次」判断），所以不会误改既有安装的密码。
+    if sudo -u "$PG_SUPER" psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='artex'" | grep -q 1; then
+      info "数据库角色 artex 已存在，同步密码"
+      sudo -u "$PG_SUPER" psql -c "ALTER ROLE artex LOGIN PASSWORD '$DB_PASS'" >/dev/null
+    else
+      sudo -u "$PG_SUPER" psql -c "CREATE ROLE artex LOGIN PASSWORD '$DB_PASS'"
+    fi
     sudo -u "$PG_SUPER" psql -tAc "SELECT 1 FROM pg_database WHERE datname='artex'" | grep -q 1 \
       || sudo -u "$PG_SUPER" createdb -O artex artex
     cat > "$INSTALL_DIR/config.json" <<JSON
