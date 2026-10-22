@@ -46,13 +46,25 @@ const (
 	CatExploit  Category = "exploit"  // 框架与二进制利用
 	CatMaterial Category = "material" // 字典、语料
 	CatRuntime  Category = "runtime"  // 脚本、证书、HTTP 等基础能力
+	// CatMiddleware 是中间件协议专项工具。
+	//
+	// 为什么单列一类（2026-10-22 调研）：近 30 天 NVD 上 CVSS≥9.0 的高危
+	// 漏洞，中间件占了很大一块——apache/http_server、apache/cxf（SOAP）、
+	// mariadb、rabbitmq_server、moquette(MQTT)、gitlab、splunk、f5/big-ip、
+	// fortinet/fortimail…而通用扫描器（nmap/nuclei）对这类**协议型**中间件
+	// 要么不认、要么只做通用探测。
+	//
+	// 这里的工具是**协议客户端库**——不是「一键打洞」的漏洞利用器，而是让
+	// Agent 能直接跟中间件说话：枚举配置、读队列、订阅主题、调管理 API。
+	// 「怎么打」仍由 Agent 结合漏洞情报决定。
+	CatMiddleware Category = "middleware" // 中间件协议专项（MQTT/AMQP/DB/SOAP/设备等）
 )
 
 // categoryOrder 决定页面上的分组顺序——按攻击流程排：先摸清面(网络/DNS)→
 // 再打(Web/凭据)→ 深入(代码/利用)→ 辅助(隧道/外带/资料/通用)。
 var categoryOrder = []Category{
 	CatNetwork, CatDNS, CatWeb, CatCred, CatCode,
-	CatExploit, CatPivot, CatOOB, CatMaterial, CatRuntime,
+	CatExploit, CatMiddleware, CatPivot, CatOOB, CatMaterial, CatRuntime,
 }
 
 // CategoryLabel 分类的中文标签(页面展示)。
@@ -74,6 +86,8 @@ func CategoryLabel(c Category) string {
 		return "外带与回连"
 	case CatExploit:
 		return "漏洞利用"
+	case CatMiddleware:
+		return "中间件协议"
 	case CatMaterial:
 		return "资料与字典"
 	case CatRuntime:
@@ -82,6 +96,7 @@ func CategoryLabel(c Category) string {
 		return "其他"
 	}
 }
+
 // Tool 一条体检结果 + 安装配方。
 type Tool struct {
 	ID   string `json:"id"`   // 稳定标识(与 Bin 相同)
@@ -89,8 +104,8 @@ type Tool struct {
 	Bin  string `json:"bin"`  // PATH 里探测的二进制名
 
 	Available   bool     `json:"available"`
-	Installable bool     `json:"installable"`      // 能否一键安装
-	Purpose     string   `json:"purpose"`          // 干什么用(给模型看)
+	Installable bool     `json:"installable"`       // 能否一键安装
+	Purpose     string   `json:"purpose"`           // 干什么用(给模型看)
 	Install     string   `json:"install,omitempty"` // 缺失时展示的安装提示
 	Kind        Kind     `json:"kind"`
 	Category    Category `json:"category"` // 攻击面分类(页面分组用)
@@ -107,6 +122,21 @@ type Tool struct {
 
 	// kind=pip
 	Pip string `json:"-"`
+
+	// PipLibrary 标记这个 pip 包是**纯库**（没有命令行入口）。
+	//
+	// 为什么需要这个区分（2026-10-22 实测）：pipx 只能装「带 CLI 入口的应用」，
+	// 装纯库会直接失败并报：
+	//
+	//	No apps associated with package gmqtt or its dependencies. If you are
+	//	attempting to install a library, pipx should not be used.
+	//
+	// 中间件协议工具（gmqtt/pika/pymongo/zeep…）全是纯库——它们是给 Agent
+	// 在脚本里 import 的，不是命令行工具。装它们必须走 pip。
+	//
+	// 现有那些有 CLI 的（wafw00f/netexec/semgrep/pwntools）继续走 pipx：
+	// 隔离环境不会污染系统 Python，正是我们想要的。
+	PipLibrary bool `json:"-"`
 }
 
 // catalog 常用渗透工具目录。安装方式优先选「自包含」的:能用 GitHub Release
@@ -198,6 +228,46 @@ var catalog = []Tool{
 	{Name: "semgrep", Purpose: "源码静态规则扫描(SAST)", Kind: KindPip, Category: CatCode, Pip: "semgrep"},
 	// pwntools：漏洞利用脚本框架（agent 写 exploit 时用）。
 	{Name: "pwntools", Bin: "pwntools", Purpose: "漏洞利用脚本框架(写 exploit 用)", Kind: KindPip, Category: CatExploit, Pip: "pwntools"},
+
+	// ── 中间件协议专项 (2026-10-22 调研新增) ──────────────────────────
+	//
+	// 依据：近 30 天 NVD 上 CVSS≥9.0 的高危漏洞，中间件占比很大
+	// （apache/http_server、apache/cxf、mariadb、rabbitmq_server、
+	// moquette(MQTT)、gitlab、splunk、f5/big-ip、fortinet/fortimail…），
+	// 而通用扫描器（nmap/nuclei）对这类协议型中间件要么不认、要么只做通用探测。
+	//
+	// 这些是**协议客户端库**，不是「一键打洞」的利用器：让 Agent 能直接跟中间件
+	// 说话——枚举配置、读队列、订阅主题、调管理 API。「怎么打」由 Agent 结合
+	// 漏洞情报（search_vulns / search_recent_critical）决定。
+	//
+	// 包名全部经 PyPI API 核实存在（2026-10-22）。两个易踩的坑：
+	//   - MQTT 的包名是 **paho-mqtt**（不是 paho——后者在 PyPI 上不存在，
+	//     同名近似包是供应链投毒的常见入口）；
+	//   - PostgreSQL 驱动要用 **psycopg2-binary**（psycopg2 是纯 sdist，
+	//     一键安装会退化成源码编译，很多机器上直接失败）。
+
+	// MQTT：broker 枚举、主题订阅/发布。
+	{Name: "gmqtt", Purpose: "MQTT 协议客户端(枚举/订阅/发布 broker)", Kind: KindPip, Category: CatMiddleware, PipLibrary: true, Pip: "gmqtt"},
+	{Name: "paho-mqtt", Purpose: "MQTT 协议客户端(脚本用,支持 v3.1.1/v5)", Kind: KindPip, Category: CatMiddleware, PipLibrary: true, Pip: "paho-mqtt"},
+	// 消息队列：AMQP / Kafka / 多协议。
+	{Name: "pika", Purpose: "RabbitMQ AMQP 协议客户端(读队列/投递)", Kind: KindPip, Category: CatMiddleware, PipLibrary: true, Pip: "pika"},
+	{Name: "amqpstorm", Purpose: "RabbitMQ 管理 API + AMQP 客户端", Kind: KindPip, Category: CatMiddleware, PipLibrary: true, Pip: "amqpstorm"},
+	{Name: "confluent-kafka", Purpose: "Kafka 协议客户端(读 topic/消费组)", Kind: KindPip, Category: CatMiddleware, PipLibrary: true, Pip: "confluent-kafka"},
+	{Name: "kombu", Purpose: "多协议消息队列客户端(AMQP/Redis/SQS 等)", Kind: KindPip, Category: CatMiddleware, PipLibrary: true, Pip: "kombu"},
+	// 数据库协议：直连枚举与数据读取。
+	{Name: "pymongo", Purpose: "MongoDB 协议客户端(枚举库/读集合)", Kind: KindPip, Category: CatMiddleware, PipLibrary: true, Pip: "pymongo"},
+	{Name: "pymysql", Purpose: "MySQL 协议客户端(枚举库/读表)", Kind: KindPip, Category: CatMiddleware, PipLibrary: true, Pip: "pymysql"},
+	{Name: "psycopg2-binary", Purpose: "PostgreSQL 协议客户端(枚举库/读表)", Kind: KindPip, Category: CatMiddleware, PipLibrary: true, Pip: "psycopg2-binary"},
+	{Name: "redis-py", Bin: "redis", Purpose: "Redis 协议客户端(枚举键/读配置)", Kind: KindPip, Category: CatMiddleware, PipLibrary: true, Pip: "redis"},
+	// SOAP/XML 中间件：Apache CXF 之类 SOAP 服务的协议客户端。
+	{Name: "zeep", Purpose: "SOAP 客户端(枚举 WSDL/调用接口,适用 CXF 等)", Kind: KindPip, Category: CatMiddleware, PipLibrary: true, Pip: "zeep"},
+	// 代码托管平台：GitLab 的 REST/GraphQL API。
+	{Name: "python-gitlab", Purpose: "GitLab API 客户端(枚举项目/用户/流水线)", Kind: KindPip, Category: CatMiddleware, PipLibrary: true, Pip: "python-gitlab"},
+	// 网络设备：交换机/路由器的 CLI 交互与自动化。
+	{Name: "netmiko", Purpose: "网络设备 CLI 交互(多厂商 SSH)", Kind: KindPip, Category: CatMiddleware, PipLibrary: true, Pip: "netmiko"},
+	{Name: "napalm", Purpose: "多厂商网络设备自动化(取配置/路由表)", Kind: KindPip, Category: CatMiddleware, PipLibrary: true, Pip: "napalm"},
+	// 日志/SIEM：Splunk 的 REST API。
+	{Name: "splunk-sdk", Purpose: "Splunk API 客户端(检索/枚举)", Kind: KindPip, Category: CatMiddleware, PipLibrary: true, Pip: "splunk-sdk"},
 
 	{Name: "msfconsole", Purpose: "Metasploit 框架(exploit/encoder)", Kind: KindManual, Category: CatExploit,
 		Install: "官方安装包(需交互): https://docs.rapid7.com/metasploit/installing-the-metasploit-framework/"},

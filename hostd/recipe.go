@@ -110,21 +110,40 @@ func aptUpdateArgv(mgr PkgMgr, proxy string) []string {
 	return []string{"dnf", "makecache"}
 }
 
-// pipArgv 构造 pip 安装命令。优先 pipx(隔离环境,避免 PEP668 externally-managed
-// 报错),没有则回落到 python3 -m pip --break-system-packages。
+// pipArgv 构造 pip 安装命令。
+//
+// 两种模式：
+//
+//   - **纯库**（tool.PipLibrary=true）：走 `python3 -m pip install`。pipx 装不了
+//     纯库——它会报 "No apps associated with package X ... pipx should not be
+//     used"（2026-10-22 在 Kali 上实测：gmqtt/pika/pymongo/zeep 全部这样失败）。
+//     用 --break-system-packages 是为了绕开 PEP668 的 externally-managed 限制
+//     （Debian/Ubuntu/Kali 的系统 Python 都带这个标记）。
+//
+//   - **有 CLI 入口**（默认）：优先 pipx。隔离环境不污染系统 Python，正是
+//     我们想要的；没有 pipx 就回落到 pip。
+//
+// tool.Pip 可以是**空格分隔的多个包**（中间件类工具常需一组库）。按空格拆成
+// 多个 argv 元素——不拆的话 "pika amqpstorm" 会被当成一个包名，装不上。
 func pipArgv(tool hosttools.Tool, proxy string) []string {
-	if _, err := os.Stat("/usr/bin/pipx"); err == nil {
-		argv := []string{"pipx", "install"}
-		if proxy != "" {
-			argv = append(argv, "--pip-args=--proxy="+proxy)
+	pkgs := strings.Fields(tool.Pip)
+	if len(pkgs) == 0 {
+		pkgs = []string{tool.Name}
+	}
+	if !tool.PipLibrary {
+		if _, err := os.Stat("/usr/bin/pipx"); err == nil {
+			argv := []string{"pipx", "install"}
+			if proxy != "" {
+				argv = append(argv, "--pip-args=--proxy="+proxy)
+			}
+			return append(argv, pkgs...)
 		}
-		return append(argv, tool.Pip)
 	}
 	argv := []string{"python3", "-m", "pip", "install", "--break-system-packages"}
 	if proxy != "" {
 		argv = append(argv, "--proxy", proxy)
 	}
-	return append(argv, tool.Pip)
+	return append(argv, pkgs...)
 }
 
 // GitHubAssetURL 由资产模板拼出下载地址。tag 形如 v3.4.10,资产名里不带 v。

@@ -158,3 +158,71 @@ func TestAssetURLForProjectDiscoveryFamily(t *testing.T) {
 		}
 	}
 }
+
+// 纯库（无 CLI 入口）必须走 pip，不能走 pipx。
+//
+// 回归背景（2026-10-22，Kali 上实测）：中间件协议工具全是纯库
+// （gmqtt/pika/pymongo/zeep…），而 pipx **只能装带 CLI 入口的应用**——
+// 用 pipx 装纯库会直接失败：
+//
+//	No apps associated with package gmqtt or its dependencies. If you are
+//	attempting to install a library, pipx should not be used.
+//
+// 那次 6 个包全在这条路径上失败，一个都没装上。
+func TestPipLibraryUsesPipNotPipx(t *testing.T) {
+	w, ok := hosttools.Lookup("gmqtt")
+	if !ok {
+		t.Fatal("catalog 里应有 gmqtt")
+	}
+	if !w.PipLibrary {
+		t.Fatal("gmqtt 是纯库，应标记 PipLibrary")
+	}
+	argv := pipArgv(w, "")
+	joined := strings.Join(argv, " ")
+	if strings.Contains(joined, "pipx") {
+		t.Errorf("纯库不应走 pipx（pipx 装不了纯库）: %v", argv)
+	}
+	if !strings.Contains(joined, "pip") {
+		t.Errorf("纯库应走 pip: %v", argv)
+	}
+	// PEP668 的 externally-managed 限制必须绕开，否则 Debian 系装不上。
+	if !strings.Contains(joined, "--break-system-packages") {
+		t.Errorf("pip 安装需带 --break-system-packages（PEP668）: %v", argv)
+	}
+}
+
+// 有 CLI 入口的工具继续走 pipx（隔离环境不污染系统 Python）。
+func TestCLIToolStillUsesPipx(t *testing.T) {
+	w, ok := hosttools.Lookup("wafw00f")
+	if !ok {
+		t.Fatal("catalog 里应有 wafw00f")
+	}
+	if w.PipLibrary {
+		t.Fatal("wafw00f 有 CLI 入口，不应标记为纯库")
+	}
+	argv := pipArgv(w, "")
+	// 有 pipx 就用 pipx；没有就回落 pip——两种都必须把包名带上。
+	if !strings.Contains(strings.Join(argv, " "), "wafw00f") {
+		t.Errorf("包名未带上: %v", argv)
+	}
+}
+
+// 多包配方要拆成多个 argv 元素——"pika amqpstorm" 当成一个包名会装不上。
+func TestPipArgvSplitsMultiplePackages(t *testing.T) {
+	tool := hosttools.Tool{Name: "mq", Pip: "pika amqpstorm", PipLibrary: true}
+	argv := pipArgv(tool, "")
+	joined := strings.Join(argv, " ")
+	if !strings.Contains(joined, "pika") || !strings.Contains(joined, "amqpstorm") {
+		t.Errorf("多包未拆开: %v", argv)
+	}
+	// 必须是两个独立元素，而不是一个含空格的元素。
+	found := 0
+	for _, a := range argv {
+		if a == "pika" || a == "amqpstorm" {
+			found++
+		}
+	}
+	if found != 2 {
+		t.Errorf("多包应拆成两个独立 argv 元素,实际 %d 个: %v", found, argv)
+	}
+}
