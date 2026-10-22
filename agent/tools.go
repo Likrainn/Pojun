@@ -2288,6 +2288,8 @@ func (t *ToolSet) PlannerTools() []actool.CoreTool {
 		// search_vulns / get_vuln：识别出目标组件后查公开已知漏洞（NVD+KEV），
 		// 规划阶段把「有现成利用的方向」排进 todolist。
 		t.searchVulns(), t.getVuln(), t.getPoc(), t.scanWithNuclei(), t.netContext(),
+		// auth_request：用资产上已登记的凭据组装带认证的请求（横向/越权验证的前提）。
+		t.authRequest(),
 		// search_recent_critical：按【时间】查最近披露的高危漏洞（不需先知道组件名/CVE 号）。
 		t.searchRecentCritical(),
 	}
