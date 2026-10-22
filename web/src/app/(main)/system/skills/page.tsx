@@ -857,6 +857,15 @@ export default function SkillsPage() {
                   {selectedSkill.compatibility && (
                     <Badge variant="secondary" className="font-normal text-xs">{selectedSkill.compatibility}</Badge>
                   )}
+                  {selectedSkill.tags?.cwe?.map((c) => (
+                    <Badge key={c} variant="outline" className="font-mono font-normal text-xs">{c}</Badge>
+                  ))}
+                  {selectedSkill.tags?.attack?.map((a) => (
+                    <Badge key={a} variant="outline" className="font-mono font-normal text-xs">{a}</Badge>
+                  ))}
+                  {selectedSkill.tags?.class?.map((c) => (
+                    <Badge key={c} variant="secondary" className="font-mono font-normal text-xs">{c}</Badge>
+                  ))}
                 </div>
               </div>
 

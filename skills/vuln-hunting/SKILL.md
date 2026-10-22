@@ -1,6 +1,10 @@
 ---
 name: vuln-hunting
 description: 在授权渗透测试中做「主动漏洞挖掘」时调用——不依赖已知 CVE，从目标的实际行为里找新漏洞（越权、逻辑缺陷、竞态、资源假设错误、组合利用等）。当规划者要派一条「深挖某功能/接口的未知漏洞」类意图、或 worker 发现某处行为可疑但查不到已知 CVE 时使用。
+tags:
+  cwe: [CWE-269, CWE-284, CWE-862, CWE-639, CWE-362, CWE-841, CWE-200, CWE-20, CWE-330, CWE-670]
+  attack: [T1190]
+  class: [authz, idor, race, enumeration, state-machine, logic, input-validation, combination]
 ---
 
 # Vuln Hunting（主动漏洞挖掘方法论）

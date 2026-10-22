@@ -1205,12 +1205,21 @@ export interface MCPTool {
 // ---- Skills ----
 // Fields align with the agentskills.io open specification.
 // description covers both "what the skill does" and "when to use it".
+// SkillTags 是 skill 的标准化标签（SKILL.md frontmatter 的 tags 块）。
+// cwe / attack 是 MITRE 框架编号，class 是平台内部类别。
+export interface SkillTags {
+  cwe?: string[];
+  attack?: string[];
+  class?: string[];
+}
+
 export interface SkillItem {
   name: string; // unique key = directory name
   description?: string; // required per spec; covers what + when to use
   license?: string; // optional: SPDX identifier or free text
   compatibility?: string; // optional: environment requirements
   mcps?: string[]; // MCP server names this skill unlocks on load
+  tags?: SkillTags; // 标准化标签（CWE/ATT&CK/类别）——能力矩阵与按类检索的入口
   files: string[]; // files in the skill directory
   // 调用统计（skill_usage 账本）。从未被调用过的 skill：calls=0、last_used 缺省。
   calls: number;

@@ -23,10 +23,10 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/chu0119/artex/agent"
-	"github.com/chu0119/artex/db"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/skill"
+	"github.com/chu0119/artex/agent"
+	"github.com/chu0119/artex/db"
 )
 
 // validSkillName checks the agentskills.io name constraints, widened so a skill can
@@ -971,12 +971,13 @@ func (s *Server) pgMCPTools(w http.ResponseWriter, r *http.Request) {
 // ---------- skills (文件系统) ----------
 
 type skillFileNode struct {
-	Name          string   `json:"name"`
-	Description   string   `json:"description,omitempty"`
-	License       string   `json:"license,omitempty"`
-	Compatibility string   `json:"compatibility,omitempty"`
-	MCPs          []string `json:"mcps,omitempty"`
-	Files         []string `json:"files"`
+	Name          string    `json:"name"`
+	Description   string    `json:"description,omitempty"`
+	License       string    `json:"license,omitempty"`
+	Compatibility string    `json:"compatibility,omitempty"`
+	MCPs          []string  `json:"mcps,omitempty"`
+	Tags          SkillTags `json:"tags,omitempty"`
+	Files         []string  `json:"files"`
 	// Usage ledger (db/skill_usage.go). Calls is 0 and LastUsed nil for a skill that
 	// was never invoked — the ledger only has rows for skills agents actually loaded.
 	Calls    int        `json:"calls"`
@@ -1001,6 +1002,8 @@ func (s *Server) fsListSkills(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	// 标准化标签（CWE/ATT&CK/class）：可选元数据，解析失败只是没有标签。
+	tagsByDir := LoadSkillTags(s.skillDir)
 	// Usage is best-effort decoration: a ledger read failure leaves the counts at
 	// zero rather than failing the skill list itself.
 	statBySkill := map[string]db.SkillStat{}
@@ -1028,6 +1031,9 @@ func (s *Server) fsListSkills(w http.ResponseWriter, r *http.Request) {
 			node.License = meta.License
 			node.Compatibility = meta.Compatibility
 			node.MCPs = meta.MCPs
+		}
+		if tags, ok := tagsByDir[dirName]; ok {
+			node.Tags = tags
 		}
 		node.Files, _ = walkSkillFiles(filepath.Join(s.skillDir, dirName))
 		if node.Files == nil {

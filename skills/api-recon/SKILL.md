@@ -1,6 +1,10 @@
 ---
 name: api-recon
 description: 收集网站API接口时调用该skill。
+tags:
+  cwe: [CWE-200]
+  attack: [T1595.002]
+  class: [recon, api-surface]
 ---
 
 # API Recon（前端接口侦察）
