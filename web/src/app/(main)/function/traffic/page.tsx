@@ -339,15 +339,15 @@ export default function TrafficPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <div className="flex items-center justify-between gap-4">
-        <div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
           <h1 className="font-semibold text-xl tracking-tight">流量</h1>
           <p className="text-muted-foreground text-sm">全局录制代理 · 所有 HTTP 往来</p>
         </div>
-        <div className="flex items-center gap-4 text-sm">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
           <span
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 font-medium text-xs",
+              "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-0.5 font-medium text-xs",
               traffic?.enabled
                 ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
                 : "border-transparent bg-muted text-muted-foreground",

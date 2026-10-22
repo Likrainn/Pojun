@@ -486,7 +486,7 @@ export default function ToolsPage() {
       <Sheet open={!!selected} onOpenChange={(o) => !o && setSelectedKey(null)}>
         <SheetContent
           side="right"
-          className="gap-0 p-0 data-[side=right]:w-[30vw] data-[side=right]:sm:max-w-[30vw]"
+          className="w-full! max-w-none! gap-0 p-0 sm:w-[30vw]! sm:max-w-[30vw]!"
         >
           {selected && (
             <>
@@ -676,7 +676,7 @@ function CustomToolDialog({
     <Sheet open={!!edit} onOpenChange={(o) => !o && onClose()}>
       <SheetContent
         side="right"
-        className="flex flex-col gap-0 p-0 data-[side=right]:w-[45vw] data-[side=right]:min-w-[480px] data-[side=right]:sm:max-w-[45vw]"
+        className="flex w-full! max-w-none! flex-col gap-0 p-0 sm:w-[45vw]! sm:min-w-[480px]! sm:max-w-[45vw]!"
       >
         <SheetHeader className="px-4">
           <SheetTitle>{isNew ? "新建自定义工具" : `编辑 ${tool?.key}`}</SheetTitle>

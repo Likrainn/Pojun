@@ -175,8 +175,8 @@ export default function ProxyPoolPage() {
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <h1 className="text-lg font-semibold">代理池</h1>
           <Badge variant={entries.length > 0 ? "default" : "secondary"}>
             {entries.length > 0 ? `${entries.length} 个上游` : "未启用(直连/全局代理)"}

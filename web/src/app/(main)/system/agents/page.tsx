@@ -257,7 +257,7 @@ export default function AgentsPage() {
       <Sheet open={!!editing} onOpenChange={(o) => !o && setEditKey(null)}>
         <SheetContent
           side="right"
-          className="flex flex-col gap-0 p-0 data-[side=right]:w-[45vw] data-[side=right]:sm:max-w-[45vw]"
+          className="flex w-full! max-w-none! flex-col gap-0 p-0 sm:w-[45vw]! sm:max-w-[45vw]!"
         >
           {editing && (
             <>

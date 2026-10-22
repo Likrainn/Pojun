@@ -733,9 +733,9 @@ export default function SkillsPage() {
           </Popover>
         )}
       </div>
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 flex-col overflow-hidden lg:flex-row">
         {/* ── 左侧文件树 ── */}
-        <div className="flex w-64 shrink-0 flex-col border-r">
+        <div className="flex w-full shrink-0 flex-col border-b lg:w-64 lg:border-b-0 lg:border-r">
           <div className="flex flex-col gap-2 border-b p-2">
             <Button size="sm" variant="outline" className="w-full" onClick={() => setNewOpen(true)}>
               <PlusIcon className="size-3.5" />新建 Skill
