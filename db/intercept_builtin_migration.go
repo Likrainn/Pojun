@@ -112,15 +112,29 @@ UPDATE intercept_rules SET name=$2
 			cond += fmt.Sprintf(" AND pattern=$%d", len(args)+1)
 			args = append(args, oldPat)
 		}
+		// 新值接在判据参数之后，编号必须连续。
+		//
+		// 参数的 append 顺序必须与 SQL 里占位符的顺序**完全一致**：
+		//   $1        name（判据）
+		//   $2..$5    旧默认指纹（action / timeout 三元组）
+		//   $6        旧 pattern（仅当该规则有已知旧 pattern）
+		//   $7..$11   新值（action / message / timeout_enabled / timeout_seconds /
+		//              timeout_action）
+		//   $12       新 pattern（仅当 pattern 确实要换）
+		//
+		// 之前把 pattern 先 append、新值后 append，与 SQL 的编号顺序相反——整段
+		// 参数错位，CI 上直接报 "encode false into int4"（timeout_seconds 那个
+		// 位置收到的是 bool）。这类错位只有真跑一次 PG 才暴露得出来，所以它
+		// 同时是「参数顺序必须与占位符顺序一致」那条断言的由来。
 		setSQL := fmt.Sprintf(`
 UPDATE intercept_rules
    SET action=$%d, message=$%d, timeout_enabled=$%d, timeout_seconds=$%d, timeout_action=$%d`,
 			len(args)+1, len(args)+2, len(args)+3, len(args)+4, len(args)+5)
+		args = append(args, r.action, r.message, r.timeoutEnabled, r.timeoutSeconds, r.timeoutAction)
 		if patChanged {
-			setSQL += fmt.Sprintf(", pattern=$%d", len(args)+6)
+			setSQL += fmt.Sprintf(", pattern=$%d", len(args)+1)
 			args = append(args, r.pattern)
 		}
-		args = append(args, r.action, r.message, r.timeoutEnabled, r.timeoutSeconds, r.timeoutAction)
 		out = append(out, migrationSQL{
 			stage: "update:" + r.name,
 			sql:   setSQL + "\n WHERE name=$1 AND " + cond,

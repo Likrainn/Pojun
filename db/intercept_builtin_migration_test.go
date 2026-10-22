@@ -76,17 +76,23 @@ func TestMigrationSetsTimeoutForJudgeRules(t *testing.T) {
 			t.Errorf("规则 %q 没有对应的更新语句", r.name)
 			continue
 		}
-		// 尾部五个参数依次是 action / message / timeout_enabled /
-		// timeout_seconds / timeout_action。
-		tail := m.args[len(m.args)-5:]
-		if tail[2] != true {
-			t.Errorf("规则 %q 迁移后 timeout_enabled=%v，应为 true", r.name, tail[2])
+		// 按**占位符语义**定位参数（不能按尾部位置——尾部可能是 pattern）。
+		enabled, ok1 := m.args[placeholderIndex(m.sql, "timeout_enabled")-1].(bool)
+		secs, ok2 := m.args[placeholderIndex(m.sql, "timeout_seconds")-1].(int)
+		act, ok3 := m.args[placeholderIndex(m.sql, "timeout_action")-1].(string)
+		if !ok1 || !ok2 || !ok3 {
+			t.Errorf("规则 %q 的 timeout 三元组参数类型不对（enabled=%v secs=%v act=%v）",
+				r.name, ok1, ok2, ok3)
+			continue
 		}
-		if tail[3].(int) <= 0 {
-			t.Errorf("规则 %q 迁移后 timeout_seconds=%v，应为正数", r.name, tail[3])
+		if !enabled {
+			t.Errorf("规则 %q 迁移后 timeout_enabled=false，应为 true", r.name)
 		}
-		if tail[4] != "allow" && tail[4] != "deny" {
-			t.Errorf("规则 %q 迁移后 timeout_action=%v，应为 allow 或 deny", r.name, tail[4])
+		if secs <= 0 {
+			t.Errorf("规则 %q 迁移后 timeout_seconds=%v，应为正数", r.name, secs)
+		}
+		if act != "allow" && act != "deny" {
+			t.Errorf("规则 %q 迁移后 timeout_action=%q，应为 allow 或 deny", r.name, act)
 		}
 	}
 }
@@ -106,7 +112,7 @@ func TestMigrationKeepsHardDenyRulesDenied(t *testing.T) {
 			t.Errorf("规则 %q 没有对应的更新语句", r.name)
 			continue
 		}
-		action := m.args[len(m.args)-5]
+		action := m.args[placeholderIndex(m.sql, "action")-1]
 		if action != "deny" {
 			t.Errorf("硬禁规则 %q 迁移后 action=%v，应为 deny", r.name, action)
 		}
@@ -244,4 +250,167 @@ func builtinRuleMessageUnchanged(name string) bool {
 		}
 	}
 	return false
+}
+
+// 迁移 SQL 里每个占位符的参数类型必须与它所写入的列类型匹配。
+//
+// 这条断言是 CI 上那次失败的直接教训：参数 append 的顺序与占位符编号错位了
+// 一位，于是 timeout_seconds（int4）那个位置收到的是 timeout_enabled 的
+// bool —— pgx 报 "unable to encode false into binary format for int4"。
+//
+// 纯字符串断言（占位符数一致、编号连续）**抓不到**这个错位——它们只保证
+// 「数量对得上」，不保证「谁对谁」。所以这里显式断言每个占位符承载的语义。
+func TestMigrationArgsAlignWithPlaceholderSemantics(t *testing.T) {
+	for _, m := range buildMigrationSQL() {
+		if m.stage == "rename-drop" {
+			continue
+		}
+		// 从 SQL 里解析出每个 $N 对应的列。
+		cols := placeholderColumns(m.sql)
+		for n, col := range cols {
+			if n < 1 || n > len(m.args) {
+				t.Errorf("阶段 %q 的占位符 $%d 越界（参数只有 %d 个）", m.stage, n, len(m.args))
+				continue
+			}
+			arg := m.args[n-1]
+			switch col {
+			case "timeout_enabled":
+				if _, ok := arg.(bool); !ok {
+					t.Errorf("阶段 %q：$%d 应承载 bool（timeout_enabled），实际 %v(%T)",
+						m.stage, n, arg, arg)
+				}
+			case "timeout_seconds":
+				if _, ok := arg.(int); !ok {
+					t.Errorf("阶段 %q：$%d 应承载 int（timeout_seconds），实际 %v(%T)",
+						m.stage, n, arg, arg)
+				}
+			case "action", "timeout_action", "name", "message", "pattern":
+				if _, ok := arg.(string); !ok {
+					t.Errorf("阶段 %q：$%d 应承载 string（%s），实际 %v(%T)",
+						m.stage, n, col, arg, arg)
+				}
+			}
+		}
+	}
+}
+
+// placeholderColumns 解析 SQL 里每个 $N 对应的列名。
+//
+// 只认这几种形式：SET col=$N、WHERE col=$N、AND col=$N。
+func placeholderColumns(s string) map[int]string {
+	out := map[int]string{}
+	// 逐个 "$N" 往前找最近的 "col="。
+	for i := 0; i < len(s); i++ {
+		if s[i] != '$' {
+			continue
+		}
+		j := i + 1
+		n := 0
+		digits := 0
+		for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+			n = n*10 + int(s[j]-'0')
+			j++
+			digits++
+		}
+		if digits == 0 {
+			continue
+		}
+		// 往前找 "xxx=" 形式的列名。
+		head := s[:i]
+		eq := -1
+		for k := len(head) - 1; k >= 0; k-- {
+			if head[k] == '=' {
+				eq = k
+				break
+			}
+			if head[k] == ' ' || head[k] == '\n' || head[k] == '\t' || head[k] == ',' {
+				break
+			}
+		}
+		if eq < 0 {
+			continue
+		}
+		name := strings.TrimSpace(head[:eq])
+		// 只取最后一段标识符（前面可能是 AND / WHERE / SET）。
+		if sp := strings.LastIndexAny(name, " \n\t,"); sp >= 0 {
+			name = name[sp+1:]
+		}
+		if name == "" {
+			continue
+		}
+		out[n] = name
+		i = j - 1
+	}
+	return out
+}
+
+// placeholderIndex 返回某个列名对应的占位符编号。
+//
+// 同一个列名可能在 SQL 里出现两次：判据侧（WHERE ... AND col=$N，比对旧值）
+// 与赋值侧（SET col=$N，写新值）。这里要的是**赋值侧**的编号——判据侧的
+// 承载的是旧默认指纹，不是新值。
+//
+// 找不到时返回 0——调用方会因此拿到越界或类型不符的断言错误，而不是静默
+// 取到错误的参数。
+func placeholderIndex(s, col string) int {
+	// 赋值侧在 "WHERE" 之前；判据侧在 "WHERE" 之后。
+	where := strings.Index(s, "WHERE")
+	if where < 0 {
+		where = len(s)
+	}
+	best := 0
+	// 按位置扫描：只取 SET 段（即 WHERE 之前）的匹配。
+	for n, c := range placeholderColumnsIn(s[:where]) {
+		if c == col {
+			if best == 0 || n > best {
+				best = n
+			}
+		}
+	}
+	return best
+}
+
+// placeholderColumnsIn 与 placeholderColumns 相同，但只解析给定片段。
+func placeholderColumnsIn(s string) map[int]string {
+	out := map[int]string{}
+	for i := 0; i < len(s); i++ {
+		if s[i] != '$' {
+			continue
+		}
+		j := i + 1
+		n := 0
+		digits := 0
+		for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+			n = n*10 + int(s[j]-'0')
+			j++
+			digits++
+		}
+		if digits == 0 {
+			continue
+		}
+		head := s[:i]
+		eq := -1
+		for k := len(head) - 1; k >= 0; k-- {
+			if head[k] == '=' {
+				eq = k
+				break
+			}
+			if head[k] == ' ' || head[k] == '\n' || head[k] == '\t' || head[k] == ',' {
+				break
+			}
+		}
+		if eq < 0 {
+			continue
+		}
+		name := strings.TrimSpace(head[:eq])
+		if sp := strings.LastIndexAny(name, " \n\t,"); sp >= 0 {
+			name = name[sp+1:]
+		}
+		if name == "" {
+			continue
+		}
+		out[n] = name
+		i = j - 1
+	}
+	return out
 }

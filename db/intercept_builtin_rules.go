@@ -129,6 +129,9 @@ var builtinInterceptRules = []builtinRule{
 		class:    classHardDeny,
 		rationale: "格式化任何块设备都不可逆，且渗透测试不需要格式化磁盘——没有任何合法用途。",
 		message:  "禁止格式化磁盘（mkfs）",
+		timeoutEnabled: true,
+		timeoutSeconds: hardDenyTimeoutSeconds,
+		timeoutAction:  "deny",
 		priority: 100,
 	},
 	{
@@ -141,6 +144,9 @@ var builtinInterceptRules = []builtinRule{
 		class:    classHardDeny,
 		rationale: "dd of=/dev/X 覆写块设备不可逆，无合法渗透用途。",
 		message:  "禁止使用 dd 覆写磁盘设备",
+		timeoutEnabled: true,
+		timeoutSeconds: hardDenyTimeoutSeconds,
+		timeoutAction:  "deny",
 		priority: 100,
 	},
 	{
@@ -153,6 +159,9 @@ var builtinInterceptRules = []builtinRule{
 		class:    classHardDeny,
 		rationale: "shred/wipe 擦除块设备不可逆，无合法渗透用途。",
 		message:  "禁止对磁盘设备执行 shred/wipe 擦除",
+		timeoutEnabled: true,
+		timeoutSeconds: hardDenyTimeoutSeconds,
+		timeoutAction:  "deny",
 		priority: 100,
 	},
 	{
@@ -165,6 +174,9 @@ var builtinInterceptRules = []builtinRule{
 		class:    classHardDeny,
 		rationale: "Fork 炸弹必然拖垮宿主进程与所有在跑任务，没有任何合法用途。",
 		message:  "禁止执行 Fork 炸弹",
+		timeoutEnabled: true,
+		timeoutSeconds: hardDenyTimeoutSeconds,
+		timeoutAction:  "deny",
 		priority: 100,
 	},
 	{
@@ -177,6 +189,9 @@ var builtinInterceptRules = []builtinRule{
 		class:    classHardDeny,
 		rationale: "kill -9 -1 / killall -9 不可逆地打断宿主的全部服务（含本平台自身与所有在跑任务），测试不需要。",
 		message:  "禁止 kill -9 -1 或 killall -9（杀死所有进程）",
+		timeoutEnabled: true,
+		timeoutSeconds: hardDenyTimeoutSeconds,
+		timeoutAction:  "deny",
 		priority: 100,
 	},
 	{
@@ -189,6 +204,9 @@ var builtinInterceptRules = []builtinRule{
 		class:    classHardDeny,
 		rationale: "清空防火墙规则会抹掉宿主的安全策略（可能让宿主失防），且与目标资产无关——测试不需要改宿主的防火墙。",
 		message:  "禁止清空防火墙规则（iptables -F / nft flush）",
+		timeoutEnabled: true,
+		timeoutSeconds: hardDenyTimeoutSeconds,
+		timeoutAction:  "deny",
 		priority: 100,
 	},
 	{
@@ -205,6 +223,9 @@ var builtinInterceptRules = []builtinRule{
 		class:    classHardDeny,
 		rationale: "关机/重启会中断宿主与平台上的所有任务，不可逆且无合法渗透用途（对应裁决策略 D5）。",
 		message:  "禁止执行关机或重启命令",
+		timeoutEnabled: true,
+		timeoutSeconds: hardDenyTimeoutSeconds,
+		timeoutAction:  "deny",
 		priority: 100,
 	},
 	{
@@ -217,6 +238,9 @@ var builtinInterceptRules = []builtinRule{
 		class:    classHardDeny,
 		rationale: "清空整个 Redis 持久化集不可逆；FLUSHDB 的库归属虽依赖上下文，但 flush 的对象永远是「整个库」而非测试产物，且渗透测试不需要它。",
 		message:  "禁止执行 Redis FLUSHALL / FLUSHDB，可能清空全部缓存数据",
+		timeoutEnabled: true,
+		timeoutSeconds: hardDenyTimeoutSeconds,
+		timeoutAction:  "deny",
 		priority: 90,
 	},
 	{
@@ -229,6 +253,9 @@ var builtinInterceptRules = []builtinRule{
 		class:    classHardDeny,
 		rationale: "删掉整个库/结构不可逆，且渗透测试不需要删库——验证注入用 DROP TABLE 即可。DROP TABLE 作用对象高度依赖上下文，归入研判类。",
 		message:  "禁止执行 DROP DATABASE / DROP SCHEMA（整个库与结构不可逆地销毁）",
+		timeoutEnabled: true,
+		timeoutSeconds: hardDenyTimeoutSeconds,
+		timeoutAction:  "deny",
 		priority: 90,
 	},
 	{
@@ -244,6 +271,9 @@ var builtinInterceptRules = []builtinRule{
 		class:    classHardDeny,
 		rationale: "清空宿主系统关键目录树（rm -rf /etc/*、rm -rf /var/lib/*）必然破坏宿主本身，与目标资产无关——测试产物不会放在宿主关键目录里。",
 		message:  "禁止清空系统关键目录下的内容",
+		timeoutEnabled: true,
+		timeoutSeconds: hardDenyTimeoutSeconds,
+		timeoutAction:  "deny",
 		priority: 100,
 	},
 
