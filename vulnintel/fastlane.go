@@ -269,13 +269,9 @@ func RunFastLane(ctx context.Context, st *Store, cfg FastLaneConfig) (FastLaneRe
 			if startIndex >= page.TotalResults {
 				break
 			}
-			if cfg.PageDelay > 0 {
-				select {
-				case <-ctx.Done():
-					return res, ctx.Err()
-				case <-time.After(cfg.PageDelay):
-				}
-			}
+			// 页间隔不在这里等——NvdClient.fetch 里的**共享限速闸门**已经
+			// 统一控制（主同步与快通道共用额度，见 ratelimit.go）。这里再等
+			// 一次等于把速率砍半。
 		}
 		if res.Truncated {
 			break

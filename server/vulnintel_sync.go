@@ -172,17 +172,24 @@ func (m *Manager) fastLaneEnabled() bool {
 // fastLaneConfig 组装快通道配置。
 func (m *Manager) fastLaneConfig() vulnintel.FastLaneConfig {
 	cfg := vulnintel.FastLaneConfig{
-		ProxyURL:  m.vulnIntelProxy(),
-		NvdAPIKey: strings.TrimSpace(settingString(m.pg, settingNvdApiKey)),
+		ProxyURL:   m.vulnIntelProxy(),
+		NvdAPIKey:  strings.TrimSpace(settingString(m.pg, settingNvdApiKey)),
 		WindowDays: intSetting(m.pg, settingVulnIntelFastLaneWindowDays,
 			defaultVulnIntelFastLaneWindowDays),
 		MaxRuntime: defaultVulnIntelFastLaneMaxRuntime,
-		// NVD 匿名访问限速约 5 次/30s；快通道页小、页间隔给 1s 足够。
-		PageDelay: time.Second,
 	}
 	if cfg.NvdAPIKey == "" {
 		cfg.NvdAPIKey = strings.TrimSpace(os.Getenv("NVD_API_KEY"))
 	}
+	// 页间隔必须按 API key 推导，不能拍脑袋。
+	//
+	// NVD 匿名访问限速约 5 次/30s（约 6.5s/次），有 key 则是 50 次/30s
+	// （0.7s/次）。原来快通道硬编码 1 秒 —— 无 key 时必然撞 429
+	// （2026-10-22 首次实跑就撞了：nvd rate limited，一页都没拉下来）。
+	//
+	// 推导逻辑与主同步共用（vulnintel 包的 pageDelayFor），免得两处各写一份
+	// 限速数字、以后改一处忘另一处。
+	cfg.PageDelay = vulnintel.PageDelayFor(cfg.NvdAPIKey)
 	return cfg
 }
 
@@ -192,8 +199,15 @@ func (m *Manager) fastLaneConfig() vulnintel.FastLaneConfig {
 // 把新披露的高危送进库。两者共用 vuln_cves 表，upsert 是幂等的，重叠拉到
 // 同一条记录不会出问题。
 func (m *Manager) runVulnIntelFastLane() {
-	// 起跑延迟错开主同步的 90s，避免同时打 NVD 撞限速。
-	time.Sleep(120 * time.Second)
+	// 起跑延迟要**大幅错开**主同步的 90s。
+	//
+	// 原来只错开 30 秒 —— 主同步 90s 起跑、快通道 120s 起跑，两者都要打
+	// NVD，而 NVD 匿名访问限速是 5 次/30s（**共享额度**）。实测首次实跑：
+	// 快通道第 0 页就 "nvd rate limited"，一页都没拉下来。
+	//
+	// 错开到 7 分钟：主同步那一轮（最长 30 分钟）基本跑完或接近跑完时，
+	// 快通道才开始，两边不抢额度。
+	time.Sleep(7 * time.Minute)
 	for {
 		if m.fastLaneEnabled() {
 			m.fastLaneOnce()

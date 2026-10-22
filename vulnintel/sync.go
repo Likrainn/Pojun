@@ -23,6 +23,21 @@ type Config struct {
 }
 
 // Run executes one full sync: KEV flags first (cheap, high signal), then the
+// PageDelayFor derives the inter-request delay for the NVD API from the key.
+//
+// NVD 的限速：匿名约 5 次/30s，有 key 约 50 次/30s。所以间隔分别是
+// 6.5s 与 0.7s。
+//
+// 单独抽出来是因为**主同步与快通道共用同一份限速额度**——两处各写一份
+// 数字、其中一处忘了按 key 调整，快的那个就会把慢的挤到 429
+// （2026-10-22 实测：快通道硬编码 1s，匿名访问下第一页就 rate limited）。
+func PageDelayFor(apiKey string) time.Duration {
+	if strings.TrimSpace(apiKey) != "" {
+		return 700 * time.Millisecond // 50 req / 30s
+	}
+	return 6500 * time.Millisecond // 5 req / 30s
+}
+
 // NVD window (incremental when a cursor exists, backfill otherwise). Errors are
 // recorded per source into vuln_sync_state and also returned joined.
 func Run(ctx context.Context, st *Store, cfg Config) error {
@@ -30,11 +45,7 @@ func Run(ctx context.Context, st *Store, cfg Config) error {
 		cfg.BackfillDays = 0
 	}
 	if cfg.PageDelay <= 0 {
-		if cfg.NvdAPIKey != "" {
-			cfg.PageDelay = 700 * time.Millisecond // 50 req / 30s
-		} else {
-			cfg.PageDelay = 6500 * time.Millisecond // 5 req / 30s
-		}
+		cfg.PageDelay = PageDelayFor(cfg.NvdAPIKey)
 	}
 	if cfg.MaxRuntime <= 0 {
 		cfg.MaxRuntime = 30 * time.Minute

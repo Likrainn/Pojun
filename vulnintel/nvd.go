@@ -100,10 +100,6 @@ func nvdTime(s string) time.Time {
 // FetchPage fetches one page. modStart/modEnd bound the lastModified window
 // (≤120 days per API contract, enforced by the caller); both empty = unfiltered.
 func (c *NvdClient) FetchPage(ctx context.Context, startIndex, resultsPerPage int, modStart, modEnd time.Time) (*nvdResponse, error) {
-	base := c.Base
-	if base == "" {
-		base = "https://services.nvd.nist.gov"
-	}
 	q := url.Values{}
 	q.Set("startIndex", strconv.Itoa(startIndex))
 	q.Set("resultsPerPage", strconv.Itoa(resultsPerPage))
@@ -113,33 +109,7 @@ func (c *NvdClient) FetchPage(ctx context.Context, startIndex, resultsPerPage in
 	if !modEnd.IsZero() {
 		q.Set("lastModEndDate", modEnd.UTC().Format("2006-01-02T15:04:05.000"))
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/rest/json/cves/2.0?"+q.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-	if c.APIKey != "" {
-		req.Header.Set("apiKey", c.APIKey)
-	}
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusTooManyRequests {
-		// Honor Retry-After when present; the sync loop re-calls at its own pace.
-		ra := resp.Header.Get("Retry-After")
-		return nil, &RateLimited{RetryAfter: parseSeconds(ra)}
-	}
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("nvd api status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var out nvdResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("nvd api decode: %w", err)
-	}
-	return &out, nil
+	return c.fetch(ctx, q)
 }
 
 // FetchByCVEID fetches one CVE by its exact ID.
@@ -186,6 +156,12 @@ func (c *NvdClient) fetch(ctx context.Context, q url.Values) (*nvdResponse, erro
 	base := c.Base
 	if base == "" {
 		base = "https://services.nvd.nist.gov"
+	}
+	// 共享限速闸门：主同步与快通道打的是同一个 NVD，额度是共享的。
+	// 不在这里排队，两条链路会各自按自己的节奏超限（实测快通道第一页就
+	// rate limited）。
+	if err := c.waitNvdSlot(ctx); err != nil {
+		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/rest/json/cves/2.0?"+q.Encode(), nil)
 	if err != nil {
