@@ -355,6 +355,10 @@ ON CONFLICT DO NOTHING`, r.kind, r.pattern, r.note); err != nil {
 // that MCP is enabled/configured.
 var builtinSkillVisibility = map[string][]string{
 	"api-recon": {"auto", "pentest", "worker"},
+	// vuln-hunting：主动漏洞挖掘方法论（七个维度：对象换位/流程拆解/状态机/
+	// 数据边界/资源假设/错误路径/组合）。绑给 planner（它决定派不派「挖未知
+	// 漏洞」类意图）与 worker（它执行这条意图时需要方法论）。
+	"vuln-hunting": {"planner", "worker"},
 }
 
 // seedBuiltinSkillVisibility binds the shipped built-in skills to their default
