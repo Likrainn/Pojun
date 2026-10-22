@@ -599,6 +599,21 @@ func validateInterceptRuleReq(req interceptRuleReq) error {
 			return fmt.Errorf("pattern 不是有效正则：%w", err)
 		}
 	}
+	// timeout_action 必须落在允许集合内。
+	//
+	// 这个字段现在**真的生效**（2026-10-22 起，规则自己的 timeout 声明优先
+	// 于全局 judge 配置），所以它不再只是一个存进库里的字符串：写进任意值
+	// 会让「超时后到底放行还是拒绝」变成未定义行为——判定时
+	// `dec.TimeoutAction == "allow"` 会把任何非 "allow" 的值当成拒绝，
+	// 而界面显示的却是那个乱写的字符串。
+	switch req.TimeoutAction {
+	case "allow", "deny":
+	default:
+		return fmt.Errorf("timeout_action 必须是 allow 或 deny")
+	}
+	if req.TimeoutEnabled && req.TimeoutSeconds <= 0 {
+		return fmt.Errorf("启用超时时 timeout_seconds 必须为正数")
+	}
 	return nil
 }
 

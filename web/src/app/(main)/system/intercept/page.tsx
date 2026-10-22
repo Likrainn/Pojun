@@ -735,6 +735,20 @@ export default function InterceptPage() {
                     </TableCell>
                     <TableCell>
                       <ActionBadge action={rule.action} />
+                      {/*
+                        超时策略要显式展示，因为它现在**真的生效**了。
+
+                        2026-10-22 之前，规则的 timeout_enabled/seconds/action
+                        是死字段：界面显示「超时 60s / 超时后 deny」，实际生效的
+                        却是全局的「180s / 失败转人工」——用户看到的和实际做的
+                        不一致。现在规则自己的声明优先于全局，所以必须让用户
+                        看得到「这条规则自己是怎么算的」。
+                      */}
+                      <div className="mt-1 whitespace-nowrap text-[10px] text-muted-foreground">
+                        {rule.timeout_enabled
+                          ? `超时 ${rule.timeout_seconds}s → ${rule.timeout_action === "allow" ? "放行" : "拒绝"}`
+                          : "超时用全局配置"}
+                      </div>
                     </TableCell>
                     <TableCell className="text-center">
                       <Switch

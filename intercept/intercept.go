@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -163,7 +164,58 @@ func (i *Interceptor) Invalidate() {
 	i.mu.Unlock()
 }
 
+// SetRulesInMemory replaces the in-memory rule cache with the given rules.
+//
+// 用途：让「规则 → 裁决 → allow/deny/ask」这条链路可以在没有数据库的
+// 情况下端到端验证（Match 的规则来源是 db.ListInterceptRules，而单测里
+// 拿不到 PG）。生产路径不用它——规则仍然从库里加载。
+//
+// 传入的规则会按 priority DESC、id ASC 排序（与库里的加载顺序一致），
+// 正则会预编译；编译失败的规则被跳过（与 loadLocked 的行为一致）。
+func (i *Interceptor) SetRulesInMemory(rules []db.InterceptRule) {
+	out := make([]compiledRule, 0, len(rules))
+	for _, r := range rules {
+		if !r.Enabled {
+			continue
+		}
+		cr := compiledRule{InterceptRule: r}
+		if r.MatchType == "regex" {
+			re, err := regexp.Compile(r.Pattern)
+			if err != nil {
+				continue
+			}
+			cr.re = re
+		}
+		out = append(out, cr)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Priority != out[j].Priority {
+			return out[i].Priority > out[j].Priority
+		}
+		return out[i].ID < out[j].ID
+	})
+	i.mu.Lock()
+	i.cached = out
+	i.mu.Unlock()
+}
+
 func (i *Interceptor) loadLocked() error {
+	// nil db（server 尚未接上数据库时）：没有规则可加载，但**不能 panic**——
+	// 拦截在工具调用的同步路径上，一崩就是整个 agent 进程死掉。
+	// judgeConfig 对 nil db 已有同样的保护，这里补上规则侧。
+	if i == nil || i.db == nil {
+		// 已用 SetRulesInMemory 注入过规则的话，**不要覆盖**它——那是为了
+		// 在没有数据库的情况下验证「规则 → 裁决」链路而注入的。
+		if i.cached == nil {
+			i.cached = []compiledRule{}
+		}
+		m := make(map[string]bool, len(defaultEnabledTools))
+		for _, n := range defaultEnabledTools {
+			m[n] = true
+		}
+		i.enabledTools = m
+		return nil
+	}
 	rules, err := i.db.ListInterceptRules()
 	if err != nil {
 		return err
@@ -469,7 +521,26 @@ func (i *Interceptor) SetJudgeConfig(c JudgeConfig) error {
 // falls back to the configured FailAction. Ask verdicts carry the human-approval
 // timeout so the existing HandleAsk consumes them unchanged.
 func (i *Interceptor) Judge(ctx context.Context, tool string, arguments json.RawMessage) (Decision, bool) {
-	return i.judge(ctx, tool, arguments, false)
+	return i.judge(ctx, tool, arguments, false, RuleTimeout{})
+}
+
+// RuleTimeout is a rule's explicit timeout declaration.
+//
+// 一条规则可以自己声明「我超时/失败后怎么办」——这是规则作者的显式声明，
+// 优先于全局 judge 配置。零值（Enabled=false）表示「规则没说，听全局的」。
+//
+// 为什么要有这个：规则与裁决是两层。全局配置回答的是「模型兜底裁决这类调用
+// 该怎么超时」，而一条「禁止破坏磁盘」的规则想要的是「模型没来得及答就
+// 直接 deny」——前者是兜底策略，后者是安全策略。合成一个配置就没法同时
+// 表达这两件事，于是 P0 之前规则上的这三个字段是死字段，界面显示的与实际
+// 生效的不一致。
+type RuleTimeout struct {
+	// Enabled 为 true 时本声明生效，替代全局的 timeout + fail_action。
+	Enabled bool
+	// Seconds 是裁决的墙钟上限（秒）。
+	Seconds int
+	// Action 是裁决失败/超时后的动作："deny" | "allow"。
+	Action string
 }
 
 // JudgeRule is Judge for a rule whose action is "judge": the rule itself asks
@@ -477,11 +548,36 @@ func (i *Interceptor) Judge(ctx context.Context, tool string, arguments json.Raw
 // that silently did nothing would be worse than either fixed action). The
 // configured fail action / timeout still apply.
 func (i *Interceptor) JudgeRule(ctx context.Context, tool string, arguments json.RawMessage) (Decision, bool) {
-	return i.judge(ctx, tool, arguments, true)
+	return i.judge(ctx, tool, arguments, true, RuleTimeout{})
 }
 
-func (i *Interceptor) judge(ctx context.Context, tool string, arguments json.RawMessage, forced bool) (Decision, bool) {
+// JudgeRuleWithTimeout is JudgeRule with the triggering rule's own timeout
+// declaration applied. The rule's timeout_enabled/seconds/action override the
+// global judge configuration when enabled; otherwise the global values apply.
+//
+// 语义（回归基线见 intercept/rule_timeout_test.go）：
+//   - Enabled=false → 全局 llm_judge_timeout_seconds + 全局 llm_judge_fail_action
+//   - Enabled=true  → 规则自己的 Seconds + Action
+//
+// Action 只在「模型裁决失败或超时」时起作用（那时没有裁决结果可用）；裁决
+// 成功时以模型的动作（allow/ask/deny）为准。
+func (i *Interceptor) JudgeRuleWithTimeout(ctx context.Context, tool string, arguments json.RawMessage, rt RuleTimeout) (Decision, bool) {
+	return i.judge(ctx, tool, arguments, true, rt)
+}
+
+func (i *Interceptor) judge(ctx context.Context, tool string, arguments json.RawMessage, forced bool, rt RuleTimeout) (Decision, bool) {
 	cfg := i.judgeConfig()
+	// 规则级 timeout 覆盖全局：规则作者显式声明了「我超时时怎么办」，
+	// 那就是这条规则的策略，不受全局兜底配置影响。
+	if rt.Enabled {
+		if rt.Seconds > 0 {
+			cfg.TimeoutSeconds = rt.Seconds
+		}
+		switch rt.Action {
+		case "allow", "deny", "ask":
+			cfg.FailAction = rt.Action
+		}
+	}
 	i.mu.RLock()
 	rv := i.reviewer
 	i.mu.RUnlock()
@@ -624,6 +720,11 @@ func defaultMessage(action, name string) string {
 // error is swallowed so logging never changes the tool call's outcome. The pending list
 // (status='pending') is unaffected, so it still shows only asks awaiting a decision.
 func (i *Interceptor) Log(ctx context.Context, convID int64, dec Decision, toolName string, input []byte, status string) {
+	// nil db（server 尚未接上数据库时）：没有地方可记，但**不能 panic**——
+	// Log 在工具调用的同步路径上，崩了就是整个 agent 进程死掉。
+	if i == nil || i.db == nil {
+		return
+	}
 	taskID, agentName := taskInfoFromCtx(ctx)
 	audit := auditFor(ctx, dec, input, status)
 	id, err := i.db.CreateDecidedIntercept(dec.RuleID, convID, taskID, agentName, toolName, input, status, dec.Message, audit)
@@ -641,6 +742,11 @@ func (i *Interceptor) Log(ctx context.Context, convID int64, dec Decision, toolN
 // page shows it and the sidebar badge lights up. The worker thread blocks just
 // like in a chat session — the user must visit the approvals page to unblock it.
 func (i *Interceptor) HandleAsk(ctx context.Context, convID int64, dec Decision, toolName string, input []byte) bool {
+	// nil db（server 尚未接上数据库时）：没法建审批记录，也就没法等人批。
+	// 此时按「拒绝」处理——不能因为没人能批就默认放行。
+	if i == nil || i.db == nil {
+		return false
+	}
 	ruleID := dec.RuleID
 	taskID, agentName := taskInfoFromCtx(ctx)
 	taskEmit := taskEmitFromCtx(ctx)
