@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/chu0119/artex/db"
 	actool "github.com/Autumn-27/norma/tool"
+	"github.com/chu0119/artex/db"
 )
 
 // assetInterceptCandidates 提取一条待插入资产输入项的 域名/IP/URL 候选串，用于资产拦截匹配。
@@ -691,6 +691,8 @@ func (t *ToolSet) WorkerTools() []actool.CoreTool {
 		t.authRequest(),
 		// diff_responses：对比两个响应的结构性差异（越权/可枚举/状态机三类的共同基础）。
 		t.diffResponses(),
+		// api_contract：读目标暴露的 API 契约文件，拿到比爬虫更准的接口清单。
+		t.apiContractTool(),
 		// search_recent_critical：按【时间】查最近披露的高危漏洞（不需先知道组件名/CVE 号）。
 		t.searchRecentCritical(),
 		// 以下工具仍【不给】worker，只留给 planner/main（读上下文、跨 work 复盘是规划职责，
@@ -722,6 +724,8 @@ func (t *ToolSet) MainAgentTools() []actool.CoreTool {
 		t.authRequest(),
 		// diff_responses：对比两个响应的结构性差异（越权/可枚举/状态机三类的共同基础）。
 		t.diffResponses(),
+		// api_contract：读目标暴露的 API 契约文件，拿到比爬虫更准的接口清单。
+		t.apiContractTool(),
 		// search_recent_critical：按【时间】查最近披露的高危漏洞（不需先知道组件名/CVE 号）。
 		t.searchRecentCritical(),
 	}

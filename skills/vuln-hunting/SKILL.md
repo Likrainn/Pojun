@@ -176,6 +176,7 @@ description: 在授权渗透测试中做「主动漏洞挖掘」时调用——�
 | 目的 | 工具 |
 |---|---|
 | 看真实请求/响应 | `traffic_search` / `traffic_get` / `traffic_blob`（先查流量，别重复 curl） |
+| 拿到接口清单 | `api_contract` 工具（读目标的 OpenAPI/Swagger 契约——比爬虫准）；没有契约用 katana / `api-recon` skill |
 | 改包重放 | `curl` / `python3` 脚本（写到本意图工作目录） |
 | 并发竞态验证 | `python3` 脚本（2~5 并发，小规模） |
 | 参数差异对照 | `diff_responses` 工具（对两个响应做结构化差分，自动滤时间戳/trace id 等噪声） |

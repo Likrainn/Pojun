@@ -1241,7 +1241,7 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 			"summary":    str("[单条] 一句话描述这个探索方向：做什么+为什么。已写清方向即可，不依赖资产 id。"),
 			"asset_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "本方向要测试/攻击的【目标资产 id】（**尽量传**，0/1/多个；是 list_assets 返回的资产 id，不是探索节点 id）：这条探索方向针对哪些资产（站点/接口/参数/主机等）。只要方向围绕某些具体资产就务必传上——它是「这条探索打哪些目标」的结构化标记，用于覆盖去重、把意图连入资产链路。仅当纯全局侦察、确实没有具体目标资产时才留空。"},
 			"parent_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "上游锚点 id（可选，0/1/多个）：本方向由哪些【已确认的事实(fact)/发现(finding)】综合得出。**只能填已存在的 fact/finding 节点 id,不能填意图/目标/提示**——意图必须锚在已确认知识上,发现驱动而非凭空规划。多个事实共同产生一个新意图就传多个;顶层全新侦察方向请留空（会自动挂到任务起点 origin fact）。"},
-			"continues": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "【仅当本方向是接续某条旧方向时填】上游【意图】节点 id（0/1/多个）——即本方向要接着哪条被掐断/被收口的意图继续做。**只在 summary 里明说「接续/继续 #NNN」时才填**，且必须与 summary 里提到的意图 id 一致。接续代数有上限（最多接 3 次），超了会被拒绝——到那时请换一种本质不同的打法或转向别的方向，别再接。顶层全新方向留空。"},
+			"continues":  map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "【仅当本方向是接续某条旧方向时填】上游【意图】节点 id（0/1/多个）——即本方向要接着哪条被掐断/被收口的意图继续做。**只在 summary 里明说「接续/继续 #NNN」时才填**，且必须与 summary 里提到的意图 id 一致。接续代数有上限（最多接 3 次），超了会被拒绝——到那时请换一种本质不同的打法或转向别的方向，别再接。顶层全新方向留空。"},
 			"priority":   intp("优先级 0-10，默认5"),
 		}),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
@@ -2292,6 +2292,8 @@ func (t *ToolSet) PlannerTools() []actool.CoreTool {
 		t.authRequest(),
 		// diff_responses：对比两个响应的结构性差异（越权/可枚举/状态机三类的共同基础）。
 		t.diffResponses(),
+		// api_contract：读目标暴露的 API 契约文件，拿到比爬虫更准的接口清单。
+		t.apiContractTool(),
 		// search_recent_critical：按【时间】查最近披露的高危漏洞（不需先知道组件名/CVE 号）。
 		t.searchRecentCritical(),
 	}
