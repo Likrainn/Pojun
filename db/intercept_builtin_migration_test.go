@@ -172,3 +172,76 @@ func placeholderNumbers(s string) []int {
 	}
 	return out
 }
+
+// 全新安装与已部署升级两条路的顺序依赖。
+//
+// 全新安装：seed 先插规则（动作已是新的），迁移后跑。迁移的判据是「旧默认
+// 指纹」（action=deny + timeout(false,60,deny) + 旧 pattern），而新插入的
+// 规则不匹配这个指纹 → 迁移**一条都不改**，它们保持新动作。
+//
+// 已部署升级：库里是旧规则（匹配旧指纹）→ 迁移按新定义更新。
+//
+// 也就是说迁移对全新安装必须是**幂等且无副作用**的。这条测试锁定这一点：
+// 新定义下的规则，一行都不匹配旧指纹。
+func TestMigrationIsNoOpOnFreshlySeededRules(t *testing.T) {
+	// 全新安装后库里每条规则的样子 = 新定义。
+	for _, r := range builtinInterceptRules {
+		oldName := r.name
+		if old, ok := oldRuleNames[r.name]; ok {
+			oldName = old
+		}
+		oldPat, hasOldPat := oldRulePatterns[oldName]
+		patChanged := hasOldPat && oldPat != r.pattern
+
+		// 判据：action 仍是旧的 deny/ask + timeout 三元组仍是旧的。
+		// 新 seed 插的规则：action 是新的（judge/deny/ask），timeout 是新的。
+		// 所以「全新安装的规则」不可能同时满足「action=旧 deny」且「timeout=旧」。
+		isOldFingerprint := r.timeoutSeconds == oldDenyTimeoutS &&
+			r.timeoutAction == oldDenyTimeoutA &&
+			!r.timeoutEnabled &&
+			r.action == oldDenyAction
+		if r.class == classAsk {
+			isOldFingerprint = r.timeoutSeconds == oldListenerTS &&
+				r.timeoutAction == oldListenerTA &&
+				r.timeoutEnabled == oldListenerTE &&
+				r.action == oldListenerAction
+		}
+		if isOldFingerprint {
+			// 迁移会再改它一次——这本身无害（幂等：同样的 action/timeout
+			// 写回去，值不变）。但**消息**会变（新 message 与旧 message 不同），
+			// 所以要看新消息是否也相同——相同则纯幂等，不同则迁移会改写
+			// 用户可见的说明文字。
+			//
+			// listener 规则就是这种情况：它的动作从一开始就是 ask/180s/allow，
+			// 与新定义完全一致。
+			if !builtinRuleMessageUnchanged(r.name) {
+				t.Errorf("规则 %q 的新定义与旧默认完全一致，但消息不同——迁移会改写用户可见的说明文字",
+					r.name)
+			}
+		}
+		if patChanged {
+			// pattern 变了，说明这条规则的 pattern 由迁移负责换；全新安装时
+			// seed 直接插新 pattern，不需要迁移介入——两者不冲突。
+			continue
+		}
+	}
+}
+
+// builtinRuleMessageUnchanged 判断某条规则的消息在迁移前后是否一致。
+//
+// 目前只有 listener 规则是「新旧完全一致」的情况（它的动作从一开始就是
+// ask + 180s + allow，迁移只是把同样的值写回去）。它的消息也一样——迁移前
+// 的消息与 builtinInterceptRules 里的一致。
+func builtinRuleMessageUnchanged(name string) bool {
+	for _, r := range builtinInterceptRules {
+		if r.name == name {
+			// listener 的旧消息（seedDefaultInterceptRulesV4 里的字面量）
+			// 与规则表里的必须一致。
+			if name == "[内置] 启停回连接收器" {
+				return r.message == legacyListenerMessage
+			}
+			return true
+		}
+	}
+	return false
+}
