@@ -53,7 +53,7 @@ func TestInheritedActivityDetailAndRelationDeletion(t *testing.T) {
 	}
 
 	s := New(context.Background(), m, testDir(t), testDir(t), testDir(t))
-	token, err := signJWT(s.jwtKey)
+	token, err := signJWT(s.currentJWTKey())
 	if err != nil {
 		t.Fatal(err)
 	}
