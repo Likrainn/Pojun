@@ -290,6 +290,8 @@ server {
         proxy_pass http://127.0.0.1:8787;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
+        # 登录防爆破按 X-Forwarded-For 计数——反代必须覆写，否则攻击者可伪造
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
         # SSE 关键项：关缓冲、长超时、HTTP/1.1
         proxy_buffering off;
