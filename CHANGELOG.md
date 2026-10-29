@@ -2,6 +2,16 @@
 
 本项目的重要变更记录在此文件中，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### 修复的问题
+
+- **目标拆解无墙钟，任务可能永久卡在 created**：第 0 轮拆解继承任务级
+  exec ctx，任务未配 `timeout_seconds` 时无 deadline——上游 LLM 连接挂起时
+  拆解永不返回、无重试无日志（Kali 实测复现）。补 `goalsDecomposeTimeout`
+  （5 分钟）：超时走「拆解无产出 → 原始目标作为单目标」回退并打日志，
+  任务照常起跑。与 v0.3.61 的 plannerRoundTimeout 同思路。
+
 ## [0.3.86] - 2026-10-29
 
 ### 新增
