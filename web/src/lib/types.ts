@@ -1699,6 +1699,12 @@ export interface InstallJob {
   log: string;
 }
 
+/** 批量安装结果：started 项已进入助手队列（串行执行），skipped 项带拒绝原因。 */
+export interface InstallBatchResult {
+  started: { job_id: string; tool_id: string }[];
+  skipped: { tool_id: string; reason: string }[];
+}
+
 /** 代理池：一个上游代理的持久化条目。 */
 export interface ProxyPoolEntry {
   url: string;

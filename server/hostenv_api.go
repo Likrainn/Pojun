@@ -151,6 +151,77 @@ func (s *Server) hostenvInstall(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(body)
 }
 
+// hostenvInstallBatch 批量发起安装——「一键装齐」的后端。
+//
+// 助手侧的任务模型天然支持排队（执行信号量容量 1，后续任务进 queued 串行等待），
+// 所以这里只是把 N 个单工具安装**顺序转发**过去：不新增助手侧协议、不引入并发
+// 安装（apt 并发跑会锁冲突）。某个工具发起失败（已安装/不支持一键/助手忙拒绝）
+// 不影响其余工具——结果里逐项带回成功/跳过，前端据此展示。
+func (s *Server) hostenvInstallBatch(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, "bad json: "+err.Error())
+		return
+	}
+	if len(req.IDs) == 0 {
+		writeErr(w, 400, "缺少工具 id 列表")
+		return
+	}
+	if len(req.IDs) > 100 {
+		writeErr(w, 400, "一次最多 100 个工具")
+		return
+	}
+	proxy := s.installProxy()
+	type jobOK struct {
+		JobID  string `json:"job_id"`
+		ToolID string `json:"tool_id"`
+	}
+	type skip struct {
+		ToolID string `json:"tool_id"`
+		Reason string `json:"reason"`
+	}
+	var started []jobOK
+	var skipped []skip
+	seen := map[string]bool{}
+	for _, id := range req.IDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue // 空项与重复项静默跳过
+		}
+		seen[id] = true
+		if _, ok := hosttools.Lookup(id); !ok {
+			skipped = append(skipped, skip{ToolID: id, Reason: "未知工具"})
+			continue
+		}
+		payload, _ := json.Marshal(map[string]string{"tool_id": id, "proxy": proxy})
+		body, code, err := s.hostdCall(r.Context(), http.MethodPost, "/jobs", payload)
+		if err != nil {
+			// 助手整体不可用：没必要继续打剩下的一定也失败。
+			writeErr(w, 503, err.Error())
+			return
+		}
+		if code/100 != 2 {
+			// 助手明确拒绝（已安装/KindManual/代理非法）——记原因继续下一个。
+			skipped = append(skipped, skip{ToolID: id, Reason: strings.TrimSpace(string(body))})
+			continue
+		}
+		var j struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(body, &j) != nil || j.ID == "" {
+			skipped = append(skipped, skip{ToolID: id, Reason: "助手响应缺少任务 id"})
+			continue
+		}
+		started = append(started, jobOK{JobID: j.ID, ToolID: id})
+	}
+	writeJSON(w, 200, map[string]any{
+		"started": started,
+		"skipped": skipped,
+	})
+}
+
 // hostenvProxyCheck 测试一个代理是否真的可用。
 //
 // 用户要的是「代理随时能改」——代理会失效，所以改完必须能立刻验证，

@@ -74,8 +74,11 @@ export default function HostEnvPage() {
   const [savingProxy, setSavingProxy] = React.useState(false);
   const [testingProxy, setTestingProxy] = React.useState(false);
   const [proxyCheck, setProxyCheck] = React.useState<ProxyCheckResult | null>(null);
-  const [job, setJob] = React.useState<InstallJob | null>(null);
-  const [busyTool, setBusyTool] = React.useState<string | null>(null);
+  // 按工具 id 跟踪安装任务：批量「一键装齐」会把 N 个任务一起塞进助手队列
+  // （助手串行执行），所以不再是一个单槽位 job。
+  const [jobsByTool, setJobsByTool] = React.useState<Record<string, InstallJob>>({});
+  const [selectedJobTool, setSelectedJobTool] = React.useState<string | null>(null);
+  const [batchBusy, setBatchBusy] = React.useState(false);
   const logRef = React.useRef<HTMLPreElement | null>(null);
 
   const refresh = React.useCallback(() => {
@@ -93,26 +96,46 @@ export default function HostEnvPage() {
     refresh();
   }, [refresh]);
 
-  // 安装任务轮询：进行中每 1.2s 拉一次；到终态后刷新体检结果。
+  const activeJobs = React.useMemo(
+    () => Object.values(jobsByTool).filter((j) => !TERMINAL_STATES.has(j.state)),
+    [jobsByTool],
+  );
+  const installing = activeJobs.length > 0 || batchBusy;
+
+  // 安装任务轮询：所有进行中的任务每 1.2s 并行拉一次；全部到终态后刷新体检。
+  const refreshedAllRef = React.useRef(true);
   React.useEffect(() => {
-    if (!job || TERMINAL_STATES.has(job.state)) return;
+    if (activeJobs.length === 0) {
+      refreshedAllRef.current = true;
+      return;
+    }
     const timer = setInterval(async () => {
-      try {
-        const next = await api.hostenvJob(job.id);
-        setJob(next);
-        if (TERMINAL_STATES.has(next.state)) {
-          setBusyTool(null);
-          if (next.state === "done") toast.success(`${next.tool_name} 安装完成`);
-          else if (next.state === "failed") toast.error(`${next.tool_name} 安装失败`);
-          else toast.info(`${next.tool_name} 安装已取消`);
-          refresh();
+      const results = await Promise.allSettled(
+        activeJobs.map((j) => api.hostenvJob(j.id)),
+      );
+      let sawTerminal = false;
+      setJobsByTool((prev) => {
+        const next = { ...prev };
+        for (const r of results) {
+          if (r.status !== "fulfilled") continue; // 轮询失败不打断，下一轮再试
+          const j = r.value;
+          const before = next[j.tool_id];
+          if (!before || before.state === j.state) continue;
+          next[j.tool_id] = j;
+          if (TERMINAL_STATES.has(j.state)) {
+            sawTerminal = true;
+            if (j.state === "done") toast.success(`${j.tool_name} 安装完成`);
+            else if (j.state === "failed") toast.error(`${j.tool_name} 安装失败`);
+            else toast.info(`${j.tool_name} 安装已取消`);
+          }
         }
-      } catch {
-        // 轮询失败不打断，下一轮再试
-      }
+        return next;
+      });
+      // 有任务到终态就刷新一次体检（后续轮次里 refresh 会幂等地再对齐）。
+      if (sawTerminal) refresh();
     }, 1200);
     return () => clearInterval(timer);
-  }, [job, refresh]);
+  }, [activeJobs, refresh]);
 
   React.useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -149,20 +172,64 @@ export default function HostEnvPage() {
   };
 
   const install = async (tool: HostTool) => {
-    setBusyTool(tool.id);
     try {
       const j = await api.hostenvInstall(tool.id);
-      setJob(j);
+      setJobsByTool((prev) => ({ ...prev, [tool.id]: j }));
+      setSelectedJobTool(tool.id);
     } catch (e) {
-      setBusyTool(null);
       toast.error(e instanceof Error ? e.message : "发起安装失败");
     }
   };
 
-  const cancel = async () => {
-    if (!job) return;
+  // 一键装齐：把一批工具全部塞进助手队列（助手串行执行，无需等待单个完成）。
+  const installMany = async (tools: HostTool[]) => {
+    const ids = tools.map((t) => t.id);
+    if (ids.length === 0) return;
+    setBatchBusy(true);
     try {
-      await api.hostenvCancel(job.id);
+      const r = await api.hostenvInstallBatch(ids);
+      setJobsByTool((prev) => {
+        const next = { ...prev };
+        const byId = new Map(tools.map((t) => [t.id, t]));
+        for (const j of r.started) {
+          const t = byId.get(j.tool_id);
+          if (!t) continue;
+          next[j.tool_id] = {
+            ...j,
+            id: j.job_id,
+            tool_id: t.id,
+            tool_name: t.name,
+            state: "queued",
+            exit_code: 0,
+            started_at: new Date().toISOString(),
+            log: "",
+          } as InstallJob;
+        }
+        return next;
+      });
+      if (r.started.length > 0) setSelectedJobTool(r.started[0].tool_id);
+      if (r.skipped.length > 0) {
+        toast.warning(
+          `${r.started.length} 项已加入安装队列；${r.skipped.length} 项跳过（${r.skipped
+            .slice(0, 3)
+            .map((x) => x.tool_id)
+            .join("、")}${r.skipped.length > 3 ? " 等" : ""}）`,
+        );
+      } else {
+        toast.success(`${r.started.length} 项已加入安装队列，将依次执行`);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "批量安装发起失败");
+    } finally {
+      setBatchBusy(false);
+    }
+  };
+
+  const cancel = async () => {
+    const j = selectedJobTool ? jobsByTool[selectedJobTool] : null;
+    if (!j) return;
+    try {
+      await api.hostenvCancel(j.id);
     } catch {
       // 忽略：任务可能刚好自己结束了
     }
@@ -171,7 +238,6 @@ export default function HostEnvPage() {
   const available = inv?.tools.filter((t) => t.available) ?? [];
   const missing = inv?.tools.filter((t) => !t.available) ?? [];
   const installerReady = inv?.installer.available ?? false;
-  const installing = job !== null && !TERMINAL_STATES.has(job.state);
 
   // 按攻击面分组。目录里有近 40 个工具，平铺成一张表没法看——用户要回答的是
   // 「Web 侧我有哪些家伙、缺哪些」，不是「一共有 39 行」。分组顺序固定按攻击流程，
@@ -192,6 +258,15 @@ export default function HostEnvPage() {
     }
     return groups;
   }, [inv?.tools]);
+
+  // 可一键安装的缺失项：给「一键装齐」用。
+  const missingInstallable = React.useMemo(
+    () => (inv?.tools ?? []).filter((t) => !t.available && t.installable),
+    [inv?.tools],
+  );
+  const toolJobState = (id: string): InstallJob["state"] | null =>
+    jobsByTool[id]?.state ?? null;
+  const selectedJob = selectedJobTool ? (jobsByTool[selectedJobTool] ?? null) : null;
 
   // 折叠状态：默认全展开。用户来这里通常是查「缺什么」，藏起来反而添乱。
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
@@ -221,6 +296,17 @@ export default function HostEnvPage() {
               <Badge variant={inv.deploy_mode === "docker" ? "secondary" : "outline"}>
                 {inv.deploy_mode === "docker" ? "Docker 容器" : "宿主二进制"}
               </Badge>
+            )}
+            {installerReady && missingInstallable.length > 0 && (
+              <Button
+                size="sm"
+                variant="default"
+                disabled={installing}
+                onClick={() => installMany(missingInstallable)}
+              >
+                {installing ? <Loader2Icon className="animate-spin" /> : <DownloadIcon />}
+                一键安装缺失（{missingInstallable.length}）
+              </Button>
             )}
             <Button size="sm" variant="outline" onClick={refresh}>
               <RefreshCwIcon /> 刷新
@@ -342,27 +428,43 @@ export default function HostEnvPage() {
                   const okCount = g.tools.filter((t) => t.available).length;
                   return (
                     <div key={g.category} className="rounded-lg border">
-                      <button
-                        type="button"
-                        onClick={() => toggleCat(g.category)}
-                        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50"
-                      >
-                        <ChevronRightIcon
-                          className={
-                            "size-4 shrink-0 text-muted-foreground transition-transform" +
-                            (isCollapsed ? "" : "rotate-90")
-                          }
-                        />
-                        <span className="font-medium text-sm">{CATEGORY_LABEL[g.category]}</span>
-                        <span className="text-muted-foreground text-xs">
-                          {okCount}/{g.tools.length} 可用
-                          {g.tools.length - okCount > 0 && (
-                            <span className="ml-1 text-amber-600 dark:text-amber-400">
-                              缺 {g.tools.length - okCount}
-                            </span>
+                      <div className="flex w-full items-center gap-2 px-3 py-2">
+                        <button
+                          type="button"
+                          onClick={() => toggleCat(g.category)}
+                          className="flex flex-1 items-center gap-2 text-left hover:bg-muted/50"
+                        >
+                          <ChevronRightIcon
+                            className={
+                              "size-4 shrink-0 text-muted-foreground transition-transform" +
+                              (isCollapsed ? "" : "rotate-90")
+                            }
+                          />
+                          <span className="font-medium text-sm">{CATEGORY_LABEL[g.category]}</span>
+                          <span className="text-muted-foreground text-xs">
+                            {okCount}/{g.tools.length} 可用
+                            {g.tools.length - okCount > 0 && (
+                              <span className="ml-1 text-amber-600 dark:text-amber-400">
+                                缺 {g.tools.length - okCount}
+                              </span>
+                            )}
+                          </span>
+                        </button>
+                        {installerReady &&
+                          g.tools.some((t) => !t.available && t.installable) && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-xs"
+                              disabled={installing}
+                              onClick={() =>
+                                installMany(g.tools.filter((t) => !t.available && t.installable))
+                              }
+                            >
+                              装齐本组
+                            </Button>
                           )}
-                        </span>
-                      </button>
+                      </div>
                       {!isCollapsed && (
                         <Table>
                           <TableHeader>
@@ -399,11 +501,20 @@ export default function HostEnvPage() {
                                     <Button
                                       size="sm"
                                       variant="outline"
-                                      disabled={installing || busyTool === t.id}
+                                      disabled={installing}
                                       onClick={() => install(t)}
                                     >
-                                      {busyTool === t.id ? <Loader2Icon className="animate-spin" /> : <DownloadIcon />}
-                                      安装
+                                      {toolJobState(t.id) &&
+                                      !TERMINAL_STATES.has(toolJobState(t.id)!) ? (
+                                        <Loader2Icon className="animate-spin" />
+                                      ) : (
+                                        <DownloadIcon />
+                                      )}
+                                      {toolJobState(t.id) === "queued"
+                                        ? "排队中"
+                                        : toolJobState(t.id) === "running"
+                                          ? "安装中"
+                                          : "安装"}
                                     </Button>
                                   )}
                                 </TableCell>
@@ -421,42 +532,88 @@ export default function HostEnvPage() {
         </CardContent>
       </Card>
 
-      {/* 安装进度：进行中显示日志，实时滚动 */}
-      {job && (
+      {/* 安装进度：批量时每个工具一个页签，选中哪个显示哪个的日志 */}
+      {selectedJob && (
         <Card>
           <CardHeader className="flex-row items-center justify-between">
-            <div>
+            <div className="min-w-0 flex-1">
               <CardTitle className="flex items-center gap-2 text-sm">
-                <TerminalIcon className="size-4" /> 安装 {job.tool_name}
+                <TerminalIcon className="size-4" /> 安装进度
               </CardTitle>
-              <CardDescription className="mt-1 flex items-center gap-2">
-                <Badge
-                  variant={job.state === "done" ? "default" : job.state === "failed" ? "destructive" : "secondary"}
-                >
-                  {job.state}
-                </Badge>
-                {job.error && <span className="text-destructive">{job.error}</span>}
+              <CardDescription className="mt-2 flex flex-wrap items-center gap-1.5">
+                {Object.values(jobsByTool)
+                  .sort((a, b) => a.tool_name.localeCompare(b.tool_name))
+                  .map((j) => (
+                    <button
+                      key={j.tool_id}
+                      type="button"
+                      onClick={() => setSelectedJobTool(j.tool_id)}
+                      className="focus:outline-none"
+                      title={`${j.tool_name} · ${j.state}`}
+                    >
+                      <Badge
+                        variant={
+                          j.tool_id === selectedJobTool
+                            ? "default"
+                            : j.state === "failed"
+                              ? "destructive"
+                              : "outline"
+                        }
+                      >
+                        {j.state === "running" && <Loader2Icon className="mr-1 size-3 animate-spin" />}
+                        {j.tool_name}
+                      </Badge>
+                    </button>
+                  ))}
               </CardDescription>
             </div>
             <div className="flex items-center gap-2">
-              {installing && (
+              {selectedJob && !TERMINAL_STATES.has(selectedJob.state) && (
                 <Button size="sm" variant="outline" onClick={cancel}>
                   <XIcon /> 取消
                 </Button>
               )}
-              {!installing && (
-                <Button size="sm" variant="ghost" onClick={() => setJob(null)}>
+              {selectedJob && TERMINAL_STATES.has(selectedJob.state) && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    if (selectedJobTool) {
+                      setJobsByTool((prev) => {
+                        const next = { ...prev };
+                        delete next[selectedJobTool];
+                        return next;
+                      });
+                    }
+                    setSelectedJobTool(null);
+                  }}
+                >
                   关闭
                 </Button>
               )}
             </div>
           </CardHeader>
           <CardContent>
+            <CardDescription className="mb-2 flex items-center gap-2">
+              <span className="font-medium text-foreground">{selectedJob.tool_name}</span>
+              <Badge
+                variant={
+                  selectedJob.state === "done"
+                    ? "default"
+                    : selectedJob.state === "failed"
+                      ? "destructive"
+                      : "secondary"
+                }
+              >
+                {selectedJob.state}
+              </Badge>
+              {selectedJob.error && <span className="text-destructive">{selectedJob.error}</span>}
+            </CardDescription>
             <pre
               ref={logRef}
               className="max-h-80 overflow-auto rounded-md bg-muted p-3 font-mono text-xs leading-relaxed"
             >
-              {job.log || "等待输出…"}
+              {selectedJob.log || "等待输出…（排队中的任务会在轮到它时开始输出）"}
             </pre>
           </CardContent>
         </Card>

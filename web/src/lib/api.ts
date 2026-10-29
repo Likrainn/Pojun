@@ -47,6 +47,7 @@ import type {
   FindingTraffic,
   FindingTrafficDetail,
   HostenvStatus,
+  InstallBatchResult,
   InstallJob,
   ProxyCheckResult,
   IntentAsset,
@@ -874,6 +875,7 @@ export const api = {
   // 宿主环境:体检(含一键安装可用性)+ 一键安装(由特权助手 artex-hostd 执行)
   hostenvStatus: () => get<HostenvStatus>(`/hostenv/status`),
   hostenvInstall: (id: string) => post<InstallJob>(`/hostenv/install`, { id }),
+  hostenvInstallBatch: (ids: string[]) => post<InstallBatchResult>(`/hostenv/install-batch`, { ids }),
   hostenvJob: (jobId: string) => get<InstallJob>(`/hostenv/jobs/${jobId}`),
   hostenvCancel: (jobId: string) => post<{ ok: boolean }>(`/hostenv/jobs/${jobId}/cancel`, {}),
   // 代理自测：proxy 传空串 + use_current=true 则测当前生效的代理

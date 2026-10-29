@@ -852,6 +852,7 @@ func (s *Server) Handler() http.Handler {
 	// 宿主环境:体检(含一键安装可用性)+ 一键安装(经特权助手 artex-hostd)
 	mux.HandleFunc("GET /api/hostenv/status", s.hostenvStatus)
 	mux.HandleFunc("POST /api/hostenv/install", s.hostenvInstall)
+	mux.HandleFunc("POST /api/hostenv/install-batch", s.hostenvInstallBatch)
 	mux.HandleFunc("GET /api/hostenv/jobs/{id}", s.hostenvJob)
 	mux.HandleFunc("POST /api/hostenv/jobs/{id}/cancel", s.hostenvCancel)
 	mux.HandleFunc("POST /api/hostenv/proxy-check", s.hostenvProxyCheck)
