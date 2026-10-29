@@ -312,15 +312,11 @@ func builtinRulesByName() map[string]builtinRule {
 
 // 内置规则的 pattern 必须只有一处定义。
 //
-// db.go 里遗留的 deleteEndpointPathPattern / listenerLifecycleToolPattern 是
-// 从规则表派生的（builtinRulePattern）——如果哪天有人改回另抄一份，这里会红。
+// db.go 里遗留的 deleteEndpointPathPattern 是从规则表派生的（builtinRulePattern）
+// ——如果哪天有人改回另抄一份，这里会红。
 func TestBuiltinRulePatternsHaveSingleSource(t *testing.T) {
 	if got := deleteEndpointPathPattern; got != builtinRulePattern("[内置] 删除类接口路径") {
 		t.Errorf("deleteEndpointPathPattern 与规则表不一致\n got: %s\nwant: %s",
 			got, builtinRulePattern("[内置] 删除类接口路径"))
-	}
-	if got := listenerLifecycleToolPattern; got != builtinRulePattern("[内置] 启停回连接收器") {
-		t.Errorf("listenerLifecycleToolPattern 与规则表不一致\n got: %s\nwant: %s",
-			got, builtinRulePattern("[内置] 启停回连接收器"))
 	}
 }

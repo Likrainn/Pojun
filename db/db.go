@@ -442,33 +442,13 @@ func (d *DB) seedDefaultInterceptRulesV3() error {
 	return d.seedBuiltinInterceptRulesBatch("v3", "intercept_default_rules_v3")
 }
 
-// seedDefaultInterceptRulesV4 adds the callback-listener approval boundary.
-// listener_start/stop always ask; listener_send enters the same interception
-// layer as Bash so destructive-command rules and the optional model judge inspect
-// its data. Safe/high-frequency listener status/read calls stay outside that layer.
+// seedDefaultInterceptRulesV4 marks the v4 batch as seeded. The batch used to
+// carry the callback-listener ask rule; that rule (and the listener_* tools it
+// gated) was removed on 2026-10-29 — the flag stays so fresh installs do not
+// re-run legacy v4 expectations.
 func (d *DB) seedDefaultInterceptRulesV4() error {
-	if err := d.seedBuiltinInterceptRulesBatch("v4", "intercept_default_rules_v4_listener"); err != nil {
-		return err
-	}
-	// No persisted list means Interceptor uses its code defaults (which already
-	// include both tools). Existing installations need a one-time append.
-	if raw, ok, err := d.GetSetting("intercept_enabled_tools"); err != nil {
-		return err
-	} else if ok {
-		if merged, changed := mergeEnabledInterceptTools(raw, "listener_start", "listener_stop", "listener_send"); changed {
-			if err := d.SetSetting("intercept_enabled_tools", merged); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return d.seedBuiltinInterceptRulesBatch("v4", "intercept_default_rules_v4_listener")
 }
-
-// listenerLifecycleToolPattern is anchored because tool_name string matching by
-// substring would also catch unrelated future tools such as listener_start_proxy.
-//
-// 从内置规则表派生（pattern 只有一处定义，避免漂移）。
-var listenerLifecycleToolPattern = builtinRulePattern("[内置] 启停回连接收器")
 
 // mergeEnabledInterceptTools appends newly introduced tools to a persisted
 // intercept-enabled list without reordering or removing the user's choices. A

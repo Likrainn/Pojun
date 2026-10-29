@@ -84,16 +84,19 @@ func TestSameCommandDifferentRulesDifferentPaths(t *testing.T) {
 	}
 }
 
-// 内置规则表必须覆盖三条路径上的全部类别，且每类都非空——
+// 内置规则表必须覆盖硬禁与研判两类，且每类都非空——
 // 缺一类就说明「明令禁止 vs 交 Agent 研判」有一边是空的。
+// classAsk 不在断言里：内置 ask 规则只有过「启停回连接收器」一条，其目标工具
+// 从未实现（2026-10-29 随 listener stub 一起移除）；ask 动作本身保留给用户
+// 自建规则与模型裁决的 fail_action 使用。
 func TestBuiltinRuleClassesAreAllPopulated(t *testing.T) {
 	counts := map[string]int{}
 	for _, r := range builtinInterceptRules {
 		counts[r.class]++
 	}
-	for _, class := range []string{classHardDeny, classJudge, classAsk} {
+	for _, class := range []string{classHardDeny, classJudge} {
 		if counts[class] == 0 {
-			t.Errorf("分类 %q 没有任何内置规则——「明令禁止/交 Agent 研判/人工确认」有一边是空的", class)
+			t.Errorf("分类 %q 没有任何内置规则——「明令禁止/交 Agent 研判」有一边是空的", class)
 		}
 	}
 }

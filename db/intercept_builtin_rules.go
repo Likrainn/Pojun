@@ -455,22 +455,10 @@ var builtinInterceptRules = []builtinRule{
 		priority: 100,
 	},
 
-	// ── 人工确认：改的是平台自身状态或占用平台资源 ─────────────────────
-	{
-		name:     "[内置] 启停回连接收器",
-		seedBatch: "v4",
-		target:   "tool_name",
-		typ:      "regex",
-		pattern:  `^listener_(?:start|stop)$`,
-		action:   "ask",
-		class:    classAsk,
-		rationale: "启停监听器会开放宿主端口、断开全局共享会话——这是平台能力边界与资源占用的变更，不是「目标资产会不会被破坏」。让模型裁决「要不要开端口」是错位的，应转人工。",
-		message:  "启停宿主 TCP 回连接收器会开放端口或断开全局共享会话；请确认授权范围、监听端口、出口地址、Docker 端口映射及其他任务占用情况",
-		priority: 120,
-		timeoutEnabled: true,
-		timeoutSeconds: 180,
-		timeoutAction:  "allow",
-	},
+	// ── 人工确认（ask）─────────────────────────────────────────────
+	// 内置规则当前没有 ask 项：原「启停回连接收器」规则针对的 listener_start/stop
+	// 工具从未实现（listener 包是占位 stub，2026-10-29 移除）。ask 动作本身保留——
+	// 用户自建规则与模型裁决的 fail_action 仍可产生 ask。
 
 	// ── 数据外泄：把本机文件内容 POST 到外部 ─────────────────────────
 	{

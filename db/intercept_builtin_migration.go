@@ -182,10 +182,3 @@ WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
 	return d.SetSetting(flag, "done")
 }
 
-// legacyListenerMessage 是 listener 规则在旧 seed（seedDefaultInterceptRulesV4）
-// 里的消息字面量。
-//
-// 用途：迁移是幂等的——新 seed 插的 listener 规则与旧默认完全一致（ask +
-// 180s + allow + 同样的消息），迁移再写一遍同样的值没有任何影响。这个常量
-// 用来在测试里断言「消息也没变」，否则迁移会悄悄改掉用户可见的说明文字。
-const legacyListenerMessage = "启停宿主 TCP 回连接收器会开放端口或断开全局共享会话；请确认授权范围、监听端口、出口地址、Docker 端口映射及其他任务占用情况"

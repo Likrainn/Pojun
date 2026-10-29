@@ -314,10 +314,6 @@ const (
 	// agent(planner/worker/主 agent/对话)由 noa 接管上下文压缩,取代内置 compaction。
 	// 每 run 读一次,切换只影响之后启动的 run。
 	settingNoaCompaction = "noa_compaction"
-	// C2 (Command & Control) 功能开关，默认关。
-	settingC2Enabled = "c2_enabled"
-	// WebShell 功能开关，默认关。
-	settingWebShellEnabled = "web_shell_enabled"
 	// defaultWebSearchBackend is used when web search is on but no backend was picked.
 	defaultWebSearchBackend = "ddgs"
 	// deepSeekWebSearchBackend borrows the active LLM profile instead of its own
@@ -761,31 +757,6 @@ func (m *Manager) ProxyPoolEnabled() bool {
 	return m.traffic.ProxyPoolEnabled()
 }
 
-// C2Enabled reports whether C2 (Command & Control) functionality is enabled.
-func (m *Manager) C2Enabled() bool {
-	if m.pg == nil {
-		return false
-	}
-	return m.pg.GetBool(settingC2Enabled, false)
-}
-
-// SetC2Enabled persists and applies the C2 toggle.
-func (m *Manager) SetC2Enabled(on bool) error {
-	return m.pg.SetBool(settingC2Enabled, on)
-}
-
-// WebShellEnabled reports whether WebShell functionality is enabled.
-func (m *Manager) WebShellEnabled() bool {
-	if m.pg == nil {
-		return false
-	}
-	return m.pg.GetBool(settingWebShellEnabled, false)
-}
-
-// SetWebShellEnabled persists and applies the WebShell toggle.
-func (m *Manager) SetWebShellEnabled(on bool) error {
-	return m.pg.SetBool(settingWebShellEnabled, on)
-}
 // SetWebSearch persists and applies the web-search settings. braveKey, tavilyKey, and
 // proxy are each left untouched when nil (so toggling the switch doesn't wipe a saved
 // key/proxy; pass a pointer to "" to clear). Callers must rebuild agents (applyLLM)

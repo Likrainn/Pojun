@@ -145,7 +145,6 @@ var defaultEnabledTools = []string{
 	"Bash", "WebFetch", "web_search",
 	"shell_open", "shell_send",
 	"Write", "Edit", "MultiEdit",
-	"listener_start", "listener_stop", "listener_send",
 }
 
 // New creates an Interceptor backed by d. The rule cache is lazy-loaded on

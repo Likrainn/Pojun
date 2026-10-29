@@ -243,9 +243,6 @@ func builtinRuleMessageUnchanged(name string) bool {
 		if r.name == name {
 			// listener 的旧消息（seedDefaultInterceptRulesV4 里的字面量）
 			// 与规则表里的必须一致。
-			if name == "[内置] 启停回连接收器" {
-				return r.message == legacyListenerMessage
-			}
 			return true
 		}
 	}
