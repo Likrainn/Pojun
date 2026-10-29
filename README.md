@@ -266,6 +266,10 @@ CGO_ENABLED=0 go build -o artex-hostd ./cmd/artex-hostd   # 可选：一键安�
 **LLM**：`export ANTHROPIC_API_KEY=sk-...`（或 `OPENAI_API_KEY`），也可在 UI 的「LLM 配置」页填写。
 可选：`ARTEX_LLM_PROVIDER` / `ARTEX_LLM_MODEL` / `ARTEX_LLM_BASE_URL` / `ARTEX_LLM_PROXY`。
 
+> **部署前置建议**：实战任务动辄数百次模型调用，**建议在「LLM 配置」里配 ≥2 个通道
+> 并开启「LLM 轮询」**（429/5xx 自动故障转移 + 熔断）。只配单个免费通道时，上游限流
+> 会把在跑的意图收成 blocked（行为符合设计：重试耗尽后停下来等人工，不会静默失败）。
+
 **并发**：每个任务的 work agent 数在「系统设置」里配置（默认 3）。
 
 **常用参数**：`./start.sh -addr :8787 -proxy :8788`（`-addr` 前端+API，`-proxy` 流量录制代理）。启动脚本会把参数原样透传给 `artex`。
