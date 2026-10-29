@@ -60,27 +60,16 @@ export default function SetupPage() {
   if (checking) return null;
 
   return (
-    <div className="flex h-dvh">
-      {/* Left panel */}
-      <div className="hidden flex-col items-center justify-center bg-primary p-12 text-center lg:flex lg:w-1/3">
-        <div className="relative flex items-center justify-center">
-          <div className="absolute size-80 rounded-full border border-primary-foreground/10" />
-          <div className="absolute size-60 rounded-full border border-primary-foreground/15" />
-          <div className="absolute size-40 rounded-full border border-primary-foreground/20" />
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.png" alt="ARTEX" width={160} height={160} className="relative brightness-0 invert" />
-        </div>
-      </div>
-
-      {/* Right panel */}
-      <div className="flex w-full items-center justify-center bg-background p-8 lg:w-2/3">
-        <div className="w-full max-w-md space-y-10 py-24 lg:py-32">
+    <div className="flex min-h-dvh items-center justify-center bg-muted/40 p-6">
+      {/* 与登录页同形态：居中单卡片，不带任何可哈希的图片资源 */}
+      <div className="w-full max-w-sm">
+        <div className="space-y-10 rounded-2xl border bg-card p-8 shadow-lg lg:p-10">
           <div className="space-y-4 text-center">
             <h2 className="font-medium text-2xl tracking-tight">{unavailable ? "无法确认初始化状态" : "初始化密码"}</h2>
             <p className="mx-auto max-w-xl text-muted-foreground">
               {unavailable
                 ? "后端或数据库暂时不可用。为避免覆盖实例上已有的密码，初始化入口已临时关闭——请恢复服务后重试。"
-                : "首次使用 ARTEX，请为账户设置一个登录密码（至少 8 位）"}
+                : "首次使用，请为账户设置一个登录密码（至少 8 位）"}
             </p>
           </div>
           {unavailable ? (

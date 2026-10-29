@@ -69,7 +69,7 @@ export function UpdateCard() {
     check(true);
   }, [check]);
 
-  // 轮询 /api/health 直到版本号变化。
+  // 轮询 /api/version（鉴权）直到版本号变化。
   //
   // 判据必须是"版本变了"而不是"能连上了"：换装过程中旧版本会短暂地重新起来一次
   // （那一次只负责把 artex.new 换上去然后立刻退出），只看连通性会误判成功。
@@ -79,7 +79,8 @@ export function UpdateCard() {
     while (Date.now() < deadline) {
       await sleep(2000);
       try {
-        const r = await fetch("/api/health", { cache: "no-store" });
+        // /api/health 已去身份（公网指纹治理）：版本查询走鉴权的 /api/version。
+        const r = await fetch("/api/version", { cache: "no-store" });
         if (r.ok) {
           const j = (await r.json()) as { version?: string };
           if (j.version && j.version !== fromVersion) {

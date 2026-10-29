@@ -243,7 +243,8 @@ function interceptPageQuery(page: number, size: number, filter: InterceptApprova
 
 export const api = {
   // 后端应用版本号（release 时由 ldflags 注入，默认 "dev"）。
-  health: () => get<{ ok: boolean; service: string; version: string }>("/health"),
+  health: () => get<{ ok: boolean; status: string }>("/health"),
+  version: () => get<{ service: string; version: string }>("/version"),
 
   // ---- auth ----
   authStatus: () => get<{ initialized: boolean }>("/auth/status"),

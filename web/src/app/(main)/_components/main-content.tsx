@@ -38,8 +38,8 @@ export function MainContent({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     api
-      .health()
-      .then((h) => setVersion((h.version ?? "").replace(/^v(?=\d)/, "")))
+      .version()
+      .then((v) => setVersion((v.version ?? "").replace(/^v(?=\d)/, "")))
       .catch(() => setVersion(""));
   }, []);
 
