@@ -214,6 +214,41 @@ var catalog = []Tool{
 	// 注意它的资产名**架构在前**，且 amd64 用 x86_64、arm64 用 aarch64。
 	{Name: "feroxbuster", Purpose: "目录/文件爆破(Rust 版,支持多线程与递归)", Kind: KindGitHub, Category: CatWeb,
 		Repo: "epi052/feroxbuster", AssetTmpl: "{arch2}-linux-feroxbuster.tar.gz"},
+	// ── 红队后渗透补齐（2026-10-30）：权限保持/横向/隧道/凭据 ──
+	// socat：nc 的全能替代（双向管道、TLS、转发），反弹 shell 稳定化的标配。
+	{Name: "socat", Purpose: "多用途网络中继(反弹 shell 稳定化/端口转发)", Kind: KindApt, Category: CatPivot,
+		Apt: "socat", Dnf: "socat"},
+	// proxychains4：让任意 TCP 工具走 SOCKS 隧道（配 chisel/ligolo 的隧道口）。
+	{Name: "proxychains4", Bin: "proxychains4", Purpose: "任意 TCP 工具走 SOCKS 代理(隧道出口)", Kind: KindApt, Category: CatPivot,
+		Apt: "proxychains4", Dnf: "proxychains-ng"},
+	// evil-winrm：Windows 目标 WinRM 落地 shell（横向移动的标配落点）。
+	// GitHub release 只有源码（无二进制），Kali/Debian 走 apt 包。
+	{Name: "evil-winrm", Purpose: "WinRM 落地 shell(Windows 横向落地)", Kind: KindApt, Category: CatPivot,
+		Apt: "evil-winrm"},
+	// ligolo-ng：TUN 式反向代理（比 SOCKS 更顺手的内网直达）。
+	// 资产名 2026-10-30 实测：ligolo-ng_proxy_<ver>_linux_amd64.tar.gz（官方
+	// 仓库是 nicocha30/ligolo-ng——猜 fork 名会 404）。
+	{Name: "ligolo-ng", Purpose: "TUN 反向代理(内网直达/双 bind)", Kind: KindGitHub, Category: CatPivot,
+		Repo: "nicocha30/ligolo-ng", AssetTmpl: "ligolo-ng_proxy_{ver}_linux_{arch}.tar.gz"},
+	// responder：LLMNR/NBT-NS 毒化（Windows 内网凭据捕获）。GitHub 无 release，
+	// Kali/Debian 有 apt 包（上游源码形态是目录，GitHub 配方装不了）。
+	{Name: "responder", Purpose: "LLMNR/NBT-NS 毒化(内网凭据捕获)", Kind: KindApt, Category: CatCred,
+		Apt: "responder"},
+	// tcpdump：内网抓包（流量取证/凭据嗅探的证据面）。
+	{Name: "tcpdump", Purpose: "网络抓包(流量取证)", Kind: KindApt, Category: CatNetwork,
+		Apt: "tcpdump", Dnf: "tcpdump"},
+	// pspy：无特权进程监视（发现 cron/服务类权限保持点）。资产名固定
+	// pspy64/pspy32（2026-10-30 实测，无版本号、repo 已归档=最后版本不变）。
+	{Name: "pspy", Bin: "pspy64", Purpose: "无特权进程监视(发现权限保持点)", Kind: KindGitHub, Category: CatExploit,
+		Repo: "DominicBreuker/pspy", AssetTmpl: "pspy64"},
+	// linpeas：Linux 提权枚举（后渗透第一脚本的行业标准）。资产实测
+	// linpeas_linux_amd64（无扩展名，arch 模板对齐）。
+	{Name: "linpeas", Bin: "linpeas", Purpose: "Linux 提权枚举(PEASS 系列)", Kind: KindGitHub, Category: CatExploit,
+		Repo: "peass-ng/PEASS-ng", AssetTmpl: "linpeas_linux_{arch}"},
+	// sshuttle：SSH 翻越（把远端网段拉进本机路由表）。
+	{Name: "sshuttle", Purpose: "SSH 隧道直连远端网段(路由级 pivot)", Kind: KindApt, Category: CatPivot,
+		Apt: "sshuttle", Dnf: "sshuttle"},
+
 	// notify：外带/回连数据接收（DNS/HTTP/TLS 多种通道）。
 	{Name: "notify", Purpose: "外带数据接收(DNS/HTTP/TLS 多通道)", Kind: KindGitHub, Category: CatOOB,
 		Repo: "projectdiscovery/notify", AssetTmpl: "notify_{ver}_linux_{arch}.zip"},

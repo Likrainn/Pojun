@@ -144,6 +144,7 @@ func (i *Interceptor) SetReviewer(r Reviewer) {
 var defaultEnabledTools = []string{
 	"Bash", "WebFetch", "web_search",
 	"shell_open", "shell_send",
+	"listener_start", "listener_stop",
 	"Write", "Edit", "MultiEdit",
 }
 

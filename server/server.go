@@ -25,6 +25,7 @@ import (
 	"github.com/Autumn-27/norma/transcript"
 	"github.com/chu0119/artex/agent"
 	"github.com/chu0119/artex/db"
+	"github.com/chu0119/artex/listener"
 	"github.com/chu0119/artex/hostd"
 	"github.com/chu0119/artex/intercept"
 	"github.com/chu0119/artex/llmpool"
@@ -52,7 +53,10 @@ type Server struct {
 
 	// lm is the process-wide callback listener. It is initialized lazily so an
 	// installation that never needs a callback opens no extra socket or goroutine.
-	listenOnce     sync.Once
+	listenOnce sync.Once
+	// listeners 是红队回连接收器管理器（listener 包）：接住反弹 shell/OOB 回连
+	// 并留证。绑定端口无需特权（1024+），不经 hostd。
+	listeners *listener.Manager
 
 	// concMu serializes concurrency-cap decisions (admission + reconcile) so a
 	// scheduler tick and an HTTP settings change / task creation can't both count
@@ -160,6 +164,12 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		provByProfile:  map[int64]*provEntry{}, llmHealth: newLLMHealthRegistry(m.pg),
 		taskAgents: map[string]*taskAgentBundle{}, archiveWake: make(chan struct{}, 1)}
 	s.jwtKey.Store(key)
+	s.listeners = listener.NewManager()
+	agent.SetListenerManager(s.listeners)
+	agent.SetConnectBackResolver(func(port int) agent.ConnectBack {
+		cb := s.ResolveConnectBack(port)
+		return agent.ConnectBack{Mode: cb.Mode, LHOST: cb.LHOST, LPORT: cb.LPORT, Via: cb.Via}
+	})
 	s.initSideQuestions()
 	// 熔断阈值/冷却是失败路径上的热参数，启动时把全局重试策略推给 Registry 一次；
 	// 之后每次保存策略再推一次（saveLLMRetryPolicy）。
@@ -851,6 +861,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/tools/inventory", s.toolsInventory)
 	// 宿主环境:体检(含一键安装可用性)+ 一键安装(经特权助手 artex-hostd)
 	mux.HandleFunc("GET /api/hostenv/status", s.hostenvStatus)
+	mux.HandleFunc("GET /api/c2/config", s.c2ConfigGet)
+	mux.HandleFunc("PUT /api/c2/config", s.c2ConfigPut)
+	mux.HandleFunc("GET /api/listeners", s.listenerList)
+	mux.HandleFunc("POST /api/listeners", s.listenerStart)
+	mux.HandleFunc("GET /api/listeners/{name}", s.listenerSessions)
+	mux.HandleFunc("POST /api/listeners/{name}/stop", s.listenerStop)
 	mux.HandleFunc("POST /api/hostenv/install", s.hostenvInstall)
 	mux.HandleFunc("POST /api/hostenv/install-batch", s.hostenvInstallBatch)
 	mux.HandleFunc("GET /api/hostenv/jobs/{id}", s.hostenvJob)

@@ -12,6 +12,28 @@
   （5 分钟）：超时走「拆解无产出 → 原始目标作为单目标」回退并打日志，
   任务照常起跑。与 v0.3.61 的 plannerRoundTimeout 同思路。
 
+## [0.3.87] - 2026-10-30
+
+### 新增（红队能力专项）
+
+- **回连接收器正式实现**（红队杀伤链的 C2 前置）：`listener/` 包接住反弹
+  shell/OOB 回连，逐会话记录来源/时间/捕获内容（64KB 上限防灌爆）。REST
+  `GET/POST /api/listeners`、agent 工具 `listener_start/stop/sessions`。
+  ask 规则恢复且现在对应真实工具（启停转人工，只读查询不拦）。
+- **C2 出口配置**（可选功能，三种网络形态）：`direct`（默认，本机可达，
+  零配置）/ `ssh`（本机无公网+公网中转机：平台托管 SSH 反向隧道，断线
+  重连）/ `manual`（已有手工转发）。`listener_start` 返回解析后的
+  `connect_back={lhost,lport}`——payload 回连地址以此为准，agent 无需
+  自行判断网络形态。入口：系统设置 API `/api/c2/config`。
+- **redteam-ops skill**：六阶段后渗透方法论（落地稳定化→提权→权限保持→
+  凭据获取→横向移动→数据获取与回传→收尾）+ 证据纪律，与平台工具
+  （listener/impacket/netexec/chisel/ligolo）逐点衔接。
+- **hosttools 红队补齐 9 件**：socat / proxychains4 / sshuttle / tcpdump /
+  evil-winrm / responder（apt）+ ligolo-ng（nicocha30）/ pspy / linpeas
+  （peass-ng）——资产名 2026-10-30 逐个 GitHub API 实测。
+- **产品优化清单**（docs/产品优化清单-2026-10-29.md）与**红队能力建设
+  路线图**（docs/红队能力建设-2026-10-30.md：杀伤链矩阵/竞品对照）。
+
 ## [0.3.86] - 2026-10-29
 
 ### 新增

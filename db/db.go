@@ -442,12 +442,25 @@ func (d *DB) seedDefaultInterceptRulesV3() error {
 	return d.seedBuiltinInterceptRulesBatch("v3", "intercept_default_rules_v3")
 }
 
-// seedDefaultInterceptRulesV4 marks the v4 batch as seeded. The batch used to
-// carry the callback-listener ask rule; that rule (and the listener_* tools it
-// gated) was removed on 2026-10-29 — the flag stays so fresh installs do not
-// re-run legacy v4 expectations.
+// seedDefaultInterceptRulesV4 re-seeds the callback-listener approval boundary
+// (v0.3.87: the listener tools got a real implementation, so the ask rule is
+// back and the intercept gate needs the tool names again).
 func (d *DB) seedDefaultInterceptRulesV4() error {
-	return d.seedBuiltinInterceptRulesBatch("v4", "intercept_default_rules_v4_listener")
+	if err := d.seedBuiltinInterceptRulesBatch("v4", "intercept_default_rules_v4_listener"); err != nil {
+		return err
+	}
+	// No persisted list means Interceptor uses its code defaults (which already
+	// include the listener tools). Existing installations need a one-time append.
+	if raw, ok, err := d.GetSetting("intercept_enabled_tools"); err != nil {
+		return err
+	} else if ok {
+		if merged, changed := mergeEnabledInterceptTools(raw, "listener_start", "listener_stop"); changed {
+			if err := d.SetSetting("intercept_enabled_tools", merged); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // mergeEnabledInterceptTools appends newly introduced tools to a persisted

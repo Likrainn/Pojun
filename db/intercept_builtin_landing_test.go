@@ -55,8 +55,7 @@ func TestSeededBuiltinRulesLandInDatabase(t *testing.T) {
 		}
 	}
 
-	// 明令禁止 / 研判两类在库里都要有实际条目（ask 与代码侧断言同口径：
-	// listener 规则移除后内置表已无 ask 项，见 intercept_builtin_class_test.go）。
+	// 明令禁止 / 研判 / 人工确认三类在库里都要有实际条目（v0.3.87 起 ask 恢复）。
 	counts := map[string]int{}
 	for _, r := range rules {
 		for _, def := range builtinInterceptRules {
@@ -66,7 +65,7 @@ func TestSeededBuiltinRulesLandInDatabase(t *testing.T) {
 			}
 		}
 	}
-	for _, class := range []string{classHardDeny, classJudge} {
+	for _, class := range []string{classHardDeny, classJudge, classAsk} {
 		if counts[class] == 0 {
 			t.Errorf("库里没有分类 %q 的内置规则", class)
 		}
