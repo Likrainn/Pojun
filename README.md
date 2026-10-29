@@ -1,6 +1,7 @@
 > [!IMPORTANT]
 > **⚠️ 原 ARTEX 仓库已失效**：原作者仓库 [Autumn-27/ARTEX](https://github.com/Autumn-27/ARTEX) 已被删除，原有链接、Releases 下载与 Docker 镜像源全部失效，**已无法部署使用**。
-> **✅ 本仓库是接手修复后的独立维护版，可直接部署、直接使用**：基于原作者最终定版（v0.3.15）源码，修复了 Go 模块路径、页面一键更新源与 Docker 镜像源，全部功能正常。部署命令与原仓库一致：`git clone https://github.com/chu0119/ARTEX.git && cd ARTEX && ./install.sh`，详见下方[安装](#安装)。
+> **✅ 本仓库是接手修复后的独立维护版，可直接部署、直接使用**：基于原作者最终定版（v0.3.15）源码持续维护，修复了 Go 模块路径、页面一键更新源与 Docker 镜像源，全部功能正常。部署命令与原仓库一致：`git clone https://github.com/chu0119/ARTEX.git && cd ARTEX && ./install.sh`，详见下方[安装](#安装)。
+> **🔒 v0.3.85 起内置公网部署加固**：登录防爆破、探活端点无指纹、改密码即吊销全部会话、安全响应头、认证面无产品名——公网部署基线见[安全部署说明](docs/公网部署安全加固-2026-10-29.md)。
 
 <div align="center">
 
@@ -305,6 +306,23 @@ server {
 
 > 仅当 SSE 需要走与页面不同的来源（如独立子域）时，才在**构建期**设置 `NEXT_PUBLIC_SSE_BASE`（该变量在 `next build` 时固化进静态包，容器运行时再设无效）。
 
+### 公网部署安全基线（v0.3.85 起）
+
+v0.3.85 内置了面向公网暴露的认证面加固，公网部署时请配合以下基线（完整说明见
+[docs/公网部署安全加固-2026-10-29.md](docs/公网部署安全加固-2026-10-29.md)）：
+
+- **内置加固**：登录防爆破（每 IP 失败 5 次锁 15 分钟 + 全局阈值兜底）、
+  `/api/health` 无身份信息（版本走鉴权的 `/api/version`）、改密码即轮换
+  JWT 签名 key（全部旧会话失效）、安全响应头、CORS 放行已移除、
+  认证页（登录/初始化/404/根路径）无产品名指纹。
+- **部署要求**：必须走 HTTPS（反代 TLS 终结即可，自签证书可用于个人实例）；
+  反代**必须覆写 `X-Forwarded-For`**（登录限流按它计数）；建议把后端绑到
+  `127.0.0.1:8787`（`start.sh -addr 127.0.0.1:8787`）、防火墙只放反代端口；
+  公网实例建议再套一层 WAF/CDN 限速（单机限流治不了分布式低速爆破）。
+- **非标准端口**：认证面已去产品名指纹，端口不必固守默认值——反代监听
+  3000/8000 等任意端口均可（上述 nginx 配置把 `listen 443 ssl` 换成
+  `listen 8000 ssl` 即可）。
+
 ---
 
 
@@ -331,6 +349,24 @@ server {
 - 前端：`cd web && npm run dev`（`/api` 反代到后端，带热更新）
 - 测试：`go test ./...`
 - Mock 预览（无后端）：`cd web && NEXT_PUBLIC_MOCK=1 npm run dev`
+
+### 漏洞情报与模板库
+
+漏洞情报子系统（`vulnintel`）在服务启动后自动运行：
+
+- **情报同步**：NVD 全量/增量 + CISA KEV 在野利用清单 + GitHub Advisory Database
+  （版本区间第二来源）+ GitHub PoC 聚合；「近期高危快通道」按发布时间每 30 分钟
+  拉一次 CVSS≥9.0 或 KEV 的新披露漏洞。资产指纹命中已知漏洞时自动向任务挂 hint。
+- **nuclei 模板库**：数据目录下的 `nuclei-templates/`（git 浅克隆，自动维护）。
+  全新安装后首次由情报同步协程自动 clone；网络不稳的环境可手动预置：
+  ```bash
+  git clone --depth 1 https://github.com/projectdiscovery/nuclei-templates.git /opt/artex/data/nuclei-templates
+  ```
+- **nuclei 二进制**：`scan_with_nuclei` 工具需要 `nuclei` 在 PATH 上。Debian/Kali
+  可直接 `apt install nuclei`；其他环境从
+  [nuclei releases](https://github.com/projectdiscovery/nuclei/releases) 下载放入
+  `/usr/local/bin`。二进制部署下其余宿主工具（nmap/httpx/ffuf/sqlmap…）可在
+  Web「系统 → 宿主环境」页**一键安装**，或 `install.sh --with-tools` 顺装。
 
 ---
 
