@@ -445,9 +445,36 @@ func (d *DB) seedDefaultInterceptRulesV3() error {
 // seedDefaultInterceptRulesV4 re-seeds the callback-listener approval boundary
 // (v0.3.87: the listener tools got a real implementation, so the ask rule is
 // back and the intercept gate needs the tool names again).
+//
+// ⚠️ 升级路径缺陷的修复（2026-10-30 Kali 实测）：v4 的 flag 在 v0.3.86 已置
+// "done"——当时规则被删。直接走 batch 会在 flag 早退处返回，新规则永远落不到
+// 已有实例。所以这里在 flag 之外**按规则名补种**：规则行不存在就插入（存在
+// 则不动——用户对它的任何编辑保持有效）。
 func (d *DB) seedDefaultInterceptRulesV4() error {
 	if err := d.seedBuiltinInterceptRulesBatch("v4", "intercept_default_rules_v4_listener"); err != nil {
 		return err
+	}
+	// 按名补种：flag 早退也可能吞掉新规则（v0.3.86 全新装→v0.3.87 升级的实例）。
+	for _, r := range builtinInterceptRules {
+		if r.name != "[内置] 启停回连接收器" {
+			continue
+		}
+		var exists bool
+		if err := d.QueryRow(`SELECT EXISTS(SELECT 1 FROM intercept_rules WHERE name=$1)`, r.name).Scan(&exists); err != nil {
+			return fmt.Errorf("probe listener rule: %w", err)
+		}
+		if exists {
+			continue // 已有（可能是 v0.3.85 种的或用户编辑过的）——不动
+		}
+		if _, err := d.Exec(`
+INSERT INTO intercept_rules(name, enabled, priority, match_target, match_type, pattern, action, message, timeout_enabled, timeout_seconds, timeout_action)
+VALUES ($1, true, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT DO NOTHING`,
+			r.name, r.priority, r.target, r.typ, r.pattern, r.action, r.message,
+			r.timeoutEnabled, r.timeoutSeconds, r.timeoutAction,
+		); err != nil {
+			return fmt.Errorf("reseed listener rule: %w", err)
+		}
 	}
 	// No persisted list means Interceptor uses its code defaults (which already
 	// include the listener tools). Existing installations need a one-time append.

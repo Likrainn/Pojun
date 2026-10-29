@@ -73,3 +73,32 @@ func TestSeededBuiltinRulesLandInDatabase(t *testing.T) {
 	t.Logf("落库的内置规则分类统计: 明令禁止=%d 研判=%d 人工确认=%d",
 		counts[classHardDeny], counts[classJudge], counts[classAsk])
 }
+
+
+// 升级路径回归：v0.3.86 全新装（v4 flag 已置、规则已从目录移除）→ v0.3.87
+// 升级——V4 seed 必须把「启停回连接收器」规则按名补种回来（Kali 实测缺陷）。
+// 这里模拟该序列：置 flag → 删规则行 → 跑 V4 seed → 断言规则回来。
+func TestListenerRuleRepairedOnUpgrade(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	flag := "intercept_default_rules_v4_listener"
+	if err := d.SetSetting(flag, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`DELETE FROM intercept_rules WHERE name=$1`, "[内置] 启停回连接收器"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.seedDefaultInterceptRulesV4(); err != nil {
+		t.Fatal(err)
+	}
+	var action string
+	err = d.QueryRow(`SELECT action FROM intercept_rules WHERE name=$1`, "[内置] 启停回连接收器").Scan(&action)
+	if err != nil {
+		t.Fatalf("升级后 listener 规则应被补种: %v", err)
+	}
+	if action != "ask" {
+		t.Fatalf("listener 规则 action=%q，应为 ask", action)
+	}
+}
