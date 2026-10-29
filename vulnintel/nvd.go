@@ -51,6 +51,7 @@ type nvdCVE struct {
 	LastModified   string               `json:"lastModified"`
 	Descriptions   []nvdDescription     `json:"descriptions"`
 	Metrics        map[string]json.RawMessage `json:"metrics"`
+	Weaknesses     []nvdWeakness        `json:"weaknesses"`
 	Configurations []nvdConfiguration   `json:"configurations"`
 	References     []nvdReference       `json:"references"`
 }
@@ -86,6 +87,11 @@ type nvdConfiguration struct {
 type nvdReference struct {
 	URL    string `json:"url"`
 	Source string `json:"source"`
+}
+
+// nvdWeakness 是 weaknesses 数组的一项（lang=en 的 value 形如 "CWE-79"）。
+type nvdWeakness struct {
+	Description []nvdDescription `json:"description"`
 }
 
 // nvdTime parses NVD timestamps ("2024-01-02T03:04:05.678").
@@ -202,11 +208,16 @@ const recentCriticalScoreThreshold = 9.0
 //
 // 判据：CVSS≥9.0，**或** CISA KEV 标记（已在野利用——分数可能不高但危害
 // 极大，KEV 优先于分数）。
-func isRecentCritical(severity string, score float64, kev bool) bool {
+//
+// score 为 nil（metrics 空或解析不出）时**不**因为 severity 字符串是
+// CRITICAL 就放行：severity 是 NVD 从分数映射来的，没有分数却写着
+// CRITICAL 是数据异常，按「判不准不放行」处理更稳（宁可晚点进库，也不要
+// 错标一批）。
+func isRecentCritical(score *float64, kev bool) bool {
 	if kev {
 		return true
 	}
-	return score >= recentCriticalScoreThreshold
+	return score != nil && *score >= recentCriticalScoreThreshold
 }
 
 // RateLimited signals a 429 so the sync loop can back off without treating it
@@ -225,6 +236,38 @@ func parseSeconds(s string) time.Duration {
 		return 0
 	}
 	return time.Duration(n) * time.Second
+}
+
+// parseNVDCWEs 提取 weaknesses 里的 CWE 编号（lang=en），去重、归一成
+// "CWE-79" 大写形态、封顶 10 个。NVD 对同一个 CWE 常给多条（不同 source），
+// 不去重的话 cwes 数组会被撑成十几项重复值。
+func parseNVDCWEs(ws []nvdWeakness) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, w := range ws {
+		for _, d := range w.Description {
+			if d.Lang != "en" {
+				continue
+			}
+			id := strings.ToUpper(strings.TrimSpace(d.Value))
+			if id == "" || seen[id] {
+				continue
+			}
+			// 只收标准编号形态；NVD 的内部占位（NVD-CWE-OTHER / NVD-CWE-NOINFO /
+			// CWE-OTHER 这类）不进库。
+			if !strings.HasPrefix(id, "CWE-") ||
+				strings.Contains(id, "NVD-CWE") ||
+				id == "CWE-OTHER" {
+				continue
+			}
+			seen[id] = true
+			out = append(out, id)
+			if len(out) >= 10 {
+				return out
+			}
+		}
+	}
+	return out
 }
 
 // ToCVE converts an API record into the store shape. Scoring picks the first
@@ -248,6 +291,7 @@ func ToCVE(w nvdWrapper) (CVE, bool) {
 	out.Title = firstSentence(out.Description)
 	score, vector, severity := pickScore(c.Metrics)
 	out.Score, out.Vector, out.Severity = score, vector, severity
+	out.Cwes = parseNVDCWEs(c.Weaknesses)
 	seen := map[string]bool{}
 	for _, cfg := range c.Configurations {
 		for _, node := range cfg.Nodes {

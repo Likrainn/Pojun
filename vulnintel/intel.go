@@ -37,6 +37,7 @@ type CVE struct {
 	Criteria    []string // cpe:2.3:... 原文（含版本区间语法）
 	Refs        []string
 	Ranges      []CPERange // 结构化版本区间(versionStart/End 字段),供精确版本判断
+	Cwes        []string   // 弱点编号（NVD weaknesses / GHSA cwes），skill 联动用
 }
 
 // CPERange 是一条 cpeMatch 的版本区间(空串=该边界不存在)。
@@ -56,22 +57,27 @@ func (s *Store) UpsertCVE(ctx context.Context, c CVE) error {
 	}
 	criteria := marshalJSONB(c.Criteria)
 	refs := marshalJSONB(c.Refs)
+	cwes := marshalTextArray(c.Cwes)
 	rangesByCriteria := map[string]CPERange{}
 	for _, r := range c.Ranges {
 		rangesByCriteria[r.Criteria] = r
 	}
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO vuln_cves
 		(cve_id, source, title, description, severity, cvss_score, cvss_vector,
-		 published_at, modified_at, cpe_criteria, refs, synced_at)
-		VALUES ($1,'nvd',$2,$3,$4,$5,$6,$7,$8,$9,$10,now())
+		 published_at, modified_at, cpe_criteria, refs, cwes, synced_at)
+		VALUES ($1,'nvd',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::text[],now())
 		ON CONFLICT (cve_id) DO UPDATE SET
 		  title=EXCLUDED.title, description=EXCLUDED.description,
 		  severity=EXCLUDED.severity, cvss_score=EXCLUDED.cvss_score,
 		  cvss_vector=EXCLUDED.cvss_vector, published_at=EXCLUDED.published_at,
 		  modified_at=EXCLUDED.modified_at, cpe_criteria=EXCLUDED.cpe_criteria,
-		  refs=EXCLUDED.refs, synced_at=now()`,
+		  refs=EXCLUDED.refs,
+		  -- cwes 两源都有：合并去重（NVD weaknesses 与 GHSA cwes 对同一 CVE
+		  -- 的分类可能互补，谁后写都不该抹掉先写的）。
+		  cwes=(SELECT ARRAY(SELECT DISTINCT unnest(vuln_cves.cwes || EXCLUDED.cwes))),
+		  synced_at=now()`,
 		c.ID, c.Title, c.Description, c.Severity, c.Score, c.Vector,
-		nullTime(c.Published), nullTime(c.Modified), criteria, refs); err != nil {
+		nullTime(c.Published), nullTime(c.Modified), criteria, refs, cwes); err != nil {
 		return fmt.Errorf("upsert vuln_cves %s: %w", c.ID, err)
 	}
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM vuln_cpe_products WHERE cve_id=$1`, c.ID); err != nil {
@@ -149,6 +155,9 @@ type VulnHit struct {
 	// 为什么要标：GHSA 的版本区间是**必填**的（NVD 常留空），两边对同一条
 	// CVE 的判定可能不同——模型需要知道"这个区间是哪个源给的"才能权衡。
 	Source string `json:"source,omitempty"`
+	// Cwes 是弱点编号（CWE-79 这类）。get_vuln/search_vulns 把它交给模型，
+	// server 装配时注入的 CWE→skill 映射据此提示对应的方法论 skill。
+	Cwes []string `json:"cwes,omitempty"`
 }
 
 // SearchVulns 按组件名（可带厂商限定）检索已知漏洞。product 匹配 CPE product
@@ -171,6 +180,7 @@ func (s *Store) SearchVulns(ctx context.Context, vendor, product, version string
 	rows, err := s.db.QueryContext(ctx, `
 SELECT c.cve_id, c.severity, c.cvss_score, c.kev, COALESCE(c.published_at::text,''),
        COALESCE(c.title,''), c.kev_date_added IS NOT NULL AS kev_row,
+       COALESCE(array_to_json(c.cwes)::text,'[]'),
        COALESCE((
          SELECT string_agg(DISTINCT p.vendor || '/' || p.product, ', ')
          FROM vuln_cpe_products p WHERE p.cve_id = c.cve_id AND p.product ILIKE $1
@@ -194,10 +204,11 @@ LIMIT $4`, args...)
 	for rows.Next() {
 		var h VulnHit
 		var kevRow bool
-		var matched, hitProduct string
-		if err := rows.Scan(&h.CVEID, &h.Severity, &h.Score, &h.KEV, &h.Published, &h.Title, &kevRow, &matched, &hitProduct, &h.Source); err != nil {
+		var matched, hitProduct, cwesJSON string
+		if err := rows.Scan(&h.CVEID, &h.Severity, &h.Score, &h.KEV, &h.Published, &h.Title, &kevRow, &cwesJSON, &matched, &hitProduct, &h.Source); err != nil {
 			return nil, err
 		}
+		h.Cwes = unmarshalStringArray([]byte(cwesJSON))
 		if kevRow {
 			h.KEV = true
 		}
@@ -255,6 +266,8 @@ type VulnDetail struct {
 	Refs        []string `json:"references,omitempty"`
 	// Source 是数据来源:nvd / ghsa。
 	Source string `json:"source,omitempty"`
+	// Cwes 是弱点编号（CWE-79 这类）——agent 侧据此提示对应方法论 skill。
+	Cwes []string `json:"cwes,omitempty"`
 	// VersionRanges 是结构化的受影响版本区间（每条对应一个组件）。
 	//
 	// 为什么单列出来:cpe_criteria 里 NVD 给的是 CPE 字符串（要模型自己读
@@ -301,12 +314,13 @@ func (s *Store) HasVersionRange(ctx context.Context, cveID string) bool {
 func (s *Store) GetVuln(ctx context.Context, cveID string) (*VulnDetail, error) {
 	cveID = strings.ToUpper(strings.TrimSpace(cveID))
 	var d VulnDetail
-	var criteria, refs []byte
+	var criteria, refs, cwes []byte
 	var pub, mod *time.Time
 	err := s.db.QueryRowContext(ctx, `SELECT cve_id, severity, cvss_score, COALESCE(cvss_vector,''),
-		kev, published_at, modified_at, title, description, cpe_criteria, refs, source
+		kev, published_at, modified_at, title, description, cpe_criteria, refs, source,
+		COALESCE(array_to_json(cwes)::text,'[]')
 		FROM vuln_cves WHERE cve_id=$1`, cveID).
-		Scan(&d.CVEID, &d.Severity, &d.Score, &d.Vector, &d.KEV, &pub, &mod, &d.Title, &d.Description, &criteria, &refs, &d.Source)
+		Scan(&d.CVEID, &d.Severity, &d.Score, &d.Vector, &d.KEV, &pub, &mod, &d.Title, &d.Description, &criteria, &refs, &d.Source, &cwes)
 	if err == nil {
 		if pub != nil {
 			d.Published = pub.UTC().Format(time.RFC3339)
@@ -316,6 +330,7 @@ func (s *Store) GetVuln(ctx context.Context, cveID string) (*VulnDetail, error) 
 		}
 		d.Criteria = unmarshalStringArray(criteria)
 		d.Refs = unmarshalStringArray(refs)
+		d.Cwes = unmarshalStringArray(cwes)
 		d.VersionRanges = s.versionRanges(ctx, cveID)
 		return &d, nil
 	}
@@ -412,6 +427,19 @@ func (s *Store) SaveSyncState(ctx context.Context, st SyncState) error {
 }
 
 // ---- helpers ----
+
+// marshalTextArray 把 []string 编成 Postgres text[] 字面量（{"a","b"}），
+// 配合 `$N::text[]` 占位符使用——与 db.marshalStringArray 同一形态。
+func marshalTextArray(items []string) string {
+	if len(items) == 0 {
+		return "{}"
+	}
+	escaped := make([]string, len(items))
+	for i, s := range items {
+		escaped[i] = `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
+	}
+	return "{" + strings.Join(escaped, ",") + "}"
+}
 
 func marshalJSONB(items []string) any {
 	if len(items) == 0 {

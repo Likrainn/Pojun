@@ -26,31 +26,30 @@ import (
 // 快通道与主同步**共用 vuln_cves 表**（agent 查同一个库），但**游标独立**
 // （fast lane 不能把主同步的 lastModified 游标推走）。
 
-// 严重度映射：NVD 的 severity 字符串 → 是否够格进快通道。
+// 严重度映射：分数与 KEV → 是否够格进快通道。
 func TestRecentCriticalSelection(t *testing.T) {
 	cases := []struct {
-		name     string
-		severity string
-		score    *float64
-		kev      bool
-		want     bool
+		name  string
+		score *float64
+		kev   bool
+		want  bool
 	}{
-		{"CRITICAL 9.8 进", "CRITICAL", f64(9.8), false, true},
-		{"CRITICAL 9.0 进（边界）", "CRITICAL", f64(9.0), false, true},
-		{"HIGH 9.5 进（分数够）", "HIGH", f64(9.5), false, true},
-		{"HIGH 8.9 不进", "HIGH", f64(8.9), false, false},
-		{"MEDIUM 5.0 不进", "MEDIUM", f64(5.0), false, false},
-		{"KEV 进（分数不高）", "HIGH", f64(7.5), true, true},
-		{"KEV 进（无分数）", "UNKNOWN", nil, true, true},
-		{"无分数无 KEV 不进", "UNKNOWN", nil, false, false},
-		{"分数缺失但 severity=CRITICAL 不进（不能瞎猜）", "CRITICAL", nil, false, false},
+		{"CRITICAL 9.8 进", f64(9.8), false, true},
+		{"CRITICAL 9.0 进（边界）", f64(9.0), false, true},
+		{"HIGH 9.5 进（分数够）", f64(9.5), false, true},
+		{"HIGH 8.9 不进", f64(8.9), false, false},
+		{"MEDIUM 5.0 不进", f64(5.0), false, false},
+		{"KEV 进（分数不高）", f64(7.5), true, true},
+		{"KEV 进（无分数）", nil, true, true},
+		{"无分数无 KEV 不进", nil, false, false},
+		{"分数缺失但 severity=CRITICAL 不进（不能瞎猜）", nil, false, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := selectRecentCritical(c.severity, c.score, c.kev)
+			got := isRecentCritical(c.score, c.kev)
 			if got != c.want {
-				t.Errorf("selectRecentCritical(sev=%s score=%v kev=%v)=%v，应为 %v",
-					c.severity, c.score, c.kev, got, c.want)
+				t.Errorf("isRecentCritical(score=%v kev=%v)=%v，应为 %v",
+					c.score, c.kev, got, c.want)
 			}
 		})
 	}
@@ -148,10 +147,10 @@ func contains(s, sub string) bool {
 // 确认快通道的判定函数不依赖数据库（纯函数，便于单测）。
 func TestSelectRecentCriticalIsPure(t *testing.T) {
 	// 同样的输入必须得到同样的输出，且不 panic。
-	a := selectRecentCritical("CRITICAL", f64(9.5), false)
-	b := selectRecentCritical("CRITICAL", f64(9.5), false)
+	a := isRecentCritical(f64(9.5), false)
+	b := isRecentCritical(f64(9.5), false)
 	if a != b {
-		t.Error("selectRecentCritical 应是纯函数")
+		t.Error("isRecentCritical 应是纯函数")
 	}
 	_ = context.Background()
 }

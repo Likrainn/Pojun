@@ -131,6 +131,22 @@ func LoadSkillTags(dir string) map[string]SkillTags {
 	return out
 }
 
+// BuildCweSkillIndex 构建 CWE 编号 → skill 目录名 的倒排索引。
+//
+// 用途：server 启动时注入 agent 的漏洞情报工具（agent.SetCweSkillIndex），
+// search_vulns / get_vuln 命中带 CWE 的条目时提示对应的方法论 skill——
+// 「查到 CVE → 自动提示对应方法论 skill」联动（能力对比 M1）的最后一环。
+// 读目录失败返回空 map：联动缺失只是没有提示，不该让启动失败。
+func BuildCweSkillIndex(dir string) map[string][]string {
+	out := map[string][]string{}
+	for name, t := range LoadSkillTags(dir) {
+		for _, c := range t.CWE {
+			out[c] = append(out[c], name)
+		}
+	}
+	return out
+}
+
 // frontmatterHead 提取 SKILL.md 开头的 YAML frontmatter（--- 与 --- 之间）。
 //
 // 与 norma skill.parse 的边界判定一致（找 "\n---"），保证两边对同一文件的

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	actool "github.com/Autumn-27/norma/tool"
@@ -32,6 +33,42 @@ var nucleiTemplatesDir string
 
 // SetNucleiTemplatesDir wires the template tree path; empty disables scan tool.
 func SetNucleiTemplatesDir(dir string) { nucleiTemplatesDir = dir }
+
+// cweSkillIndex 把 CWE 编号映射到按 tags.cwe 打标的方法论 skill（目录名）。
+// server 启动时从 skills 目录的 SKILL.md frontmatter 构建（server.BuildCweSkillIndex）；
+// 未注入（nil/空）时工具输出里不出现 related_skills 字段——联动是纯增量。
+// 这是能力对比 M1 的最后一环：「查到 CVE → 自动提示对应方法论 skill」。
+var cweSkillIndex atomic.Value // map[string][]string
+
+// SetCweSkillIndex wires the CWE→skills mapping.
+func SetCweSkillIndex(idx map[string][]string) { cweSkillIndex.Store(idx) }
+
+// relatedSkillsFor 返回覆盖任一给定 CWE 的去重 skill 名单。
+func relatedSkillsFor(cwes []string) []string {
+	raw, _ := cweSkillIndex.Load().(map[string][]string)
+	if len(raw) == 0 || len(cwes) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, c := range cwes {
+		for _, s := range raw[strings.ToUpper(strings.TrimSpace(c))] {
+			if !seen[s] {
+				seen[s] = true
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+// vulnDetailWithSkills 在 VulnDetail 之上附带 skill 联动字段
+//（内嵌扁平序列化，无联动时字段缺失、形状与原来完全一致）。
+type vulnDetailWithSkills struct {
+	*vulnintel.VulnDetail
+	RelatedSkills []string `json:"related_skills,omitempty"`
+	SkillNote     string   `json:"skill_note,omitempty"`
+}
 
 // searchVulns exposes product-keyed CVE retrieval. Version matching against
 // NVD criteria is intentionally returned as raw material (criteria text + a
@@ -91,12 +128,21 @@ func (t *ToolSet) searchVulns() actool.CoreTool {
 					kev++
 				}
 			}
-			return jsonResult(map[string]any{
+			res := map[string]any{
 				"count":           len(hits),
 				"kev_count":       kev,
 				"vulnerabilities": hits,
 				"note":            "kev=true 表示 CISA 已确认在野利用，价值最高；下一步用 get_vuln 看单条详情（影响版本区间/参考链接）",
-			})
+			}
+			// CWE→skill 联动：命中条目带 CWE 时提示对应方法论 skill。
+			var allCWEs []string
+			for _, h := range hits {
+				allCWEs = append(allCWEs, h.Cwes...)
+			}
+			if skills := relatedSkillsFor(allCWEs); len(skills) > 0 {
+				res["related_skills"] = skills
+			}
+			return jsonResult(res)
 		},
 	)
 }
@@ -129,6 +175,13 @@ func (t *ToolSet) getVuln() actool.CoreTool {
 			}
 			if d == nil {
 				return actool.Errorf(a.CVEID + " 不在情报库中（库只收录公开同步的数据源）"), nil
+			}
+			if skills := relatedSkillsFor(d.Cwes); len(skills) > 0 {
+				return jsonResult(vulnDetailWithSkills{
+					VulnDetail:    d,
+					RelatedSkills: skills,
+					SkillNote:     "这些方法论 skill 打标了该漏洞的 CWE 编号——深挖验证前可用 Skill 工具加载对应维度（越权/注入/竞态等的验证步骤与证据要求）",
+				})
 			}
 			return jsonResult(d)
 		},

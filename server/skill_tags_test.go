@@ -175,3 +175,39 @@ func TestShippedSkillsHaveSubstantiveTags(t *testing.T) {
 		t.Error("api-recon 应有 class 标签")
 	}
 }
+
+// BuildCweSkillIndex 的倒排形态：同一个 skill 的多个 CWE 各自成键；
+// 无标签目录不进索引；空目录返回空 map 而不是 nil 的行为差异不重要，
+// 重要的是「读失败不该 panic」（联动缺失只是没有提示）。
+func TestBuildCweSkillIndex(t *testing.T) {
+	dir := t.TempDir()
+	mk := func(name string, cwes string) {
+		t.Helper()
+		d := filepath.Join(dir, name)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := "---\nname: " + name + "\ndescription: test\n"
+		if cwes != "" {
+			body += "tags:\n  cwe: [" + cwes + "]\n"
+		}
+		body += "---\n\nbody\n"
+		if err := os.WriteFile(filepath.Join(d, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("authz-skill", "CWE-862, CWE-639")
+	mk("inj-skill", "CWE-89")
+	mk("untagged", "")
+
+	idx := BuildCweSkillIndex(dir)
+	if got := idx["CWE-862"]; len(got) != 1 || got[0] != "authz-skill" {
+		t.Fatalf("CWE-862 → %v，应为 [authz-skill]", got)
+	}
+	if got := idx["CWE-89"]; len(got) != 1 || got[0] != "inj-skill" {
+		t.Fatalf("CWE-89 → %v，应为 [inj-skill]", got)
+	}
+	if _, ok := idx["CWE-999"]; ok {
+		t.Fatal("无命中的 CWE 不应出现在索引里")
+	}
+}

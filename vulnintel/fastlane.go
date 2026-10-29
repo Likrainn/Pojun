@@ -78,26 +78,6 @@ const (
 	fastLaneMaxPagesPerRun = 20
 )
 
-// selectRecentCritical 判断一条 CVE 是否够格进快通道。
-//
-// 判据：CVSS≥9.0，**或** CISA KEV 标记。
-//
-// KEV 优先于分数——已在野利用的漏洞分数可能不高但危害极大（KEV 是 CISA 按
-// 「在野利用」收录的，不是按分数）。
-//
-// 分数缺失时**不**因为 severity 字符串是 CRITICAL 就放行：severity 是 NVD
-// 从分数映射来的，没有分数却写着 CRITICAL 是数据异常，按「判不准不放行」
-// 处理更稳（宁可晚点进库，也不要错标一批）。
-func selectRecentCritical(severity string, score *float64, kev bool) bool {
-	if kev {
-		return true
-	}
-	if score == nil {
-		return false
-	}
-	return *score >= recentCriticalScoreThreshold
-}
-
 // VersionRangeUndetermined 判断一条 CVE 的受影响版本区间是否「未确认」。
 //
 // 现象（2026-10-22 实测）：新披露的 CVE，NVD 常常只给
@@ -251,9 +231,9 @@ func RunFastLane(ctx context.Context, st *Store, cfg FastLaneConfig) (FastLaneRe
 				if !ok {
 					continue
 				}
-				score, _, sev := pickScore(w.CVE.Metrics)
+				score, _, _ := pickScore(w.CVE.Metrics)
 				// KEV 标记这一轮不查（KEV 有独立的同步源），只看分数。
-				if !selectRecentCritical(sev, score, false) {
+				if !isRecentCritical(score, false) {
 					continue
 				}
 				if err := st.UpsertCVE(ctx, c); err != nil {

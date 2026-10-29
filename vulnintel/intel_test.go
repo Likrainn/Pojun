@@ -190,3 +190,57 @@ func TestSyncStateRoundTrip(t *testing.T) {
 		t.Fatalf("last_sync_at=%v", s1.LastSyncAt)
 	}
 }
+
+// CWE 数组的写读闭环 + 两源合并语义：NVD 先写 → GHSA merge 并集去重，
+// 谁后写都不该抹掉先写的（cwes 列是 M1「CVE→方法论 skill」联动的数据基础）。
+func TestCwesRoundTripAndMerge(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	id := "CVE-9000-0002"
+	t.Cleanup(func() {
+		_, _ = st.db.Exec(`DELETE FROM vuln_cves WHERE cve_id=$1`, id)
+		_, _ = st.db.Exec(`DELETE FROM vuln_cpe_products WHERE cve_id=$1`, id)
+	})
+
+	c := cve(id, "acme", "widget", "1.0", 9.8)
+	c.Cwes = []string{"CWE-89", "CWE-89", "CWE-79"} // 重复项应在入库前去重（数组归一由 SQL 兜底）
+	if err := st.UpsertCVE(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetVuln(ctx, id)
+	if err != nil || got == nil {
+		t.Fatalf("GetVuln: %v", err)
+	}
+	if len(got.Cwes) == 0 {
+		t.Fatal("UpsertCVE 后 GetVuln 应带出 cwes")
+	}
+	has := func(list []string, want string) bool {
+		for _, x := range list {
+			if x == want {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(got.Cwes, "CWE-89") || !has(got.Cwes, "CWE-79") {
+		t.Fatalf("cwes=%v，应含 CWE-89 与 CWE-79", got.Cwes)
+	}
+
+	// GHSA merge：补一条 NVD 没有的 CWE，已有值不被覆盖。
+	if err := st.mergeGhsaCWEs(ctx, GhsaFinding{ID: id, Cwes: []string{"CWE-200"}}); err != nil {
+		t.Fatal(err)
+	}
+	got2, _ := st.GetVuln(ctx, id)
+	if !has(got2.Cwes, "CWE-200") || !has(got2.Cwes, "CWE-89") {
+		t.Fatalf("GHSA merge 后 cwes=%v，应为三源并集", got2.Cwes)
+	}
+
+	// search_vulns 的命中行也要带出 cwes。
+	hits, err := st.SearchVulns(ctx, "acme", "widget", "", 10)
+	if err != nil || len(hits) == 0 {
+		t.Fatalf("SearchVulns: %v", err)
+	}
+	if !has(hits[0].Cwes, "CWE-89") {
+		t.Fatalf("search hit cwes=%v，应含 CWE-89", hits[0].Cwes)
+	}
+}

@@ -140,32 +140,32 @@ func TestRecentCriticalFiltersBySeverityAndKEV(t *testing.T) {
 		}
 	}
 	_ = mk
-	// 直接测筛选函数本身。
+	// 直接测筛选函数本身。severity 字符串刻意不出现在判据里
+	//（"CRITICAL" 而无分数是数据异常，不能据此放行）。
 	cases := []struct {
-		sev    string
-		score  float64
+		score  *float64
 		kev    bool
 		wantOK bool
 	}{
-		{"CRITICAL", 9.8, false, true},
-		{"CRITICAL", 9.0, false, true},
-		{"HIGH", 8.9, false, false},
-		{"HIGH", 7.5, true, true}, // KEV 优先：已在野利用
-		{"MEDIUM", 5.0, false, false},
-		{"CRITICAL", 8.5, false, false}, // 分数不够
+		{f64(9.8), false, true},
+		{f64(9.0), false, true},
+		{f64(8.9), false, false},
+		{f64(7.5), true, true}, // KEV 优先：已在野利用
+		{f64(5.0), false, false},
+		{f64(8.5), false, false}, // 分数不够
 	}
 	for _, c := range cases {
-		if got := isRecentCritical(c.sev, c.score, c.kev); got != c.wantOK {
-			t.Errorf("isRecentCritical(sev=%s score=%.1f kev=%v)=%v，应为 %v",
-				c.sev, c.score, c.kev, got, c.wantOK)
+		if got := isRecentCritical(c.score, c.kev); got != c.wantOK {
+			t.Errorf("isRecentCritical(score=%v kev=%v)=%v，应为 %v",
+				c.score, c.kev, got, c.wantOK)
 		}
 	}
 }
 
 // 分数缺失时（metrics 空）不应误判为高危。
 func TestIsRecentCriticalHandlesMissingScore(t *testing.T) {
-	if isRecentCritical("", 0, false) {
-		t.Error("无严重度无分数无 KEV 时不应判为高危")
+	if isRecentCritical(nil, false) {
+		t.Error("无分数无 KEV 时不应判为高危")
 	}
 }
 

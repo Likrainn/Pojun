@@ -59,26 +59,34 @@ func (s *Store) UpsertGhsa(ctx context.Context, f GhsaFinding) (string, error) {
 		if err := s.mergeGhsaVersion(ctx, f); err != nil {
 			return "", err
 		}
+		// CWE 同理是补充语义：NVD weaknesses 常缺（尤其新披露），GHSA 的
+		// cwes 并进去做 skill 联动；已有值不被抹掉。
+		if err := s.mergeGhsaCWEs(ctx, f); err != nil {
+			return "", err
+		}
 		return "merged", nil
 	}
 
 	// cpe_criteria 存 GHSA 的包+区间描述（不是 CPE 串）——展示用。
 	criteria := ghsaCriteria(f)
 	refs := marshalJSONB(f.Refs)
+	cwes := marshalTextArray(f.Cwes)
 	published := nullTime(f.Published)
 	modified := nullTime(f.Updated)
 
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO vuln_cves
 		(cve_id, source, title, description, severity, cvss_score, cvss_vector,
-		 published_at, modified_at, cpe_criteria, refs, synced_at)
-		VALUES ($1,'ghsa',$2,$3,$4,$5,'',$6,$7,$8,$9,now())
+		 published_at, modified_at, cpe_criteria, refs, cwes, synced_at)
+		VALUES ($1,'ghsa',$2,$3,$4,$5,'',$6,$7,$8,$9,$10::text[],now())
 		ON CONFLICT (cve_id) DO UPDATE SET
 		  source='ghsa',
 		  title=EXCLUDED.title, description=EXCLUDED.description,
 		  severity=EXCLUDED.severity, cvss_score=EXCLUDED.cvss_score,
 		  published_at=EXCLUDED.published_at, modified_at=EXCLUDED.modified_at,
-		  cpe_criteria=EXCLUDED.cpe_criteria, refs=EXCLUDED.refs, synced_at=now()`,
-		f.ID, f.Title, "", f.Severity, f.Score, published, modified, criteria, refs); err != nil {
+		  cpe_criteria=EXCLUDED.cpe_criteria, refs=EXCLUDED.refs,
+		  cwes=(SELECT ARRAY(SELECT DISTINCT unnest(vuln_cves.cwes || EXCLUDED.cwes))),
+		  synced_at=now()`,
+		f.ID, f.Title, "", f.Severity, f.Score, published, modified, criteria, refs, cwes); err != nil {
 		return "", fmt.Errorf("upsert ghsa %s: %w", f.ID, err)
 	}
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM vuln_cpe_products WHERE cve_id=$1`, f.ID); err != nil {
@@ -125,6 +133,21 @@ func (s *Store) mergeGhsaVersion(ctx context.Context, f GhsaFinding) error {
 				return fmt.Errorf("merge ghsa %s: %w", f.ID, err)
 			}
 		}
+	}
+	return nil
+}
+
+// mergeGhsaCWEs 把 GHSA 的弱点编号并进已有行的 cwes 数组（并集去重）。
+// GHSA 没给 CWE 时不动行。
+func (s *Store) mergeGhsaCWEs(ctx context.Context, f GhsaFinding) error {
+	if len(f.Cwes) == 0 {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE vuln_cves SET
+		cwes=(SELECT ARRAY(SELECT DISTINCT unnest(cwes || $1::text[])))
+		WHERE cve_id=$2`,
+		marshalTextArray(f.Cwes), f.ID); err != nil {
+		return fmt.Errorf("merge ghsa cwes %s: %w", f.ID, err)
 	}
 	return nil
 }

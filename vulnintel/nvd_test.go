@@ -123,3 +123,47 @@ func TestSplitUnescapedColons(t *testing.T) {
 		t.Fatalf("escaped fields lost: %q %q", got[3], got[4])
 	}
 }
+
+// ToCVE 必须解析 weaknesses 里的 CWE 编号：去重、只收标准编号、NVD 内部
+// 占位（NVD-CWE-OTHER / NVD-CWE-NOINFO / CWE-OTHER）不进库。
+// 这是「查到 CVE → 提示对应方法论 skill」联动（M1 闭环）的 NVD 侧入口。
+func TestToCVEParsesWeaknesses(t *testing.T) {
+	wrap := nvdWrapper{CVE: nvdCVE{
+		ID:        "CVE-2026-9999",
+		Published: "2026-10-01T00:00:00.000",
+		Descriptions: []nvdDescription{{Lang: "en", Value: "SQL injection in the admin console."}},
+		Weaknesses: []nvdWeakness{
+			{Description: []nvdDescription{{Lang: "en", Value: "CWE-89"}}},
+			{Description: []nvdDescription{{Lang: "en", Value: "CWE-89"}}},   // 重复（不同 source 常见）
+			{Description: []nvdDescription{{Lang: "en", Value: "cwe-79"}}},  // 小写 → 归一
+			{Description: []nvdDescription{{Lang: "en", Value: "NVD-CWE-OTHER"}}}, // 占位 → 丢弃
+			{Description: []nvdDescription{{Lang: "en", Value: "NVD-CWE-noinfo"}}},// 占位 → 丢弃
+			{Description: []nvdDescription{{Lang: "zh", Value: "CWE-200"}}}, // 非 en → 丢弃
+		},
+	}}
+	c, ok := ToCVE(wrap)
+	if !ok {
+		t.Fatal("ToCVE 应成功")
+	}
+	want := []string{"CWE-89", "CWE-79"}
+	if len(c.Cwes) != len(want) {
+		t.Fatalf("cwes=%v，应为 %v", c.Cwes, want)
+	}
+	for i := range want {
+		if c.Cwes[i] != want[i] {
+			t.Fatalf("cwes=%v，应为 %v", c.Cwes, want)
+		}
+	}
+}
+
+// 没有任何 weaknesses 时 cwes 应为空数组而不是 nil（marshal 后省略即可，
+// 但不能 panic）。
+func TestToCVEWithoutWeaknesses(t *testing.T) {
+	c, ok := ToCVE(nvdWrapper{CVE: nvdCVE{
+		ID:           "CVE-2026-9998",
+		Descriptions: []nvdDescription{{Lang: "en", Value: "Some issue."}},
+	}})
+	if !ok || len(c.Cwes) != 0 {
+		t.Fatalf("无 weaknesses 时 cwes 应为空，got=%v ok=%v", c.Cwes, ok)
+	}
+}

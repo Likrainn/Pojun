@@ -1439,6 +1439,10 @@ CREATE TABLE IF NOT EXISTS vuln_cves (
 CREATE INDEX IF NOT EXISTS idx_vuln_cves_severity ON vuln_cves(severity);
 CREATE INDEX IF NOT EXISTS idx_vuln_cves_published ON vuln_cves(published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_vuln_cves_kev ON vuln_cves(kev, published_at DESC) WHERE kev;
+-- 弱点分类（CWE-79 这类编号数组）：NVD weaknesses / GHSA cwes 两源写入。
+-- 用途：get_vuln/search_vulns 把 CWE 交给模型，并联动按 CWE 打标的
+-- 方法论 skill（server 侧 LoadSkillTags 的 cwe 标签）。
+ALTER TABLE vuln_cves ADD COLUMN IF NOT EXISTS cwes TEXT[] NOT NULL DEFAULT '{}';
 
 -- 从 CPE criteria 提取的 (vendor, product) 倒排表：search_vulns 按 product 名
 -- 命中的索引。与 vuln_cves.cve_id 同生共死（upsert CVE 时先删后插）。
