@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -107,12 +108,23 @@ func (s *Store) writeBody(r io.Reader, expectedLength int64, expectedHash string
 	if err = os.Rename(f.Name(), path); err != nil {
 		return "", err
 	}
-	d, err := os.Open(filepath.Dir(path))
+	return hash, syncDir(filepath.Dir(path))
+}
+
+// syncDir 刷掉目录项（rename 落盘的崩溃一致性语义）。Windows 的目录句柄
+// 不支持 FlushFileBuffers——os.Open 目录成功但 Sync() 必然 "Access is
+// denied"（实测 2026-10-29，evidence 全部测试因此挂）——目录项由 NTFS
+// 自行保证；d.Sync() 的持久化语义只在类 Unix 平台成立。
+func syncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	d, err := os.Open(dir)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer d.Close()
-	return hash, d.Sync()
+	return d.Sync()
 }
 
 // StageFindingsExport freezes bindings/report versions and makes private body

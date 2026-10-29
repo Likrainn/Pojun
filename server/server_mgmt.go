@@ -1551,7 +1551,11 @@ func skillRelPath(file string) (string, string) {
 	}
 	// 4. Normalize and final safety re-check after Clean.
 	//    filepath.Clean removes redundant separators and resolves single dots.
-	clean := filepath.Clean(file)
+	//    Windows 的 Clean 会产出反斜杠，而本函数的字符白名单拒绝反斜杠、
+	//    对外契约（前端/zip 相对路径）也统一正斜杠——ToSlash 归一后再终检，
+	//    否则 Windows 上 walkSkillFiles 列出的子目录文件会被这里的白名单
+	//    拒掉，「列表→读取」回路整个是断的（实测 2026-10-29）。
+	clean := filepath.ToSlash(filepath.Clean(file))
 	if clean == "." || filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
 		return "", "invalid path"
 	}
@@ -1573,6 +1577,9 @@ func walkSkillFiles(root string) ([]string, error) {
 		if relErr != nil || rel == "." {
 			return nil
 		}
+		// 对外统一正斜杠（Windows 的 Rel 产出反斜杠；skillRelPath 的白名单
+		// 只收正斜杠，前端也按 / 拼路径）。
+		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
 			entries = append(entries, rel+"/")
 		} else {
