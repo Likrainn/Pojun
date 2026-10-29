@@ -1,28 +1,47 @@
-> [!IMPORTANT]
-> **⚠️ 原 ARTEX 仓库已失效**：原作者仓库 [Autumn-27/ARTEX](https://github.com/Autumn-27/ARTEX) 已被删除，原有链接、Releases 下载与 Docker 镜像源全部失效，**已无法部署使用**。
-> **✅ 本仓库是接手修复后的独立维护版，可直接部署、直接使用**：基于原作者最终定版（v0.3.15）源码持续维护，修复了 Go 模块路径、页面一键更新源与 Docker 镜像源，全部功能正常。部署命令与原仓库一致：`git clone https://github.com/chu0119/ARTEX.git && cd ARTEX && ./install.sh`，详见下方[安装](#安装)。
-> **🔒 v0.3.85 起内置公网部署加固**：登录防爆破、探活端点无指纹、改密码即吊销全部会话、安全响应头、认证面无产品名——公网部署基线见[安全部署说明](docs/公网部署安全加固-2026-10-29.md)。
-
 <div align="center">
 
 # ARTEX
 
-AI 自主渗透测试系统（Go 后端 + Next.js 前端）
+**AI 自主渗透测试 · 红队作战平台**
 
+Go 单体后端（内嵌 Next.js 前端）· PostgreSQL · 多 Agent 自主推进 · 全程证据留痕
 
-🌐 **在线 Demo**： [https://artex-demo.vercel.app/](https://artex-demo.vercel.app/)
+[![Release](https://img.shields.io/github/v/release/chu0119/ARTEX?include_prereleases&label=release)](https://github.com/chu0119/ARTEX/releases)
+[![CI](https://github.com/chu0119/ARTEX/actions/workflows/ci.yml/badge.svg)](https://github.com/chu0119/ARTEX/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey)
 
-📦 **独立维护版**（接手自已删除的原作者仓库）；Docker 镜像：`xingchuan1314/artex`（Docker Hub）· `ghcr.io/chu0119/artex`
-
-🧠 **轻量版**：不想部署整套平台？试试 [artex-skill](https://github.com/chu0119/artex-skill) —— ARTEX 方法论的单技能版，任意 AI Agent 即装即用
+📦 **Docker**：`ghcr.io/chu0119/artex` · `xingchuan1314/artex`
+🧠 **单技能版**：[artex-skill](https://github.com/chu0119/artex-skill)——ARTEX 方法论的单 skill 版，任意 AI Agent 即装即用
 
 </div>
 
 ---
 
-## 截图预览
+## 这是什么
 
-> 完整交互见[在线 Demo](https://artex-demo.vercel.app/)。
+ARTEX 是一套 **LLM 多 Agent 自主渗透测试平台**：你给一句话目标，它自动完成
+「目标拆解 → 侦察 → 漏洞挖掘 → 利用 → 后渗透 → 报告」全流程，人随时可以插手纠偏。
+
+与本仓库**前一版本**（接手自已删除的原作者项目 `Autumn-27/ARTEX`，基于其最终定版
+v0.3.15）相比，现在的 ARTEX 已经是**完全独立演进的新项目**——原作者的代码留在
+git 历史里作为起点，v0.3.16 以来的 **160+ 提交、约 4 万行新增**全部由本仓库的
+维护者完成，覆盖了原作者版本没有的整条能力线：
+
+| 能力线 | 本版本做了什么 |
+|---|---|
+| **漏洞情报运营** | NVD / CISA KEV / GitHub Advisory / PoC 聚合 / nuclei 模板联动 / 资产指纹→CVE 反向匹配 / **近期高危快通道**（30 分钟一轮）——原作者版本完全没有情报层 |
+| **红队作战** | TCP 回连接收器（接住反弹 shell 并留证）/ **C2 出口三形态**（direct / SSH 中继托管 / manual）/ redteam-ops 后渗透方法论 skill / 9 件后渗透工具（socat/proxychains/ligolo/linpeas/pspy/evil-winrm…） |
+| **安全与合规** | 登录防爆破（IP 锁定+全局限流）/ 探活端点去指纹 / 改密码即吊销全部会话 / 安全响应头 / 认证面无产品名——**公网部署基线** |
+| **工程可靠性** | LLM 三通道轮询（熔断+故障转移+用量归因）/ 拆解墙钟 / planner 双保险 / 任务收官 / 一键更新（校验+回滚） |
+| **工具与交付** | 宿主工具 54+ 件**一键装齐** / 漏洞 19 类标准枚举 / Word 报告导出 / 证据版本化+sha256 校验 / 手机端适配 |
+
+原作者版本有的核心（双图架构、planner/worker 编排、MITM 流量代理、审批门）全部
+保留并在其上加固；下文详述。
+
+---
+
+## 截图预览
 
 | 仪表盘（总览 / Token 消耗 / 活动流） | 任务列表 |
 | :---: | :---: |
@@ -36,554 +55,335 @@ AI 自主渗透测试系统（Go 后端 + Next.js 前端）
 | :---: | :---: |
 | ![发现](screenshots/findings.png) | ![资产](screenshots/assets.png) |
 
-| 资产覆盖图（力导向布局 · 已测高亮 · 节点折叠展开） |
-| :---: |
-| ![资产覆盖图](screenshots/assets_test.png) |
-
-| 流量录制 | 人在环路对话 |
+| 资产覆盖图（力导向布局 · 已测高亮） | 流量录制 |
 | :---: | :---: |
-| ![流量](screenshots/traffic.png) | ![对话](screenshots/chat.png) |
+| ![资产覆盖图](screenshots/assets_test.png) | ![流量](screenshots/traffic.png) |
 
-| Agent 管理 | LLM 配置 |
-| :---: | :---: |
-| ![Agent](screenshots/agents.png) | ![LLM](screenshots/llm.png) |
-
-| 拦截审批 | 后端日志 |
-| :---: | :---: |
-| ![拦截](screenshots/intercept.png) | ![日志](screenshots/logs.png) |
-
+| Agent 管理 | LLM 配置 | 拦截审批 | 后端日志 |
+| :---: | :---: | :---: | :---: |
+| ![Agent](screenshots/agents.png) | ![LLM](screenshots/llm.png) | ![拦截](screenshots/intercept.png) | ![日志](screenshots/logs.png) |
 
 ---
 
-## 审批记录详情
+## 核心设计
 
-全局「审批记录」、任务内「拦截审批」及对话中的审批卡片均支持展开查看详情。展示结构参考
-[AegisHook 的审批详情组件](https://github.com/RuoJi6/AegisHook/blob/main/web/src/components/CallDetail.vue)，沿用 ARTEX 的组件和主题：
+### 双图架构：资产图 × 探索图
 
+渗透测试的全部状态拆成两张独立、由锚点缝合的图：
 
-## 资产同步（ScopeSentry）
+- **资产图**（全局共享）：`root_domain / subdomain / ip / service / app / endpoint`
+  六类节点的真值库，跨任务复用；公司归属 + 授权边界（task_scope）挂在这里。
+- **探索图**（每任务一份）：`goal → intent → fact / finding` 的推进链，五种边
+  （spawns / derived_from / yields / proves / covers）构成**血缘**——「这个发现
+  是从哪条线索推出来的」全程可回溯，这是**报告可信度的根基**。
 
-支持从 [ScopeSentry](https://github.com/Autumn-27/ScopeSentry) 直接同步资产数据，免去重复收集：
+```mermaid
+flowchart LR
+  subgraph EG["探索图（每任务 · 推进链）"]
+    direction TB
+    G["goal"] -->|spawns| I1["intent A"]
+    I1 -->|yields| F["fact"]
+    F -->|derived_from| I2["intent B"]
+    I2 -->|yields| FD["finding 漏洞"]
+  end
+  subgraph AG["资产图（全局 · 真值库）"]
+    direction TB
+    RD["root_domain"] --> SD["subdomain"] --> SV["service"] --> EP["endpoint"]
+  end
+  I1 -.->|anchor| SD
+  FD -.->|anchor| EP
+```
 
-- 在「**资产同步**」页填 ScopeSentry 的地址与 API Key，接入数据源；
-- 按**项目**或**任务**维度选择要同步的目标与资产类型（域名 / 子域 / IP / 端口 / 站点 / 端点…）；
-- 一键导入并按公司资产范围归并，直接进入 ARTEX 的资产图供 agent 探索使用。
+### 多 Agent 自主推进
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant EV as 图变更(800ms 防抖)
+  participant P as planner（每轮新会话）
+  participant FR as frontier 意图队列
+  participant W as worker ×N
+  EV-->>P: 唤醒（边沿/心跳）
+  P->>FR: add_intent 派 0..4 个意图（带锚定资产）
+  W->>FR: CAS 领取意图
+  W->>W: 真实工具执行（Bash/HTTP 全程过 MITM 留痕）
+  W->>EV: 写回 fact/asset/finding + 每步 activity
+  EV-->>P: 图变更 → 下一轮（闭环）
+```
+
+- **planner** 是唯一意图生成者，持有一份跨唤醒共享的 todolist——串行利用链
+  （注入点→凭据→横向）记录一次、按依赖逐步派发，不重复不错序。
+- **worker** 做完一条意图即停；结果写回双图后自动唤醒 planner。
+- **空转收场 / 拆解墙钟 / 规划轮超时 / model_error 重跑** 多层韧性：免费限流
+  通道也能稳定跑完任务（三通道轮询 + 故障转移 + 熔断实测）。
+- **人在环路**：对话纠偏 / 意图暂停取消 / 人工审批 / `steer_work` 实时纠偏，
+  每步 activity 在 UI 内联可见。
+
+### 漏洞情报运营（持续，不是静态知识库）
+
+多数同类产品的情报是「按组件查」；ARTEX 做的是「**按时间流**」——
+**最近 7 天爆了什么 → 匹配我的资产 → 排进任务**：
+
+- NVD 全量/增量 + **CISA KEV 在野利用** + **GitHub Advisory**（版本区间第二来源）
+  + GitHub PoC 聚合
+- **近期高危快通道**：按发布时间每 30 分钟拉 CVSS≥9.0 或 KEV，几十分钟进库
+- **资产指纹→CVE 反向匹配**：同步的 CVE 自动匹配资产 technologies 指纹，
+  命中即向任务挂 hint
+- **版本区间精确判定**：`search_vulns` 返回 `version_in_range` 三态；
+  NVD 不填区间时 GHSA 补（保守判定：解析不出→「可能受影响」）
+
+### 红队作战能力
+
+```mermaid
+flowchart LR
+  subgraph L["回连接收器 listener"]
+    L1["listener_start<br/>接住反弹 shell/OOB"]
+    L2["逐会话捕获<br/>来源/时间/内容 64KB"]
+    L3["listener_sessions<br/>会话留证"]
+  end
+  subgraph E["C2 出口三形态（可选）"]
+    E1["direct<br/>本机可达"]
+    E2["ssh 中继<br/>无公网+公网中转机<br/>SSH -R 自动托管"]
+    E3["manual<br/>已有手工转发"]
+  end
+  E --> L1
+```
+
+- **回连接收器**：接住反弹 shell / OOB 回连，逐会话记录来源、时间、捕获内容；
+  REST + agent 工具双入口；启停走人工审批（ask）。
+- **C2 出口配置**：本机有公网→direct；无公网+公网中转机→SSH 反向隧道平台托管
+  （断线自动重连）；已有转发→manual。`listener_start` 返回解析后的回连地址，
+  agent 直接填 payload，无需自行判断网络形态。
+- **redteam-ops skill**：后渗透六阶段方法论（落地稳定化→提权→权限保持→凭据
+  获取→横向移动→数据获取回传→收尾）+ 证据纪律。
+- **后渗透工具 54+**：impacket/netexec/evil-winrm/chisel/ligolo-ng/proxychains/
+  socat/linpeas/pspy/responder/sqlmap/hydra/hashcat/nuclei/ffuf…全部可在
+  「宿主环境」页**一键装齐**（特权助手 artex-hostd 串行排队执行）。
+
+### 审批与拦截：三层闸门
+
+| 层 | 语义 | 内置规则 |
+|---|---|---|
+| 明令禁止 `deny` | 任何语境都不可逆且无合法渗透用途——不调模型直接拒 | 10 条 |
+| 交 Agent 研判 `judge` | 作用对象取决于上下文（删测试表 vs 删生产表）——命中后走模型裁决 | 12 条 |
+| 人工确认 `ask` | 平台能力边界变更（如开监听端口）——转人工审批 | 1 条 |
+
+- 规则级 timeout 真生效（研判类 90s/allow，硬禁类 30s/deny）；
+- 模型裁决**严格 JSON 解析**（解析失败走失败策略，绝不猜）；
+- 拦截原因带「平台管控」框架——防止 agent 把平台策略当目标防御来绕；
+- 反注入边界：裁判输入刻意收窄（仅工具名+参数+工作目录），历史不进裁判视野。
+
+### 全程证据链
+
+- **MITM 记录代理**：worker 的全部 HTTP/S 流量逐请求留存（CA 签发留痕）；
+- **发现绑定流量**：finding 可绑定 baseline/proof/verification/supporting 四类
+  流量证据，快照版本化（sha256），报告引用可验证；
+- **数据回传**：本机文件内容外传类命令有专属拦截规则（judge 研判）；
+- **报告导出**：Word（OOXML 手写零依赖）按 19 类漏洞枚举折叠聚合；
+- **对抗式自检**：换身份/换参数顺序/换客户端复现——「确认了才报」。
 
 ---
 
 ## 安装
 
-> 依赖数据库 **PostgreSQL**；探索需配置 **LLM**（`ANTHROPIC_API_KEY` 或 `OPENAI_API_KEY`，也可在 UI 里配）。
->
-> **部署形态怎么选**：生产服务器/长期使用 → **方式一（一键部署脚本，二进制 + systemd，主推）**；本地快速体验 → 方式一里选 Docker；其余见方式二/三。
+> 依赖 **PostgreSQL**；探索需配置 **LLM**（UI 里配，支持 Anthropic / OpenAI /
+> 任意 OpenAI 兼容网关，三通道轮询 + 故障转移）。
 
 ### 方式一：一键部署脚本（推荐）
 
-**一个脚本**，运行后选**二进制**还是 **Docker**，再走对应流程。二进制是主推形态：单文件 + systemd + 系统 PostgreSQL，运行时零依赖。
-
 ```bash
-# 已 clone 仓库
-sudo ./install.sh                      # 交互选择部署形态（默认二进制）
-
-# 或直接指定
-sudo ./install.sh --mode=binary        # 二进制（推荐）
-sudo ./install.sh --mode=docker        # Docker Compose
+git clone https://github.com/chu0119/ARTEX.git && cd ARTEX
+sudo ./install.sh                    # 交互选择（默认二进制）
+sudo ./install.sh --mode=binary      # 二进制 + systemd（生产推荐）
+sudo ./install.sh --mode=binary --with-tools   # 顺装常用渗透工具
+sudo ./install.sh --mode=docker      # Docker Compose
 ```
 
-也可以不 clone，直接跑 Release 上的脚本：
+幂等：重复执行 = 原地升级；`config.json` / `jwt.key` / 数据 / 数据库不动。
+卸载：`systemctl disable --now artex artex-hostd && rm -rf /opt/artex`。
 
-```bash
-curl -fsSL https://github.com/chu0119/ARTEX/releases/latest/download/install.sh \
-  | sudo bash -s -- --mode=binary
-```
+### 方式二：下载预编译二进制
 
-常用选项：
-
-| 选项 | 说明 |
-|---|---|
-| `--mode=binary\|docker` | 部署形态；不给则交互选择 |
-| `--with-tools` | 顺装常用渗透工具（nmap/sqlmap/hydra/gobuster/nuclei/httpx…） |
-| `--install-proxy=URL` | **装机代理**：apt 与 GitHub 下载走它（与 Agent 目标流量代理无关） |
-| `--version=VER` | 指定版本，默认 latest |
-| `--dir=PATH` | 安装目录，默认 `/opt/artex` |
-| `--no-installer` | 不装特权助手，关掉 Web 端一键安装能力 |
-| `-y, --yes` | 非交互，全部用默认值 |
-
-**幂等**：重复执行 = 原地升级程序；`config.json` / `jwt.key` / `data/` / 数据库 / `.env` 都不动。
-
-**卸载**：
-- 二进制 `systemctl disable --now artex artex-hostd && rm -rf /opt/artex`
-- Docker `cd /opt/artex && docker compose down -v && rm -rf /opt/artex`
-
-#### 二进制形态：宿主工具与「一键安装」
-
-二进制形态下**宿主装了什么工具，Agent 就能经 Bash 直接调用什么**。Web「系统 → 宿主环境」页给出家底清单，缺失项可**一键安装**：
-
-- 安装由随包发布的特权助手 `artex-hostd` 执行（root 常驻，只监听一个 Unix socket）。
-  主服务单元带 `NoNewPrivileges` + `ProtectSystem=strict`，**本身没有提权能力**，所以
-  安装动作必须落在助手侧；
-- 助手**只认内置白名单里的工具 id**，不接受自由命令；socket 权限 0660 且归运行用户；
-- 装 `nuclei` / `httpx` / `subfinder` 这类走 GitHub Release 的工具，国内通常需要代理——
-  在宿主环境页填「装机代理」，或用 `--install-proxy=` 一步到位。
-
-不想要 Web 端具备装包能力，用 `--no-installer` 关掉即可，体检/查看不受影响。
-
-`--with-tools` 会装一批系统源内的常用工具，再补 Go 系工具（有 Go 工具链时用 `go install`，
-否则跳过；缺的都能在宿主环境页一键补装）。
-
-### 方式二：下载预编译二进制（Releases）
-
-到 [Releases](https://github.com/chu0119/ARTEX/releases) 下载对应平台的 zip，解压后得到 `artex` + `start.sh`（Windows 为 `start.bat`）+ `skills/` + `config.example.json`：
+到 [Releases](https://github.com/chu0119/ARTEX/releases) 下载对应平台 zip
+（5 平台 + SHA256SUMS），解压后：
 
 ```bash
 cp config.example.json config.json   # 填好 database 连接
 ./start.sh                           # → http://localhost:8787
 ```
 
-> 请用 `start.sh` / `start.bat` 启动，而不是直接跑 `./artex`。它是个守护脚本：程序退出后按退出码决定是否重新拉起，**页面上的「一键更新」靠它完成换装**。直接运行 `./artex` 时更新完就不会被拉起了。
-> 后台常驻：`nohup ./start.sh >artex.log 2>&1 &`。
->
-> Linux 服务器上更推荐**方式一**：它会一并处理好 systemd 常驻、PostgreSQL 建库与开机自启。
-> 只想手写 compose 的话，仓库根目录的 `docker-compose.yml` + `.env.example` 仍可直接用
-> （`cp .env.example .env` 填 `POSTGRES_PASSWORD`，再 `docker compose up -d`），
-> 镜像取自 `ghcr.io/chu0119/artex`。
+> 用 `start.sh` 启动而非直接跑二进制——它是守护脚本，「一键更新」靠它完成换装。
 
-> **远程 MCP** 可在系统设置里选择 `http`（Streamable HTTP）或 `sse`（旧版 SSE）。
-> 旧版 SSE 服务通常用 `GET /sse` 建立事件流，再通过它返回的 `/message?sessionId=...`
-> 接收 JSON-RPC 请求；配置时 URL 填 `/sse`，请求头按 `Authorization=Bearer <token>` 填。
-
-### 方式三：从源码编译单二进制
+### 方式三：从源码编译
 
 ```bash
-# 1) 前端静态导出
-cd web && npm ci && npm run build:static && cd ..
-# 2) 拷进内嵌目录
-cp -r web/out server/webui/dist
-# 3) 编译（-tags embedui 才内嵌前端）
-CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
-# 4) 可选：特权安装助手（提供 Web 端「一键安装」，Linux 专用）
-CGO_ENABLED=0 go build -o artex-hostd ./cmd/artex-hostd
-./start.sh
-```
-
-> 只想快速出包就 `./build.sh`——它会把上面这几步（含 hostd 助手，Linux 目标）一次做完。
-
-### 方式四：构建跨平台 Release 压缩包
-
-`build.sh` 会先构建并嵌入前端，再使用 Go linker 去除调试信息，并将发布文件压缩为 zip。Release 模式默认生成 Linux amd64/arm64、macOS amd64/arm64 和 Windows amd64 的 zip 包：
-
-```bash
-./build.sh --release
-# 产物：dist/artex-0.3.3-*.zip
-```
-
-UPX 自解压二进制可能与部分 Linux 内核、虚拟化环境或安全策略不兼容，因此默认不启用。可用 `ARTEX_TARGETS` 自定义目标；确认目标运行环境兼容时，可显式传入 `--upx` 进一步缩小二进制：
-
-```bash
-ARTEX_TARGETS=linux/amd64,windows/amd64 ./build.sh --release
-./build.sh --target linux/amd64 --upx
-```
-
----
-
-## 更新升级
-
-> 升级只换程序、不动数据：Postgres 数据卷 `pgdata`、`./data`（jwt.key / SQLite 等）、`./skills` 都会保留。**数据库迁移无需手动执行**——`artex` 每次启动会幂等重跑 `schema.sql`（含 `ADD COLUMN` / `CREATE INDEX IF NOT EXISTS`），即“重启即迁移”。升级前仍建议先备份 `./data` 与数据库。
-
-### 方式一：页面一键更新（推荐）
-
-在 **系统配置** 页（侧边栏「系统配置」→ `/system/settings`）的**版本与更新**卡片里，可以直接检查并安装新版本，无需登录服务器。
-
-点「更新」后：下载当前平台的发布包 → 比对 Release 的 `SHA256SUMS` → 用 `-h` 冒烟测试新二进制 → 暂存为 `artex.new` → 程序退出，由 `start.sh` / `start.bat` 重新拉起并完成换装。页面会自动等到新版本上线后刷新。
-
-- **失败不会留下坏程序**：校验或冒烟不通过就丢弃暂存件、继续跑当前版本；换装后的新版若连续 3 次启动失败，会自动回滚到 `artex.old`（失败的那个留作 `artex.failed` 供排查）。
-- **随时可回退**：上一版本保留为 `artex.old`，卡片上有「回滚到上一版本」。注意数据库结构不会回退。
-- **更新会中断正在运行的任务**——更新即重启，请在空闲时进行。
-- **开发构建不给更新**：版本号是 `dev` 或 `git describe` 带后缀时禁用，避免正式版覆盖掉本地调试的二进制。
-- **Docker 下只换程序、不换镜像**：镜像里的 playwright / nmap 等工具链不会跟着升级，且 `docker compose up -d` 重建容器后会退回镜像自带的版本。要连镜像一起升级仍请用 `docker compose pull artex && docker compose up -d artex`。
-- 访问 GitHub 需要代理时，在**宿主环境页**配置**装机代理**即可，更新链路会走它（没配置时回落到全局代理）。更新只从 GitHub 域名下载并强制 HTTPS。
-- **特权安装助手会自动跟随**：主程序升级重启后，会把自己的版本号告诉 `artex-hostd`；助手版本落后就**自己**从同一个 Release 下载、按 `SHA256SUMS` 校验、冒烟测试后原子换装（旧版保留为 `artex-hostd.prev`），再由 systemd 拉起。
-  它必须自己做——助手以 root 运行且装在 `/usr/local/bin`，主服务受 `ProtectSystem=strict` 限制写不进去；也正因如此，主服务只能影响"装哪个**已发布**版本"，影响不到"装什么内容"。
-  0.3.22 之前装的老助手没有这个能力，重跑一次 `install.sh` 引导即可，之后就会一直自动跟随。
-
-### 方式二：重跑部署脚本
-
-`install.sh` 是幂等的——重复执行就是升级：换程序、保留 `config.json` / `jwt.key` / `data/` / 数据库 / `.env`。
-
-```bash
-sudo ./install.sh --mode=binary        # 升到最新 Release（或 --version=vX.Y.Z 指定版本）
-sudo ./install.sh --mode=docker        # 拉新镜像并重建容器
-```
-
-Docker 手动部署（用仓库自带 compose）的升级：
-
-```bash
-cd ARTEX
-git pull                       # 更新 compose / 脚本（可选）
-# 指定版本：在 .env 设 ARTEX_TAG=v0.3.20；不设则用 latest
-docker compose pull artex
-docker compose up -d artex     # 换新镜像重启 → 自动迁移 schema
-docker image prune -f          # 清理旧镜像（可选）
-```
-
-### 方式三：预编译二进制（Releases）
-
-到 [Releases](https://github.com/chu0119/ARTEX/releases) 下载新版本 zip，停掉旧进程后覆盖 `artex`（Linux 还含 `artex-hostd`）与 `skills/`（保留你的 `config.json` 与 `data/`），重启即可：
-
-```bash
-cp -r <解压目录>/skills ./ && cp <解压目录>/artex ./
-# Linux 且装了安装助手的，连它一起换：
-# sudo install -m 0755 <解压目录>/artex-hostd /usr/local/bin/artex-hostd && sudo systemctl restart artex-hostd
-./start.sh
-```
-
-### 方式四：从源码编译
-
-```bash
-git pull
 cd web && npm ci && npm run build:static && cd ..
 cp -r web/out server/webui/dist
 CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
-CGO_ENABLED=0 go build -o artex-hostd ./cmd/artex-hostd   # 可选：一键安装助手
-# 重启 ./start.sh（装了助手的话再 sudo systemctl restart artex-hostd）
+CGO_ENABLED=0 go build -o artex-hostd ./cmd/artex-hostd   # 可选：特权安装助手
+./start.sh
 ```
+
+### 首次启动
+
+1. 浏览器打开 `http://<host>:8787` → 初始化管理员密码（≥8 位）
+2. 「LLM 配置」页配模型通道（≥2 个通道 + 开启轮询 = 实战推荐）
+3. 「宿主环境」页一键装齐缺失工具（或 `install.sh --with-tools`）
+4. 新建任务，给一句话目标
+
+### 公网部署
+
+v0.3.85 起内置公网部署安全基线（登录防爆破、探活去指纹、改密吊销会话、
+认证面无产品名）。必须：HTTPS 反代 + 覆写 `X-Forwarded-For`。
+完整基线见 [docs/公网部署安全加固-2026-10-29.md](docs/公网部署安全加固-2026-10-29.md)。
+
+### 升级
+
+**页面一键更新**（系统配置 → 版本与更新）：下载 → SHA256 校验 → 冒烟测试 →
+原子换装 → 失败自动回滚到上一版。升级只换程序不动数据，schema 幂等迁移。
 
 ---
 
-## 配置
+## 配置速查
 
-**数据库**（`config.json`，或用环境变量 `ARTEX_PG_DSN` 覆盖）：
+**数据库**（`config.json` 或 `ARTEX_PG_DSN`）：
 
 ```json
-{
-  "database": {
-    "host": "127.0.0.1", "port": 5432,
-    "user": "artex", "password": "yourpass",
-    "dbname": "artex", "sslmode": "disable"
-  }
-}
+{ "database": { "host": "127.0.0.1", "port": 5432, "user": "artex",
+                "password": "…", "dbname": "artex", "sslmode": "disable" } }
 ```
 
-**LLM**：`export ANTHROPIC_API_KEY=sk-...`（或 `OPENAI_API_KEY`），也可在 UI 的「LLM 配置」页填写。
-可选：`ARTEX_LLM_PROVIDER` / `ARTEX_LLM_MODEL` / `ARTEX_LLM_BASE_URL` / `ARTEX_LLM_PROXY`。
+**LLM**：环境变量 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` 可兜底，UI「LLM 配置」页
+配多通道 + 开启「LLM 轮询」。常用参数：`./start.sh -addr :8787 -proxy :8788`。
 
-> **部署前置建议**：实战任务动辄数百次模型调用，**建议在「LLM 配置」里配 ≥2 个通道
-> 并开启「LLM 轮询」**（429/5xx 自动故障转移 + 熔断）。只配单个免费通道时，上游限流
-> 会把在跑的意图收成 blocked（行为符合设计：重试耗尽后停下来等人工，不会静默失败）。
+**C2 出口**（可选）：`PUT /api/c2/config` 配 `mode=direct|ssh|manual` +
+中转机地址/SSH 凭据——`listener_start` 自动返回解析后的回连地址。
 
-**并发**：每个任务的 work agent 数在「系统设置」里配置（默认 3）。
+---
 
-**常用参数**：`./start.sh -addr :8787 -proxy :8788`（`-addr` 前端+API，`-proxy` 流量录制代理）。启动脚本会把参数原样透传给 `artex`。
+## 反向代理（HTTPS）
 
-### 反向代理部署（HTTPS / 只开放 443）
-
-前端和 API/SSE 都由同一个后端端口（默认 `:8787`）提供，实时活动流默认走**同源**地址，因此**无需配置 `NEXT_PUBLIC_SSE_BASE`**，公网只开放 443、把 8787 留在内网即可。
-
-SSE 是长连接 + 持续推送，反代**必须关闭缓冲**，否则浏览器能连上却收不到事件（表现为活动流一直转圈）。Nginx 示例：
+前端和 API/SSE 同源，反代必须关缓冲。Nginx 示例：
 
 ```nginx
 server {
     listen 443 ssl;
     server_name your.domain.com;
-    # ssl_certificate / ssl_certificate_key ...
-
     location / {
         proxy_pass http://127.0.0.1:8787;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
-        # 登录防爆破按 X-Forwarded-For 计数——反代必须覆写，否则攻击者可伪造
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-
-        # SSE 关键项：关缓冲、长超时、HTTP/1.1
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_read_timeout 3600s;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;  # 限流依赖
+        proxy_buffering off; proxy_read_timeout 3600s;               # SSE 必需
+        proxy_http_version 1.1; proxy_set_header Connection "";
     }
 }
 ```
 
-> 仅当 SSE 需要走与页面不同的来源（如独立子域）时，才在**构建期**设置 `NEXT_PUBLIC_SSE_BASE`（该变量在 `next build` 时固化进静态包，容器运行时再设无效）。
-
-### 公网部署安全基线（v0.3.85 起）
-
-v0.3.85 内置了面向公网暴露的认证面加固，公网部署时请配合以下基线（完整说明见
-[docs/公网部署安全加固-2026-10-29.md](docs/公网部署安全加固-2026-10-29.md)）：
-
-- **内置加固**：登录防爆破（每 IP 失败 5 次锁 15 分钟 + 全局阈值兜底）、
-  `/api/health` 无身份信息（版本走鉴权的 `/api/version`）、改密码即轮换
-  JWT 签名 key（全部旧会话失效）、安全响应头、CORS 放行已移除、
-  认证页（登录/初始化/404/根路径）无产品名指纹。
-- **部署要求**：必须走 HTTPS（反代 TLS 终结即可，自签证书可用于个人实例）；
-  反代**必须覆写 `X-Forwarded-For`**（登录限流按它计数）；建议把后端绑到
-  `127.0.0.1:8787`（`start.sh -addr 127.0.0.1:8787`）、防火墙只放反代端口；
-  公网实例建议再套一层 WAF/CDN 限速（单机限流治不了分布式低速爆破）。
-- **非标准端口**：认证面已去产品名指纹，端口不必固守默认值——反代监听
-  3000/8000 等任意端口均可（上述 nginx 配置把 `listen 443 ssl` 换成
-  `listen 8000 ssl` 即可）。
-
 ---
-
-
 
 ## 开发
 
-### 手动漏洞复测
-
-任务详情的「复测」页签可分页选择本任务的漏洞、查看历次结论和证据，并手动发起复测。启动后保留当前页签，显示转圈图标和「复测中」；确认修复后同步更新漏洞状态。
-
-在漏洞列表每行操作区点击「复测」，或在漏洞详情的「漏洞复测」区域点击「发起复测」，填写可选的修复版本、测试条件或限制，系统会创建独立的复测 Agent 会话，启动后保留当前页面。列表的平铺、按任务分组和资产视图均支持该入口；复测运行时显示转圈图标和「复测中」，需要查看时点击进入对应会话，结束后恢复「复测」。复测无需重新启动原扫描任务，结论分为「仍可复现」「已修复」「无法确认」，每次的结论、证据和会话链接保存在漏洞详情中。
-
-新版后端首次启动会预置可编辑的「漏洞复测」（`retester`）Agent，可在 Agent 管理中配置提示词、LLM、运行预算和工具。默认使用其绑定的 LLM，未绑定则使用全局激活配置。复测会话成功完成且结论为「已修复」时，系统自动将漏洞处置状态改为「已修复」；执行中、失败、停止或其他结论保留原状态。原始证据和报告始终保留。也可在状态下拉菜单中手动选择「已修复」。同一漏洞正在复测时复用已有会话，停止、失败或服务重启后可重新发起。
-
-本版历史记录通过漏洞详情和会话查看，暂未纳入漏洞报告导出或任务归档包，也未自动关联流量包。演示模式只生成明确标注的模拟记录，不请求真实目标。
-
-### 本地运行与测试
-
 ```bash
-./dev.sh    # 后端(:8787) + 流量代理(:8788) + 前端 next dev(:5173) → http://localhost:5173
+./dev.sh    # 后端(:8787) + 流量代理(:8788) + 前端 next dev(:5173)
+go test ./...   # 连 PG 跑全量（CI 用 -p 1 串行防跨包死锁）
+cd web && npx tsc --noEmit && NEXT_EXPORT=1 npx next build
 ```
 
-- 后端：`go run ./cmd/artex`（不带 `-tags embedui` 则不内嵌前端）
-- 前端：`cd web && npm run dev`（`/api` 反代到后端，带热更新）
-- 测试：`go test ./...`
-- Mock 预览（无后端）：`cd web && NEXT_PUBLIC_MOCK=1 npm run dev`
-
-### 漏洞情报与模板库
-
-漏洞情报子系统（`vulnintel`）在服务启动后自动运行：
-
-- **情报同步**：NVD 全量/增量 + CISA KEV 在野利用清单 + GitHub Advisory Database
-  （版本区间第二来源）+ GitHub PoC 聚合；「近期高危快通道」按发布时间每 30 分钟
-  拉一次 CVSS≥9.0 或 KEV 的新披露漏洞。资产指纹命中已知漏洞时自动向任务挂 hint。
-- **nuclei 模板库**：数据目录下的 `nuclei-templates/`（git 浅克隆，自动维护）。
-  全新安装后首次由情报同步协程自动 clone；网络不稳的环境可手动预置：
-  ```bash
-  git clone --depth 1 https://github.com/projectdiscovery/nuclei-templates.git /opt/artex/data/nuclei-templates
-  ```
-- **nuclei 二进制**：`scan_with_nuclei` 工具需要 `nuclei` 在 PATH 上。Debian/Kali
-  可直接 `apt install nuclei`；其他环境从
-  [nuclei releases](https://github.com/projectdiscovery/nuclei/releases) 下载放入
-  `/usr/local/bin`。二进制部署下其余宿主工具（nmap/httpx/ffuf/sqlmap…）可在
-  Web「系统 → 宿主环境」页**一键安装**，或 `install.sh --with-tools` 顺装。
+- 后端：`go run ./cmd/artex`（`-tags embedui` 内嵌前端）
+- 前端：`cd web && npm run dev`（`/api` 反代热更新）
+- Mock 预览：`cd web && NEXT_PUBLIC_MOCK=1 npm run dev`
 
 ---
 
-## 系统技术架构
+## 项目结构
 
-ARTEX 是一套 **LLM 多 agent 驱动的自主渗透系统**：Go 单体后端（内嵌 Next.js 前端）+ PostgreSQL，agent 能力由 [`norma`](https://github.com/Autumn-27/norma) SDK 提供（`agentcore` / `tool` / `permission` / `harness` / `memory` / `transcript`）。核心是**双图架构**，以及围绕它的两条自主性机制：**worker 间过程级信息交换**与 **planner 多轮共享 todolist 稳定攻击链路**。
-
-### 总体分层
-
-```mermaid
-flowchart TB
-  subgraph FE["前端 Next.js（go:embed 内嵌单二进制）"]
-    UI["仪表盘 · 任务 · 资产 · 覆盖图 · 流量 · 工作空间 · 系统配置"]
-  end
-  subgraph SRV["server（Go net/http）"]
-    API["REST /api/*　JWT 鉴权　SSE"]
-    ENG["engine 调度循环"]
-    MGR["Manager　任务/引擎/store 生命周期"]
-  end
-  subgraph AG["agent（norma SDK）"]
-    GO["goals　目标分解 + 提取范围"]
-    PL["planner　规划者（唯一意图生成者）"]
-    WK["worker　执行者 ×N"]
-    MA["mainagent　人在环路"]
-  end
-  subgraph DB["PostgreSQL"]
-    AGRAPH["资产图　assets / companies / task_scope"]
-    EGRAPH["探索图　exploration_nodes / anchors / activity"]
-  end
-  subgraph SUB["支撑子系统"]
-    PROXY["流量记录代理　MITM + CA 留痕"]
-    GUARD["guard / intercept　工具审批门"]
-    ENR["enrich　DNS / HTTP 异步补全"]
-    EXT["MCP · skills · memory · report"]
-  end
-
-  UI -->|HTTP| API
-  API --> MGR --> ENG
-  ENG --> PL
-  ENG --> WK
-  API --> MA
-  API --> GO
-  PL --> DB
-  WK --> DB
-  MA --> DB
-  GO --> DB
-  WK -->|"Bash / HTTP 全程留痕"| PROXY
-  WK --> GUARD
-  WK --> ENR
-  PL -.-> EXT
-  WK -.-> EXT
-  MA -.-> EXT
+```
+cmd/            程序入口（artex 主服务 / artex-hostd 特权助手）
+agent/          多 Agent 层：planner / worker / mainagent / 领域工具（tools_*.go）
+db/             PostgreSQL 唯一存储：schema.sql（幂等迁移）+ 全部表 Store
+server/         HTTP 服务：路由 / 引擎调度 / Manager / 会话 / 报告 / 更新
+intercept/      拦截引擎：规则匹配 → LLM 研判 → allow/ask/deny
+guard/          工具调用审批门（把裁决接进 agent 执行链）
+listener/       回连接收器：接住反弹 shell / OOB 回连并留证
+traffic/        MITM 流量记录代理 + 出口代理池
+vulnintel/      漏洞情报：NVD/KEV/GHSA/PoC/快通道/资产联动/限速闸门
+hosttools/      宿主工具目录（54+ 件，按攻击面分类）
+hostd/          特权助手：root 常驻 unix socket，装工具/特权操作
+llmpool/        LLM 多通道轮询池：熔断/故障转移
+llmrec/         LLM 请求录制与 token 计量
+report/         报告生成：Word 导出（手写 OOXML 零依赖）
+notify/         通知推送：钉钉/飞书/企业微信等
+evidence/       发现的证据留存与版本化
+enrich/         资产自动补全：DNS / HTTP 探测
+selfupdate/     一键自更新：查 Release → 校验 → 换装
+skills/         内置 skill：vuln-hunting / redteam-ops / api-recon / …
+web/            Next.js 前端（静态导出后 go:embed 内嵌）
+docs/           设计文档 / 部署手册 / 评估报告 / 能力对照
 ```
 
-| 层 | 职责 |
-| --- | --- |
-| **前端** | Next.js 静态导出，`go:embed` 内嵌进单二进制；可视化任务/资产/探索链路/覆盖图，人在环路对话 |
-| **server** | `net/http` 路由 + JWT 鉴权 + SSE；`Manager` 托管任务、引擎、DB store 的生命周期 |
-| **engine** | 每任务一个 `plannerLoop` + N 个 worker goroutine；意图领取、超时/暂停/drain |
-| **agent** | goals / planner / worker / mainagent，`ToolSet` 把双图暴露成 LLM 工具 |
-| **db** | 双图的 Postgres 落地（pgx）；schema 随 `go:embed` 每次启动幂等建表 |
-| **支撑** | 记录型 MITM 代理、审批门、异步补全、MCP/技能/记忆/报告 |
+## 文档索引
 
-### 双图架构：探索图 + 资产图
+| 文档 | 内容 |
+|---|---|
+| [docs/01-双图架构.md](docs/01-双图架构.md) | 资产图/探索图、锚点、schema 迁移设计、不变量清单 |
+| [docs/02-引擎与调度闭环.md](docs/02-引擎与调度闭环.md) | planner/worker 编排与生命周期 |
+| [docs/03-LLM接入层.md](docs/03-LLM接入层.md) | 通道选路、轮询池、熔断、录制计量 |
+| [docs/04-审批与拦截.md](docs/04-审批与拦截.md) | 三层规则与裁决链路、反注入边界 |
+| [docs/部署手册.md](docs/部署手册.md) | 部署 / 升级 / 排障（实测踩坑全记录） |
+| [docs/公网部署安全加固-2026-10-29.md](docs/公网部署安全加固-2026-10-29.md) | 公网部署安全基线 |
+| [docs/红队能力建设-2026-10-30.md](docs/红队能力建设-2026-10-30.md) | 杀伤链能力矩阵 / 竞品对照 / 路线图 |
+| [docs/漏洞挖掘能力对比.md](docs/漏洞挖掘能力对比.md) | 与开源同类逐项对比、M 清单 |
+| [docs/产品优化清单-2026-10-29.md](docs/产品优化清单-2026-10-29.md) | 优化/新增/删除路线图 |
 
-系统把「**目标是什么**」和「**测到了什么程度**」拆成两张相互独立、又通过锚点相连的图：
+## 与原作者版本的关系（来源声明）
 
-- **资产图（Asset Graph，全局共享）**：跨任务同一份的资产真值库。节点为 `root_domain / subdomain / ip / service / app / endpoint`，归属公司；域名→子域→服务→端点的父子关系与去重 key 全部由程序计算，agent 只提交原始信息。
-- **探索图（Exploration Graph，每任务独立）**：一次任务的“思考与推进”过程。节点为 `goal（目标）/ intent（意图）/ fact（事实）/ finding（漏洞）/ hint（提示）`，靠 `spawns / derived_from / yields / proves` 等边连成**血缘链**，回答“哪个方向派生自哪些事实、产出了什么”。
-- **两图靠锚点相连**：`exploration_anchors(node_id, asset_id)` 把意图/事实/漏洞锚定到具体资产上——于是既能从“探索方向”看它打的是哪些资产，也能从“某个资产”反查它在本任务被哪些意图测过、得出过哪些事实。这也支撑了**资产测试覆盖度**与**资产覆盖图**（范围内资产 + 已测高亮）。
+原作者 [Autumn-27/ARTEX](https://github.com/Autumn-27/ARTEX)（百度“Agent+”攻防
+挑战赛冠军项目）于 2026-10 删除了仓库，原链接 / Release / Docker 源全部失效。
+本仓库在其**最终定版 v0.3.15**（git 历史 462 提交完整保留）基础上接手维护：
 
-```mermaid
-flowchart LR
-  subgraph EG["探索图（每任务独立 · 推进链）"]
-    direction TB
-    G["goal 目标"]
-    I1["intent 意图 A"]
-    F1["fact 事实"]
-    I2["intent 意图 B"]
-    FD["finding 漏洞"]
-    G -->|spawns| I1
-    I1 -->|yields| F1
-    F1 -->|derived_from| I2
-    I2 -->|proves| FD
-  end
-  subgraph AG["资产图（全局共享 · 真值库）"]
-    direction TB
-    RD["root_domain"]
-    SD["subdomain"]
-    SV["service"]
-    EP["endpoint"]
-    RD --> SD --> SV --> EP
-  end
-  I1 -. anchor .-> SD
-  F1 -. anchor .-> SV
-  I2 -. anchor .-> EP
-  FD -. anchor .-> EP
-```
+- **保留**：双图架构、planner/worker 编排、MITM 流量代理、审批门框架、基础
+  工具集——原作者的架构设计是优秀的，git 历史向其致意；
+- **重建**：全部设计文档（原作者删除过 docs）、CI 门禁、依赖解耦（norma SDK
+  fork）、Docker 源；
+- **新增**：上文[能力线](#这是什么)所列的情报运营 / 红队作战 / 安全加固 /
+  工程可靠性 / 工具与交付五大线，以及 160+ 提交的持续修复与加固。
 
-> 分工：**planner** 读探索图态势、判目标、只在有未覆盖的新方向时派**意图**进 frontier；**worker** 领**一条意图**、用真实工具执行、把新资产/事实/漏洞写回两图后即停。资产图是共享事实，探索图是每任务的推进链。
-
-### 引擎与意图生命周期（一次探索的闭环）
-
-引擎是**事件驱动**的闭环：图一变就唤醒 planner，planner 派意图，worker 领意图执行并写回，写回又触发下一轮——直到目标被证明（`prove_goal`）。
-
-```mermaid
-sequenceDiagram
-  autonumber
-  participant EV as 图变更 debounce
-  participant P as planner
-  participant FR as frontier 意图队列
-  participant W as worker
-  participant PX as 记录代理
-  participant DB as 双图 + activity
-
-  EV-->>P: 唤醒
-  P->>DB: 读态势(graph_overview 预取 + coverage/scope)
-  P->>FR: 派 0..N 个意图(带 asset_ids)
-  Note over P,FR: 大多数唤醒派 0 个——无新方向即结束
-  W->>FR: claimNext 领一条意图
-  W->>DB: 取意图 asset_ids 的原始资产作为初始信息
-  W->>PX: 真实工具执行(Kali / Bash / HTTP)
-  PX-->>W: 响应(全程留痕 + CA 验证)
-  W->>DB: 写回 fact / asset / finding + 每步 activity
-  DB-->>EV: 图变更
-  EV-->>P: 再次唤醒(闭环)
-```
-
-### worker 间的过程级信息交换
-
-一次深入的探索里，很多有价值的观察（某个报错、某段响应、某个隐藏参数）出现在一个 worker 的**执行过程**中，却未必被写成正式 fact。为避免重复劳动、让链路上的 worker 能站在彼此的肩膀上，worker 具备**跨 work 检索过程**的能力：
-
-- `search_all_worker_traces(q)`：在**本任务其他 work 的执行过程**里按关键字检索（自动排除自己这条意图的步骤），命中项带 `intent_id`；
-- `list_worker_traces` / `get_worker_trace(intent_id, step_ids=[…])`：先看有哪些 work 跑过，再取某个 work 具体几步的完整内容做细节交换。
-
-这样即便探索图上还没有对应的 fact，后续 worker 也能复用他人过程中的观察——**信息在 worker 之间以“执行过程”为粒度流动**，而边界不变（每个 worker 仍只做自己领到的那条意图）。
-
-```mermaid
-flowchart LR
-  WA["worker A（意图 #12）"] -->|"每步 activity"| ACT[("探索图 · activity 过程库")]
-  WB["worker B（意图 #34）"] -->|"每步 activity"| ACT
-  WC["worker C（意图 #56）"] ==>|"1) search_all_worker_traces(q)"| ACT
-  ACT ==>|"2) 命中 A/B 的步骤（排除自己）"| WC
-  WC ==>|"3) get_worker_trace(id, step_ids)"| ACT
-  ACT ==>|"4) 返回完整过程内容"| WC
-```
-
-### planner 多轮共享 todolist → 稳定的攻击链路
-
-真实攻击链往往是**有前后依赖的多步序列**（如：发现注入点 → 拿到凭据 → 横向 → 提权），一次性把这些并行派下去只会乱套。planner 因此持有一份**按任务保留、跨唤醒共享的规划待办（todolist）**：
-
-- planner 是事件驱动的——图一变就被唤醒，但**每次唤醒是全新会话**；共享的 todolist 让它把一条串行利用链**记录一次**、然后在后续多轮里**按依赖逐步派意图**，而不是把整条链在一轮里全部前置展开；
-- 每轮只对「前置步骤已完成、其依赖的 fact 已存在」的下一步派意图，并随进展更新清单（把已被 fact 满足的步骤标完成）。
-
-```mermaid
-flowchart TB
-  subgraph TODO["共享 todolist（按任务保留 · 跨唤醒常驻）"]
-    direction LR
-    T1["1 注入点　[已完成]"]
-    T2["2 取凭据　[进行中]"]
-    T3["3 横向　[待前置]"]
-    T4["4 提权　[待前置]"]
-    T1 -.前置满足.-> T2 -.-> T3 -.-> T4
-  end
-  R1["第 1 轮唤醒　派意图①"] --> T1
-  R2["第 2 轮（①产出 fact）　派意图②"] --> T2
-  R3["第 3 轮（②产出 fact）　派意图③"] --> T3
-```
-
-于是攻击链在“事件驱动 + 无状态会话”的环境下依然**稳定推进、不重复、不错序**——这是 ARTEX 能自主走完多步利用链的关键。
+换言之：**起点是别人的，现在是我们的。**
 
 ---
-
-## 交流群
-
-扫码关注微信公众号 **SecSentry**，在公众号后台私信即可入群交流。
-
-<div align="center">
-
-<img src="screenshots/wx.png" alt="微信公众号 SecSentry" width="480" />
-
-</div>
-
----
-## 参考
-
-https://github.com/oritera/Cairn
-
 
 ## 许可与免责声明
 
 ### 开源协议
 
-本项目采用 **GNU Affero General Public License v3.0（AGPL-3.0）** 授权，完整条款见仓库根目录的 [LICENSE](LICENSE) 文件。
+**AGPL-3.0**——衍生作品（含网络服务）须同样开源。完整条款见 [LICENSE](LICENSE)。
 
-这意味着任何人都可以自由使用、修改和分发本项目，但**衍生作品必须同样以 AGPL-3.0 开源**；特别地，**若你修改本项目并通过网络（如部署为在线服务）向用户提供，也必须向这些用户公开对应的完整源码**。
+### 使用限制
 
-> ⚠️ **重要提示**：开源协议本身不限制软件的使用用途。以下的「使用限制」与「免责声明」是作者对使用者的额外约定与郑重声明，请务必遵守。
+**本工具仅供个人学习、代码研究与本地技术验证使用，不得用于对任何线上系统或
+网站发起实际测试。** 允许范围：阅读学习源码、本地隔离环境验证。严禁：对任何
+线上系统发起扫描/探测/利用（无论是否授权）、实际渗透对抗、生产环境使用、
+非法入侵与数据窃取。
 
-**ARTEX 仅供个人学习、代码研究与本地技术验证使用，不得用于对任何线上系统或网站发起实际测试。**
+使用者须自行遵守所在国家/地区全部法律法规（含《网络安全法》《数据安全法》
+《个人信息保护法》等）。**因使用本工具产生的一切法律责任由使用者自行承担。**
 
-### 允许使用范围
+本项目按“现状”提供，不附带任何担保。下载、安装或使用即表示已阅读并同意
+上述全部条款。
 
-- 仅可用于**阅读、学习与研究本项目源码**，以及在**本地隔离环境**中进行技术原理验证；
-- 适用于个人学习、学术研究、代码审阅等非攻击性用途。
+---
 
-### 禁止事项
+## 交流
 
-- **严禁使用本工具对任何网站、线上服务或联网系统发起扫描、探测、利用或攻击**（无论是否获得授权、是否为自有资产）；
-- 严禁将本工具用于任何实际的渗透测试、攻防对抗或生产环境；
-- 严禁将本工具用于非法入侵、数据窃取、勒索、拒绝服务或任何破坏性、犯罪性活动；
-- 严禁利用本工具从事违反所在国家/地区法律法规的行为。
+扫码关注微信公众号 **SecSentry**，后台私信入群。
 
-### 合规责任
+<div align="center">
+<img src="screenshots/wx.png" alt="微信公众号 SecSentry" width="360" />
+</div>
 
-使用者须自行遵守所在国家/地区关于网络安全、数据保护与计算机犯罪的全部法律法规（在中国大陆包括但不限于《网络安全法》《数据安全法》《个人信息保护法》及相关司法解释）。**因使用本工具产生的一切法律责任与后果，均由使用者自行承担。**
+## 参考
 
-### 免责声明
-
-本项目按“现状（AS IS）”提供，不附带任何明示或默示的担保。作者及贡献者不对使用本工具（无论使用方式是否得当）所导致的任何直接或间接损失、数据丢失、系统损坏或法律纠纷承担责任。**下载、安装或使用本项目，即表示你已阅读、理解并同意上述全部条款。**
+- [norma](https://github.com/Autumn-27/norma) — agent harness SDK（本平台多 Agent 引擎）
+- [Cairn](https://github.com/oritera/Cairn) — 黑板架构参考
+- [SecLists](https://github.com/danielmiessler/SecLists) / [nuclei-templates](https://github.com/projectdiscovery/nuclei-templates) — 语料与模板
