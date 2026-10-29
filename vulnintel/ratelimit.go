@@ -60,19 +60,27 @@ func (l *rateLimiter) allow(ctx context.Context) error {
 
 // nvdLimiter 是进程级的 NVD 限速闸门。
 //
-// 速率在第一次使用时按 API key 推导并固定下来：同一进程里主同步与快通道
-// 用的是同一个 key（或都没有），所以固定速率是正确的。若中途换了 key，
-// 下一轮同步时重建即可——限速本来就只是「保守一点」的事。
+// 速率按**当前生效的 API key** 推导：主同步与快通道每次请求都从各自的
+// client 带来同一个 key（同一份配置），key 不变时复用同一个闸门实例——
+// 两条链路自然互相让路。key 变了（如先匿名跑过、之后在 UI 配置了 key）
+// 则按新 key 重建，等价于重启进程后的状态。
+//
+// 重建只换间隔：旧实例上还在等待的请求按旧计时器自然结束，不会被打断。
 var (
-	nvdLimiterOnce sync.Once
+	nvdLimiterMu   sync.Mutex
+	nvdLimiterKey  string
 	nvdLimiterInst *rateLimiter
 )
 
-// nvdLimiter returns the process-wide NVD rate limiter.
+// nvdLimiter returns the process-wide NVD rate limiter, rebuilding it when
+// the configured API key changes.
 func nvdLimiter(apiKey string) *rateLimiter {
-	nvdLimiterOnce.Do(func() {
+	nvdLimiterMu.Lock()
+	defer nvdLimiterMu.Unlock()
+	if nvdLimiterInst == nil || nvdLimiterKey != apiKey {
+		nvdLimiterKey = apiKey
 		nvdLimiterInst = &rateLimiter{interval: PageDelayFor(apiKey)}
-	})
+	}
 	return nvdLimiterInst
 }
 

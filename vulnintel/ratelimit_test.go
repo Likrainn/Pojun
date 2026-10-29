@@ -88,3 +88,24 @@ func TestPageDelayForKeyAndAnonymous(t *testing.T) {
 		t.Error("空白 key 应按匿名限速处理")
 	}
 }
+
+// 中途换 API key 必须重建限速间隔：先匿名跑过的进程，在 UI 配置 key 后
+// 应立即按带 key 的速率同步，而不是等重启。回归背景见
+// docs/项目评估报告-2026-10-29.md P2（原 sync.Once 实现注释与行为不符）。
+func TestNvdLimiterRebuildsOnKeyChange(t *testing.T) {
+	first := nvdLimiter("")
+	if first.interval != PageDelayFor("") {
+		t.Fatalf("匿名闸门间隔=%v，应按匿名推导", first.interval)
+	}
+	second := nvdLimiter("audit-key")
+	if second == first {
+		t.Fatal("换 key 后应重建闸门实例")
+	}
+	if second.interval != PageDelayFor("audit-key") {
+		t.Fatalf("带 key 闸门间隔=%v，应按 key 推导", second.interval)
+	}
+	// 同一个 key 再次取必须复用实例（主同步与快通道共享份额的前提）。
+	if again := nvdLimiter("audit-key"); again != second {
+		t.Fatal("同 key 的两次获取应返回同一实例")
+	}
+}
