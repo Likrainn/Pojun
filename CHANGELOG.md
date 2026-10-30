@@ -4,13 +4,26 @@
 
 ## [Unreleased]
 
+## [0.3.88] - 2026-10-30
+
 ### 修复的问题
 
-- **目标拆解无墙钟，任务可能永久卡在 created**：第 0 轮拆解继承任务级
-  exec ctx，任务未配 `timeout_seconds` 时无 deadline——上游 LLM 连接挂起时
-  拆解永不返回、无重试无日志（Kali 实测复现）。补 `goalsDecomposeTimeout`
-  （5 分钟）：超时走「拆解无产出 → 原始目标作为单目标」回退并打日志，
-  任务照常起跑。与 v0.3.61 的 plannerRoundTimeout 同思路。
+- **Web UI 根路由（/）打开即 404**：`(external)/page.tsx` 用服务端
+  `redirect()` 跳工作台，但 `next build` 静态导出（NEXT_EXPORT=1）不支持
+  它——redirect 被静默丢弃，`out/index.html` 被导出成 not-found 页，
+  `http://host:8787/` 第一眼就是「Page not found」。改为客户端
+  `router.replace`（SSG 正常导出落地页，hydrate 后立即替换历史）。
+- **listener_* 工具在 agent 侧未注册，正式版调不到**：v0.3.87 实现了
+  `listenerStart/Stop/Sessions` 三个领域工具，但漏了把它们注册进
+  planner/worker/mainagent 工具清单——发布二进制里 agent 在任务中无法
+  调用回连接收器（开发机上带未提交改动测试通过，掩盖了缺陷）。补齐
+  三处注册，并已验证编译与 ask 审批链路。
+- **目标拆解无墙钟，任务可能永久卡在 created**（补记：修复随 0.3.87
+  发布，条目漏记）：第 0 轮拆解继承任务级 exec ctx，任务未配
+  `timeout_seconds` 时无 deadline——上游 LLM 连接挂起时拆解永不返回、
+  无重试无日志（Kali 实测复现）。补 `goalsDecomposeTimeout`（5 分钟）：
+  超时走「拆解无产出 → 原始目标作为单目标」回退并打日志，任务照常起跑。
+  与 v0.3.61 的 plannerRoundTimeout 同思路。
 
 ## [0.3.87] - 2026-10-30
 
