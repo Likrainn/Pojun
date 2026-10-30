@@ -25,6 +25,13 @@ func compactIntents(ns []*db.Node, parentsOf, yieldsOf map[int64][]int64) []map[
 		var p map[string]any
 		_ = json.Unmarshal(n.Payload, &p)
 		m := map[string]any{"id": n.ID, "summary": p["summary"], "state": n.State}
+		// stop_reason（B1）：终态意图「为什么停」。planner 提示词要求用它区分
+		// 「接续 vs 换方向」（exhausted=手段穷尽可接续 / blocked=传输故障可重试 /
+		// stopped=被 kill），此前该字段在 DB 列里但态势从不携带——planner 每轮
+		// 要么猜、要么对每条意图多花 1-3 次 node_detail 读图。
+		if n.BlockedReason != "" {
+			m["stop_reason"] = n.BlockedReason
+		}
 		if n.Inherited {
 			m["source_task_id"] = n.SourceTaskID
 			m["inherited"] = true
@@ -1142,6 +1149,11 @@ type intentItem struct {
 	// fact/finding，意图必须锚在已确认知识上）——continues 是**额外**的接续
 	// 标记，不替代 parent_ids。
 	Continues []json.RawMessage `json:"continues"`
+	// Hypothesis 本方向的假设（可选）：依据哪条 fact 的什么推测，引用 fact id。
+	// worker 拿到后作为「definition of done」的验证目标（v0.3.95 B3）。
+	Hypothesis string `json:"hypothesis"`
+	// SuccessCriteria 怎么算成了/没成（可选）：期望拿到的 fact/finding 形态。
+	SuccessCriteria string `json:"success_criteria"`
 }
 
 // addOneIntent 创建一条意图节点并连上游血缘，返回 id。
@@ -1214,6 +1226,12 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 		}
 	}
 	payload := map[string]any{"summary": summary}
+	if h := strings.TrimSpace(it.Hypothesis); h != "" {
+		payload["hypothesis"] = h
+	}
+	if sc := strings.TrimSpace(it.SuccessCriteria); sc != "" {
+		payload["success_criteria"] = sc
+	}
 	if len(anchors) > 0 {
 		payload["asset_ids"] = anchors
 	}
@@ -1252,12 +1270,14 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 	return t.writeExpTool("add_intent", "生成【探索方向】写入 frontier，并连入探索链路。意图是开放的探索方向，不是固定类型——用 summary 一句话自由描述要探索/验证/利用什么。\n"+
 		"★优先批量：一轮筛出的多个新方向放进 intents 数组一次提交（比逐条调用省往返）。返回 ids 数组，与 intents 等长同序（失败项 id=0，详情见 errors）。单条则省略 intents 直接给顶层 summary。",
 		obj(map[string]any{
-			"intents":    map[string]any{"type": "array", "description": "【优先用这个】要新增的探索方向数组，按顺序处理。每个元素字段同下方顶层字段（summary/asset_ids/parent_ids/priority）。返回 ids 与本数组等长、同序。", "items": map[string]any{"type": "object"}},
-			"summary":    str("[单条] 一句话描述这个探索方向：做什么+为什么。已写清方向即可，不依赖资产 id。"),
-			"asset_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "本方向要测试/攻击的【目标资产 id】（**尽量传**，0/1/多个；是 list_assets 返回的资产 id，不是探索节点 id）：这条探索方向针对哪些资产（站点/接口/参数/主机等）。只要方向围绕某些具体资产就务必传上——它是「这条探索打哪些目标」的结构化标记，用于覆盖去重、把意图连入资产链路。仅当纯全局侦察、确实没有具体目标资产时才留空。"},
-			"parent_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "上游锚点 id（可选，0/1/多个）：本方向由哪些【已确认的事实(fact)/发现(finding)】综合得出。**只能填已存在的 fact/finding 节点 id,不能填意图/目标/提示**——意图必须锚在已确认知识上,发现驱动而非凭空规划。多个事实共同产生一个新意图就传多个;顶层全新侦察方向请留空（会自动挂到任务起点 origin fact）。"},
-			"continues":  map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "【仅当本方向是接续某条旧方向时填】上游【意图】节点 id（0/1/多个）——即本方向要接着哪条被掐断/被收口的意图继续做。**只在 summary 里明说「接续/继续 #NNN」时才填**，且必须与 summary 里提到的意图 id 一致。接续代数有上限（最多接 3 次），超了会被拒绝——到那时请换一种本质不同的打法或转向别的方向，别再接。顶层全新方向留空。"},
-			"priority":   intp("优先级 0-10，默认5"),
+			"intents":          map[string]any{"type": "array", "description": "【优先用这个】要新增的探索方向数组，按顺序处理。每个元素字段同下方顶层字段（summary/asset_ids/parent_ids/priority）。返回 ids 与本数组等长、同序。", "items": map[string]any{"type": "object"}},
+			"summary":          str("[单条] 一句话描述这个探索方向：做什么+为什么。已写清方向即可，不依赖资产 id。"),
+			"asset_ids":        map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "本方向要测试/攻击的【目标资产 id】（**尽量传**，0/1/多个；是 list_assets 返回的资产 id，不是探索节点 id）：这条探索方向针对哪些资产（站点/接口/参数/主机等）。只要方向围绕某些具体资产就务必传上——它是「这条探索打哪些目标」的结构化标记，用于覆盖去重、把意图连入资产链路。仅当纯全局侦察、确实没有具体目标资产时才留空。"},
+			"parent_ids":       map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "上游锚点 id（可选，0/1/多个）：本方向由哪些【已确认的事实(fact)/发现(finding)】综合得出。**只能填已存在的 fact/finding 节点 id,不能填意图/目标/提示**——意图必须锚在已确认知识上,发现驱动而非凭空规划。多个事实共同产生一个新意图就传多个;顶层全新侦察方向请留空（会自动挂到任务起点 origin fact）。"},
+			"continues":        map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "【仅当本方向是接续某条旧方向时填】上游【意图】节点 id（0/1/多个）——即本方向要接着哪条被掐断/被收口的意图继续做。**只在 summary 里明说「接续/继续 #NNN」时才填**，且必须与 summary 里提到的意图 id 一致。接续代数有上限（最多接 3 次），超了会被拒绝——到那时请换一种本质不同的打法或转向别的方向，别再接。顶层全新方向留空。"},
+			"priority":         intp("优先级 0-10，默认5。直接逼近目标的利用链步=8-10；新入口面首次探明=6-7；补覆盖/复核=3-4；纯情报=1-2。同轮多意图按价值区分，别全默认 5。"),
+			"hypothesis":       str("【建议填】本方向的假设：依据哪条 fact 的什么推测（引用 fact id）。worker 会以它为验证目标，你下轮判「有没有产出」也有对照锚。"),
+			"success_criteria": str("【建议填】怎么算成了/没成：期望拿到的 fact/finding 形态（如「拿到 admin cookie 的请求响应」/「证实参数 X 不可注入的输出」）。"),
 		}),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {

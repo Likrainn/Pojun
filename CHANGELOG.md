@@ -4,6 +4,41 @@
 
 ## [Unreleased]
 
+## [0.3.95] - 2026-10-31
+
+> 深度优化方案第二期：Agent 判断力——从「机制完备、判断靠猜」到「判断有数据
+> 供给」。方案见 [docs/深度优化方案-2026-10-31.md](docs/深度优化方案-2026-10-31.md) §二；
+> 模型路由策略新增 [docs/模型路由策略.md](docs/模型路由策略.md)。
+
+### 新增（Agent 认知升级）
+
+- **stop_reason 进态势**（B1）：recent_done_intents 每条带 `stop_reason`
+  （DB 列早已有、态势从不携带），worker 完成触发事件的文字也带——planner 判
+  「接续 vs 换方向」从猜变成看，省每轮 1-3 次读图调用。
+- **意图结构化：hypothesis / success_criteria**（B3）：add_intent 新增两个
+  可选字段（本方向假设 / 成功判据），落进意图 payload 并在 worker 领单消息
+  结构化渲染——worker 有了 definition of done，planner 下轮判「有没有产出」
+  有对照锚。
+- **worker 五步作业框架**（B4）：复述假设 → 列 2-3 条探测向量与判别信号 →
+  边发现边写回 → 对抗自检 → 明确回答假设成立与否。附**最小绕过清单**（编码/
+  大小写/参数位置/方法/Content-Type/分段），否定结论的 evidence 要逐条写明
+  试过哪几类——「绕过手段走完」从口号变成可核对清单。
+- **worker 自保护**（B5）：意图自相矛盾/缺前置时立即 record_fact 说明并结束，
+  不硬着头皮绕到步数耗尽；收尾词补「未验证的猜测一律不写回」（收场路径上
+  唯一的图谱质检口）。
+- **续跑摘要**（B9）：exhausted/blocked 复跑时注入续跑上下文——上次状态、
+  收场原因、图上已挂产出（fact 列表）；零写回的续跑被强制先复盘，不重复
+  同样的路径。
+- **提示词批改包**（B8）：planner——priority 评分标准（此前等价废字段）、
+  done 零写回分支（与 exhausted-无增量同处理）、深度-广度仲裁规则（两轮
+  无增量切换）、坏意图负面示例 ×2、硬底线去重（system 与 user 重复段收敛）；
+  goals——空泛目标改写规则；judge——参数空/乱码 → ASK（不再默认 ALLOW）、
+  D6 补脚本循环发包判据；compaction——压缩保留 intent 终态语义（exhausted
+  「穷尽 vs 被掐断」可分辨）。
+- **模型路由策略**（B11，文档）：planner/mainagent=强推理、worker=强执行
+  中推理、judge/goals/compactor=非思考或便宜档；免费通道给 worker/goals/
+  compactor，旗舰通道给 planner；judge 固定绑稳定通道不参与池子轮询。
+
 ## [0.3.94] - 2026-10-31
 
 > 深度优化方案第一期（下）：报告结构升级。方案见

@@ -26,9 +26,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chu0119/artex/db"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/transcript"
+	"github.com/chu0119/artex/db"
 )
 
 // Compactor performs background cold-node compaction for many explorations.
@@ -84,8 +84,8 @@ const defaultCompactionDuration = 20 * time.Minute
 //
 // 6 的由来（实测同一份 26 节点真实输入，逐档切分）：
 //   - 26 节点/块：max_tokens 给到 65536 也把预算烧光，10 分钟不出正文。
-//   -  9 节点/块：3 块里 2 成功（194s / 324s）、1 失败（烧光 32768）。
-//   -  6 节点/块：124 秒就正常收尾，用 11733 token。
+//   - 9 节点/块：3 块里 2 成功（194s / 324s）、1 失败（烧光 32768）。
+//   - 6 节点/块：124 秒就正常收尾，用 11733 token。
 //
 // 也就是说切得越碎，模型越容易收尾、耗时也越短。6 是「成功率」与
 // 「别把摘要切得太碎（碎了就失去『综合』的意义）」之间的平衡点。
@@ -812,5 +812,6 @@ const compressionSystemPrompt = `你在压缩一组【彼此关联】的探索�
 4. 带上 id：每条结论后标注来源节点 id（如"…（#12,#28）"），让规划者能按 id 还原原节点。
 5. 正向陈述、只写输入里有的：不脑补、不引入输入中没有的判断。
 6. 长度随内容自适应：结论少就短，多且互不相同就写够——但整体显著短于所有输入 summary 的总和。
+7. 保留终态语义：涉及 intent 成员的，保留其 state 与收场含义——exhausted 要点明是「手段穷尽、方向无增量」还是「步数/时间被掐断、未完成非死路」（输入带 stop_reason 时照抄），blocked 标明是外部故障。规划者据它判「这个方向还能不能接续」，压缩时吞掉这一位 = 接续决策失据。
 
 只输出 body 正文本身。`

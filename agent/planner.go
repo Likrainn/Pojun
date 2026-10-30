@@ -7,13 +7,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/chu0119/artex/db"
-	"github.com/chu0119/artex/intercept"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 	"github.com/Autumn-27/norma/transcript"
+	"github.com/chu0119/artex/db"
+	"github.com/chu0119/artex/intercept"
 )
 
 // Planner is the event-driven LLM planner (docs §4.3): each time the asset or
@@ -210,6 +210,11 @@ func renderTriggers(ts *db.ExplorationStore, evs []TriggerEvent) string {
 			b.WriteString(fmt.Sprintf("\n- 意图 #%d 由用户删除，意图内容是：%s、删除原因是：%s。该意图已删除（不再执行）；请据此重新规划。", ev.IntentID, sm, ev.Detail))
 		default: // "done"
 			b.WriteString(fmt.Sprintf("\n- 意图 #%d（%s）的 worker 结束，输出结论：%s", ev.IntentID, intentSummary(ts, ev.IntentID), workerOutput(ts, ev.IntentID)))
+			// stop_reason 同步带出（B1）：exhausted=手段穷尽可接续、blocked=传输故障可重试、
+			// stopped=被 kill——「接续 vs 换方向」的判断直接看它，不用再 node_detail。
+			if n, err := ts.GetNode(ev.IntentID); err == nil && n != nil && n.BlockedReason != "" {
+				b.WriteString(fmt.Sprintf("；收场原因 stop_reason=%s", n.BlockedReason))
+			}
 			if fids := factIDsYielded(ts, ev.IntentID); fids != "" {
 				b.WriteString(fmt.Sprintf("；本意图新产生的事实 id：%s ", fids))
 			}
@@ -328,11 +333,11 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 
 4. **决定补哪些新方向**：**这里的"克制"只指【不重复已存在的意图】，不是"能少派就少派"**——目标未达成时，默认追问是"为逼近目标，还有哪些更深、更狠、尚未覆盖的打法"，而不是"是否可以收尾"。意图是【开放的探索方向】（不是固定类型/菜单），结合已知事实、资产、目标自判方向，逐一与 open + running + recent_done 比对：
    - 已有 open/running 覆盖 → 不再生成（正在处理）。
-   - 在 recent_done 里出现过 → **先看该意图的 state（每条都带）分辨怎么停的，再决定**：
-     · **done（正常跑完）**：已覆盖 → 不原样重派；是否死路看它 yields 出的 fact 结论、而非 state；仅出现【材料性新机理】（新事实/资产/参数/明显不同的打法）才重派，且 summary 写清与上次的不同；换措辞、"再试一次说不定行"不算，禁止重试。
-     · **exhausted（中途收场）**：**分两种，含义完全相反，必须看 blocked_reason 区分**：
-       —「连续N轮无写回…产出率已归零」= **worker 探到边界了，这个方向本身没东西了**（详见 worker 的无增量收场）→ **不要接续**，换方向；接续它只是让一个空方向再空转一轮。
-       —「撞步数上限」/「运行超时」= **还有明确的下一步，只是没时间** → 可以接续，但必须满足下面的接续纪律。
+   - 在 recent_done 里出现过 → **先看该意图的 state 与 stop_reason（每条都带）分辨怎么停的，再决定**：
+     · **done（正常跑完）**：已覆盖 → 不原样重派；是否死路看它 yields 出的 fact 结论、而非 state。**特例：done 且零 yields（一条 fact 都没写回）= 被空转收场，与 exhausted-无增量同处理——方向无增量，不要接续、不要原样重派**。
+     · **exhausted（中途收场）**：**分两种，含义完全相反，必须看 stop_reason 区分**：
+       — stop_reason 含「产出率已归零 / 无增量」= **worker 探到边界了，这个方向本身没东西了** → **不要接续**，换方向；接续它只是让一个空方向再空转一轮。
+       — stop_reason 含「步数上限 / 运行超时」= **还有明确的下一步，只是没时间** → 可以接续，但必须满足下面的接续纪律。
        — blocked（模型或网络失败）= 纯外部故障没跑成 → 直接重派同方向。
        **两种 exhausted 都要先用 get_worker_trace / get_worker_output 看它实际做到哪、卡在哪**，再决定是「接上次进度继续」还是「换打法/换方向」：接近突破被掐 → 接续；每次卡在同一处 → 这条路本身不通，换打法。依据永远是 trace 里的真实进度，不是 state 本身。
    - **接续纪律（避免接续链无限拉长）**：
@@ -343,6 +348,7 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
    - 完全无任何意图覆盖的全新方向 → 生成。
    - 所有已知方向都被仍在 open/running 的意图覆盖 → 不生成、直接结束（有在跑/在排队的 work，等它们推进）；但若只剩 recent_done 覆盖、已无 open/running 而目标未达成 → 按顶部硬底线必须另开或续派。
    - **深度优先于覆盖度**：coverage 是下限/验收项、不是探索目标本身；发现高价值入口（可能通向 RCE/提权/数据外泄）后，优先派意图把那条路【往深打穿】，而不是为拉平覆盖度去铺广、逐个资产浅测。
+   - **深度与广度的仲裁（别摇摆）**：发现高价值入口后，允许把该入口的纵深派到 2 条以内（主线+绕行），此时新覆盖面意图暂停一轮；若该入口两轮无增量（stall 口径），恢复铺广铺覆盖。以「两轮无增量」为切换信号，不是凭感觉切换。
    - **【已知面】与【未知面】是两条不同的线，别只打一条**：「已知面」= 查情报库拿现成 CVE（search_vulns / search_recent_critical）——快、收益确定；「未知面」= 从目标自身行为里挖没公开过的漏洞（越权、逻辑缺陷、竞态、状态机绕过、资源假设错误）——慢、但常常是唯一能拿高价值的那条。当目标是「拿到高危漏洞/权限」这类、且已知面已经挖不动时，**应该往未知面派一条意图**。派这类意图前先看 vuln-hunting skill（有七个维度的挖掘方法论与每类手法的验证要点）——不要自己现编一个「试试越权」的模糊意图，那多半挖不到东西。
    - **保持路线多样、别过早收敛**：目标未达成时，若现有意图都挤在同一条路线/入口，而存在【本质不同】的未覆盖方向（另一入口面/另一类资产/另一条利用链），优先补那条分歧方向，而不是在同一线上加同义意图（看实质差异，不看措辞）；若该分歧方向已被现有意图覆盖，仍不生成。理想是 2–3 条机理不同的路线并存（如"从上传链打"与"从认证绕过打"），某条交出【目标逼近】的证据后才把资源集中过去。**但多样性永远服从顶部【操作约束】**：被约束排除的入口面/端口/主机/操作，即使本质不同也绝不生成意图。
 
@@ -352,6 +358,9 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
    - **summary**：一句话自然语言描述该方向（测试目标完整地址 + 做什么 + 为什么），不套固定分类；去重主要靠它与已有意图比对。
    - **asset_ids**：本方向要测试/攻击的目标资产 id（尽量传，0/1/多个，来自 list_assets）——只要方向围绕具体资产（站点/接口/参数/主机）就务必传，用于覆盖去重、连入资产链路，跨多资产就都传；纯全局侦察无具体资产才留空。
    - **parent_ids**：本方向由哪些上游节点综合得出（可选，0/1/多个）——多个事实结合产生一个意图就都传，派生自某上游意图/发现也传其 id，顶层全新方向留空。
+   - **priority**（0-10，决定 worker 领单顺序，frontier 按它降序）：**别全默认 5**——直接逼近目标的利用链步=8-10；新入口面的首次探明=6-7；补覆盖/复核=3-4；纯情报/背景=1-2。同轮多意图按价值区分，高价值链不与补测意图同权排队。
+   - **hypothesis / success_criteria**（可选但强烈建议）：hypothesis=本方向的假设（依据哪条 fact 的什么推测，引用 fact id）；success_criteria=怎么算成了/没成（期望拿到的 fact/finding 形态）。写得出来，worker 就有了 definition of done，你下轮判「有没有产出」也有了对照锚。
+   - **坏意图示例（对照着别这么写）**：①「再深入探测 admin 面看看有什么」——无地址、无依据、无产出承诺，worker 拿到只能盲扫；②「针对 #14 的 SQL 注入复核」——与 done 意图同措辞、零增量承诺，换措辞不算新方向。
 
 不重复、不硬凑；但目标未达成、又有未覆盖且更深的打法时，该派就派。简洁、聚焦、高效。`
 
@@ -381,8 +390,8 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	}
 	tsx.SetTaskID(taskID)
 	tsx.SetCoverageEnabled(as == nil || as.CoverageEnabled(taskID))
-	tsx.killWork = p.killWork   // enable kill_work tool (nil = unavailable)
-	tsx.steerWork = p.steerWork // enable steer_work tool (nil = unavailable)
+	tsx.killWork = p.killWork         // enable kill_work tool (nil = unavailable)
+	tsx.steerWork = p.steerWork       // enable steer_work tool (nil = unavailable)
 	tsx.attributions = p.attributions // Guard 归因 → 概览 guard_attributions 块（nil = 省略）
 	if origin, _ := ts.OriginFactID(); origin > 0 {
 		tsx.SetOwnerNode(origin) // planner-side anchors default to the task root (origin fact)
@@ -478,7 +487,9 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 			lead = "本轮是**定时巡检（心跳到点）**的唤醒,且当前**已没有任何 open 或 running 的意图**——没有 worker 在跑、也没有排队中的方向,探索已停摆。你**必须**在本轮产出一个或多个向目标推进、且与图中既有意图**互不重复**的新意图(不得产出 0 意图);先据下面的态势判定目标是否已达成,未达成则立即补方向："
 		}
 	}
-	input := lead + situational + "\n\n据上面的态势，判定目标。目标已【真正达成】（已拿到目标成果/已确认目标漏洞）时用 prove_goal 逐个标记。**硬底线：只要目标尚未达成、且当前没有任何 open 或 running 意图（frontier_open=0 且 running_intents 为空），本轮就必须产出至少一个向目标推进的意图——此时没有在跑的 work 可等、也没有在排队的方向，产出 0 意图=任务停摆。仅当已有 open/running 意图在推进、或目标已达成时，本轮才可以不产出新意图。**" +
+	// 硬底线在 system 顶部已完整声明（最高优先），user 里只压成一句提醒——
+	// 整段重复每轮多烧 ~200 token 且两处措辞会日久漂移（体检 B8）。
+	input := lead + situational + "\n\n据上面的态势，判定目标。目标已【真正达成】（已拿到目标成果/已确认目标漏洞）时用 prove_goal 逐个标记。硬底线提醒见 system 顶部：目标未达成且 frontier_open=0 且无 running 意图时，本轮必须产出意图。" +
 		renderPlannerTodos(opts.Todos.List())
 	// MaxDuration 现在会在墙钟到点打断在跑工具并就地进收尾(在活 ctx 上),单轮卡死不再
 	// 绕过收尾,无需外部硬 ctx 兜底。ctx 只承载 pause / kill / shutdown。
