@@ -113,7 +113,15 @@ type ToolSet struct {
 	// the planner having to spot it folded into the graph overview. Wired for the main
 	// agent + cross-task orchestration; nil elsewhere → falls back to the bare notify.
 	notifyHint func(texts []string)
+	// attributions, if set, returns Guard failure-attribution counts (ok/blocked/error,
+	// guard/guard.go Attributions) for graph_overview 的 guard_attributions 块——planner
+	// 由此看到「这个任务被 WAF/拦截打回了 N 次」并换打法（v0.3.88 体检 N5，Observer
+	// 半成品的最后一公里）。Wired for planner/mainagent（engine per-task Guard）；nil = 块省略。
+	attributions func() map[string]int
 }
+
+// SetAttributions wires the Guard failure-attribution reader (see ToolSet.attributions).
+func (t *ToolSet) SetAttributions(fn func() map[string]int) { t.attributions = fn }
 
 // SetNotifyGoal wires the goal-add trigger callback (see ToolSet.notifyGoal). Set only
 // by the main-agent chat, so runtime-added goals are announced to the planner by name.
@@ -582,6 +590,13 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 	// 这时候继续派大概率烧 token 无产出)。程序算好放在这里,planner 不用自己数。
 	if t.ts != nil && t.taskID > 0 {
 		out["stall"] = t.stallOverview()
+	}
+	// Guard 归因(ok/blocked/error 计数):blocked 高=目标在防(WAF/拦截规则),继续
+	// 同款打法是烧 token;error 高=工具/环境在坏。nil(未接线,如测试构造)=块省略。
+	if t.attributions != nil {
+		if att := t.attributions(); len(att) > 0 {
+			out["guard_attributions"] = att
+		}
 	}
 	// 宿主工具体检:本机 PATH 可直接经 Bash 调用的工具(可用/缺失+安装提示),
 	// 派意图选手段以家底为准——二进制部署形态下系统里有什么就能用什么。

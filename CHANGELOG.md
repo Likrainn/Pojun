@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+## [0.3.90] - 2026-10-31
+
+> 体检批 2（红队主线补 UI + 可观测性），清单见
+> [docs/产品全面体检-2026-10-31.md](docs/产品全面体检-2026-10-31.md) §三/§八。
+
+### 新增
+
+- **「监听器 / C2」系统页**（红队核心能力首次在 UI 可见——此前 6 条 API 只有
+  手搓 curl 才能用）：
+  - **C2 出口配置表单**：direct / ssh 中继托管 / manual 三形态切换，按形态
+    显隐字段（中转机地址 / SSH 凭据 / 出口网卡），密码脱敏回显（留空不变更）。
+  - **监听器管理**：启动（名称+端口，1024-65535 校验）、停止（带确认，说明
+    会话留档与中继隧道拆除）、会话查看（在线状态/来源/接入时间/捕获字节，
+    点开看 64KB 捕获内容——反弹 shell banner / OOB 请求行）。10s 自动轮询。
+  - 启动响应里的 `connect_back`（回连地址）直接展示——payload 该连哪里以此为准。
+- **Guard 归因回流 planner**（Observer 半成品的最后一公里）：`guard_attributions`
+  （ok/blocked/error 计数）进入 graph_overview——planner 看到「被 WAF/拦截打回
+  N 次」就换向量而不是继续烧 token；error 高=工具/环境在坏，先诊断。planner
+  提示词同步解释该块含义；mainagent（人在环路）同样可见。
+  - 新增 `SetAttributions` 回调链：engine per-task Guard → planner/mainagent → ToolSet。
+
 ## [0.3.89] - 2026-10-31
 
 > 本版为「产品全面体检」批 1（P0 缺陷修复），体检全文见

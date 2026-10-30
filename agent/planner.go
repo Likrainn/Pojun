@@ -30,6 +30,7 @@ type Planner struct {
 	maxTurns          int                                    // max agent turns per run (0 = unlimited)
 	killWork          func(intentID int64) error             // engine callback to terminate a running work (nil = off)
 	steerWork         func(intentID int64, msg string) error // engine callback to steer a running work mid-run (nil = off)
+	attributions      func() map[string]int                  // Guard 归因读取（nil = 概览不带 guard_attributions 块）
 	proxyAddr         string                                 // recording proxy for WebFetch (empty = direct)
 	proxyCACert       string                                 // recording proxy's CA cert path (HTTPS verify)
 	webSearch         WebSearchOpts                          // web_search tool backend selection (off by default)
@@ -123,6 +124,10 @@ func (p *Planner) SetKillWork(fn func(intentID int64) error) { p.killWork = fn }
 // SetSteerWork wires the engine's per-work steering callback so the planner's
 // steer_work tool can inject a mid-run course-correction into a running worker.
 func (p *Planner) SetSteerWork(fn func(intentID int64, msg string) error) { p.steerWork = fn }
+
+// SetAttributions wires the per-task Guard failure-attribution reader so
+// graph_overview can carry guard_attributions (blocked/error 计数 → planner 换打法).
+func (p *Planner) SetAttributions(fn func() map[string]int) { p.attributions = fn }
 
 // renderPlannerTodos formats the persistent planning todo for injection into the
 // wake-up prompt (empty when there are no todos yet — first wake-up).
@@ -306,7 +311,7 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 
 **每次唤醒的决策流程**：
 
-1. **完整态势已附在本提示下方**（就是 graph_overview 的返回，无需再调它）：task（原始标题+目标/根节点）、goals+状态、open/running/recent_done 意图、frontier_open、facts（探索事实数，与漏洞是两类）、findings_total、recent_facts（{id,summary,confidence?}）、finding_list、recent_done_intents、coverage（有覆盖度统计时）、stall（收官态势）、cold_digests（冷区折叠摘要，expand_digest 展开）。
+1. **完整态势已附在本提示下方**（就是 graph_overview 的返回，无需再调它）：task（原始标题+目标/根节点）、goals+状态、open/running/recent_done 意图、frontier_open、facts（探索事实数，与漏洞是两类）、findings_total、recent_facts（{id,summary,confidence?}）、finding_list、recent_done_intents、coverage（有覆盖度统计时）、stall（收官态势）、cold_digests（冷区折叠摘要，expand_digest 展开）、guard_attributions（工具调用归因计数：blocked 高=目标在防——WAF/拦截规则在打回，继续同款打法是烧 token，换向量/换手段/先写意图明确绕行思路；error 高=工具或环境在坏，先诊断再派）。
    - **范围**：探索节点（goals/意图/facts/findings）只含本任务；**资产图全局共享**（多任务同一份，资产计数是全局在范围内的、非本任务独有）——出现非本任务相关的资产时忽略。
    - **血缘**：每个意图带 parents（上游：派生自哪些事实/意图）和 yields（下游：产生了哪些事实/发现），recent_facts 每条带 from_intent；据此理解"哪些事实来自哪个方向、能否综合出新方向"。
    - **否定/存疑观察**（recent_facts 里"端口关闭/不可注入"等）是 worker 的观察、不是定论：采信前先 node_detail(id) 看 evidence——evidence 扎实、confidence=observed 且手段已穷尽的才视为该方向暂时封住；evidence 缺失、只是"看起来像/只探一次"、或 confidence=inferred 的，按【尚未探明】处理，若在范围内且无其它意图覆盖，默认派一条复核意图去证实或推翻（**同一否定方向至多复核一次**；复核后仍为否定、且证据合理，就尊重该结论、不再派）。
@@ -378,6 +383,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	tsx.SetCoverageEnabled(as == nil || as.CoverageEnabled(taskID))
 	tsx.killWork = p.killWork   // enable kill_work tool (nil = unavailable)
 	tsx.steerWork = p.steerWork // enable steer_work tool (nil = unavailable)
+	tsx.attributions = p.attributions // Guard 归因 → 概览 guard_attributions 块（nil = 省略）
 	if origin, _ := ts.OriginFactID(); origin > 0 {
 		tsx.SetOwnerNode(origin) // planner-side anchors default to the task root (origin fact)
 	}

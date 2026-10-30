@@ -105,6 +105,12 @@ import type {
   TrafficHost,
   TrafficResp,
   ProxyPoolState,
+  C2Config,
+  C2ConfigPatch,
+  ConnectBack,
+  ListenerSession,
+  ListenerStartResp,
+  ListenerView,
   UpdateCheck,
   UsageStats,
   VulnIntelConfigPatch,
@@ -1401,4 +1407,18 @@ export const api = {
   // 202 即返回，实际下载在后台跑，进度走 /api/update/stream。
   applyUpdate: () => post<{ ok: boolean; target: string }>(`/update/apply`),
   rollbackUpdate: () => post<{ ok: boolean }>(`/update/rollback`),
+
+  // ---- C2 出口 / 回连接收器（红队作战）----
+  // C2 出口配置：password 传 "" 清空、undefined 保持不变；回显已脱敏（只回 has_pass）。
+  c2Config: () => get<C2Config>(`/c2/config`),
+  saveC2Config: (patch: C2ConfigPatch) => put<C2Config>(`/c2/config`, patch),
+  // 监听器：list 自带各监听器的会话快照；start 返回解析后的回连地址 connect_back
+  // ——payload 里的 LHOST/LPORT 以它为准（direct/ssh 中继/manual 由平台判定）。
+  listeners: () => get<{ listeners: ListenerView[] }>(`/listeners`),
+  startListener: (name: string, port: number) =>
+    post<ListenerStartResp>(`/listeners`, { name, port }),
+  stopListener: (name: string) =>
+    post<{ stopped: string; sessions: ListenerSession[] }>(`/listeners/${encodeURIComponent(name)}/stop`),
+  listenerSessions: (name: string) =>
+    get<{ name: string; sessions: ListenerSession[] }>(`/listeners/${encodeURIComponent(name)}`),
 };

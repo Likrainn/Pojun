@@ -1789,3 +1789,59 @@ export interface VulnIntelStatus {
     hint: string;
   };
 }
+
+/** 回连接收器：单条会话捕获（后端 listener.Session）。 */
+export interface ListenerSession {
+  id: string;
+  remote: string;
+  connected_at: string;
+  last_active: string;
+  bytes_in: number;
+  /** 捕获的前 64KB（UTF-8 容错解码）——反弹 shell 初始输出 / OOB 请求行 / banner。 */
+  preview: string;
+  open: boolean;
+}
+
+/** 回连接收器视图（GET /api/listeners 行）。 */
+export interface ListenerView {
+  name: string;
+  port: number;
+  started_at: string;
+  sessions: ListenerSession[];
+}
+
+/** 监听器启动响应：connect_back 是 payload 回连地址的唯一可信来源。 */
+export interface ListenerStartResp {
+  name: string;
+  port: number;
+  started_at: string;
+  connect_back: ConnectBack;
+}
+
+/** C2 出口解析结果：目标该连哪里由平台判定（direct/ssh 中继/manual 三形态）。 */
+export interface ConnectBack {
+  mode: "direct" | "ssh" | "manual" | string;
+  lhost: string;
+  lport: number;
+  via?: string;
+}
+
+/** C2 出口配置（GET /api/c2/config，密码脱敏只回 has_pass）。 */
+export interface C2Config {
+  mode: "direct" | "ssh" | "manual" | string;
+  host: string;
+  ssh: string;
+  key: string;
+  iface: string;
+  has_pass: boolean;
+}
+
+/** C2 配置保存体：字段为 undefined 时后端保持不变；password 传 "" 清空。 */
+export interface C2ConfigPatch {
+  mode?: string;
+  host?: string;
+  ssh?: string;
+  password?: string;
+  key?: string;
+  iface?: string;
+}
