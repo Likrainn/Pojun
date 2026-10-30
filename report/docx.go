@@ -34,6 +34,63 @@ func (d *Docx) heading(text string, level int) {
 	fmt.Fprintf(&d.buf, `<w:p><w:pPr><w:pStyle w:val="Heading%d"/></w:pPr><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p>`, level, esc(text))
 }
 
+// headingColored 带标题色的标题（严重度着色用：critical 红/high 橙/medium 琥珀/low 蓝）。
+func (d *Docx) headingColored(text string, level int, hex string) {
+	fmt.Fprintf(&d.buf, `<w:p><w:pPr><w:pStyle w:val="Heading%d"/></w:pPr><w:r><w:rPr><w:color w:val="%s"/></w:rPr><w:t xml:space="preserve">%s</w:t></w:r></w:p>`, level, hex, esc(text))
+}
+
+// H4 四级标题（漏洞明细内的小节：报告正文里的 ## 降到这里，不再压平）。
+func (d *Docx) H4(text string) { d.heading(text, 4) }
+
+// Run 富文本片段（PRich 用）。
+type Run struct {
+	Text string
+	Bold bool
+}
+
+// PRich 富文本段落：支持 **加粗** 级别（Markdown 富渲染 A5 的底层）。\n 拆多段。
+func (d *Docx) PRich(text string) {
+	for _, line := range strings.Split(text, "\n") {
+		d.buf.WriteString(`<w:p>`)
+		d.buf.WriteString(runsXML(parseBold(line)))
+		d.buf.WriteString(`</w:p>`)
+	}
+}
+
+// parseBold 把一行按 **bold** 拆成 Run 序列。不成对的 ** 按字面处理。
+func parseBold(line string) []Run {
+	var runs []Run
+	rest := line
+	bold := false
+	for {
+		i := strings.Index(rest, "**")
+		if i < 0 {
+			break
+		}
+		if i > 0 {
+			runs = append(runs, Run{Text: rest[:i], Bold: bold})
+		}
+		rest = rest[i+2:]
+		bold = !bold
+	}
+	if rest != "" || len(runs) == 0 {
+		runs = append(runs, Run{Text: rest, Bold: bold})
+	}
+	return runs
+}
+
+func runsXML(runs []Run) string {
+	var b strings.Builder
+	for _, r := range runs {
+		rpr := ""
+		if r.Bold {
+			rpr = "<w:rPr><w:b/></w:rPr>"
+		}
+		fmt.Fprintf(&b, `<w:r>%s<w:t xml:space="preserve">%s</w:t></w:r>`, rpr, esc(r.Text))
+	}
+	return b.String()
+}
+
 // P 正文段落(支持 \n 拆多段)。
 func (d *Docx) P(text string) {
 	for _, line := range strings.Split(text, "\n") {
@@ -57,32 +114,42 @@ func (d *Docx) Bullet(text string) {
 
 // Table 带表头的表格。rows 与 header 列数不一致时按最短补齐。
 func (d *Docx) Table(header []string, rows [][]string) {
+	d.TableFills(header, rows, nil)
+}
+
+// TableFills 带行底色的表格：fills[i] 是第 i 行数据的底色 hex（空串或越界 = 无底色）。
+// 严重度分布表按严重度着色用（A2）。
+func (d *Docx) TableFills(header []string, rows [][]string, fills []string) {
 	var b strings.Builder
 	b.WriteString(`<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid>`)
 	for range header {
 		b.WriteString(`<w:gridCol w:w="1800"/>`)
 	}
 	b.WriteString(`</w:tblGrid>`)
-	cell := func(text string, head bool) {
+	cell := func(text, fill string) {
 		sty := ""
-		if head {
-			sty = `<w:shd w:val="clear" w:fill="DEEAF6"/>`
+		if fill != "" {
+			sty = fmt.Sprintf(`<w:shd w:val="clear" w:fill="%s"/>`, fill)
 		}
 		fmt.Fprintf(&b, `<w:tc><w:tcPr>%s</w:tcPr><w:p><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p></w:tc>`, sty, esc(text))
 	}
 	b.WriteString(`<w:tr>`)
 	for _, h := range header {
-		cell(h, true)
+		cell(h, "DEEAF6")
 	}
 	b.WriteString(`</w:tr>`)
-	for _, r := range rows {
+	for ri, r := range rows {
 		b.WriteString(`<w:tr>`)
+		fill := ""
+		if ri < len(fills) {
+			fill = fills[ri]
+		}
 		for i := range header {
 			v := ""
 			if i < len(r) {
 				v = r[i]
 			}
-			cell(v, false)
+			cell(v, fill)
 		}
 		b.WriteString(`</w:tr>`)
 	}
@@ -109,6 +176,7 @@ func (d *Docx) Encode(w io.Writer) error {
 <Default Extension="xml" ContentType="application/xml"/>
 <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
 <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
 </Types>`
 
 	rels := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -116,8 +184,27 @@ func (d *Docx) Encode(w io.Writer) error {
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
 </Relationships>`
 
+	// numbering.xml：Bullet 引用 numId=1——此前包里没有这个部件，Word 里项目符号
+	// 静默不渲染（v0.3.93 A1，报告质感的显性 bug）。
 	documentRels := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>`
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
+</Relationships>`
+
+	numbering := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:abstractNum w:abstractNumId="0">
+<w:multiLevelType w:val="hybridMultilevel"/>
+<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="&#8226;"/><w:lvlJc w:val="left"/>
+<w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr>
+<w:rPr><w:rFonts w:ascii="Symbol" w:hAnsi="Symbol" w:hint="default"/></w:rPr></w:lvl>
+<w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="o"/><w:lvlJc w:val="left"/>
+<w:pPr><w:ind w:left="1440" w:hanging="360"/></w:pPr></w:lvl>
+<w:lvl w:ilvl="2"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="&#61623;"/><w:lvlJc w:val="left"/>
+<w:pPr><w:ind w:left="2160" w:hanging="360"/></w:pPr></w:lvl>
+</w:abstractNum>
+<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+</w:numbering>`
 
 	zw := zip.NewWriter(w)
 	files := []struct{ name, body string }{
@@ -126,6 +213,7 @@ func (d *Docx) Encode(w io.Writer) error {
 		{"word/document.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + document},
 		{"word/_rels/document.xml.rels", documentRels},
 		{"word/styles.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + docxStyles},
+		{"word/numbering.xml", numbering},
 	}
 	for _, f := range files {
 		fw, err := zw.Create(f.name)
@@ -157,6 +245,9 @@ const docxStyles = `<w:styles xmlns:w="http://schemas.openxmlformats.org/wordpro
 <w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/>
 <w:pPr><w:outlineLvl w:val="2"/><w:spacing w:before="200" w:after="120"/></w:pPr>
 <w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="黑体"/><w:b/><w:sz w:val="28"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading4"><w:name w:val="heading 4"/><w:basedOn w:val="Normal"/>
+<w:pPr><w:outlineLvl w:val="3"/><w:spacing w:before="160" w:after="100"/></w:pPr>
+<w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="黑体"/><w:b/><w:sz w:val="24"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/>
 <w:rPr><w:rFonts w:ascii="Consolas" w:eastAsia="宋体" w:hAnsi="Consolas"/><w:sz w:val="18"/></w:rPr></w:style>
 <w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/>
@@ -166,6 +257,38 @@ const docxStyles = `<w:styles xmlns:w="http://schemas.openxmlformats.org/wordpro
 <w:insideH w:val="single" w:sz="4" w:color="999999"/><w:insideV w:val="single" w:sz="4" w:color="999999"/>
 </w:tblBorders></w:tblPr></w:style>
 </w:styles>`
+
+// SeverityHex 严重度主色（标题/表格底色用，A2）。
+func SeverityHex(sev string) string {
+	switch strings.ToLower(strings.TrimSpace(sev)) {
+	case "critical":
+		return "C00000" // 深红
+	case "high":
+		return "ED7D31" // 橙
+	case "medium":
+		return "BF9000" // 琥珀
+	case "low":
+		return "5B9BD5" // 蓝
+	default:
+		return ""
+	}
+}
+
+// SeverityHexSoft 严重度柔和底色（表格行底色用，比主色浅）。
+func SeverityHexSoft(sev string) string {
+	switch strings.ToLower(strings.TrimSpace(sev)) {
+	case "critical":
+		return "F8CBCC"
+	case "high":
+		return "FBE5D5"
+	case "medium":
+		return "FFF2CC"
+	case "low":
+		return "DEEAF6"
+	default:
+		return ""
+	}
+}
 
 // SeverityCN 严重度中文映射(报告用)。
 func SeverityCN(s string) string {

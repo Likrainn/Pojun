@@ -3,6 +3,7 @@ package report
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/xml"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +94,10 @@ func TestBuildTaskDocxAndFindingDocx(t *testing.T) {
 		Title: "T", Goal: "G", GeneratedAt: time.Now(),
 		AssetCounts: map[string]int{"ip": 3},
 		Findings:    []*db.DBFinding{f},
+		AssetNames:  map[int64]string{5: "10.0.0.5", 2: "admin.example.com"},
+		Retests: map[int64][]*db.FindingRetest{
+			42: {{FindingID: 42, Verdict: "reproduced", Summary: "PoC 复现成功", CreatedAt: time.Now()}},
+		},
 	}
 	var buf bytes.Buffer
 	if err := BuildTaskDocx(in).Encode(&buf); err != nil {
@@ -101,12 +106,122 @@ func TestBuildTaskDocxAndFindingDocx(t *testing.T) {
 	if buf.Len() == 0 {
 		t.Fatal("empty task docx")
 	}
+	// 内容级断言（A2/A8/A9/A10）
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc string
+	for _, zf := range zr.File {
+		if zf.Name == "word/document.xml" {
+			rc, _ := zf.Open()
+			var b bytes.Buffer
+			_, _ = b.ReadFrom(rc)
+			rc.Close()
+			doc = b.String()
+		}
+	}
+	for _, frag := range []string{
+		"影响资产:10.0.0.5, admin.example.com", // A8 可读名
+		"最近复测:已复现",                         // A9 复测小节
+		"<w:color w:val=\"C00000\"/>",      // A2 critical 标题着色
+	} {
+		if !strings.Contains(doc, frag) {
+			t.Errorf("document.xml missing %q", frag)
+		}
+	}
+	if strings.Contains(doc, "影响资产 id:") {
+		t.Error("legacy 影响资产 id: 形态仍在（A8 未生效）")
+	}
 	buf.Reset()
-	if err := BuildFindingDocx(f, time.Now()).Encode(&buf); err != nil {
+	if err := BuildFindingDocx(f, time.Now(), map[int64]string{5: "10.0.0.5"}, nil).Encode(&buf); err != nil {
 		t.Fatal(err)
 	}
 	if buf.Len() == 0 {
 		t.Fatal("empty finding docx")
+	}
+}
+
+// TestDocxBulletNumbering A1：包里必须有 numbering.xml 且 numId=1 存在——
+// 此前缺该部件导致 Word 里项目符号静默不渲染。
+func TestDocxBulletNumbering(t *testing.T) {
+	d := NewDocx()
+	d.Bullet("要点一")
+	var buf bytes.Buffer
+	if err := d.Encode(&buf); err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]string{}
+	for _, f := range zr.File {
+		rc, _ := f.Open()
+		var b bytes.Buffer
+		_, _ = b.ReadFrom(rc)
+		rc.Close()
+		found[f.Name] = b.String()
+	}
+	num, ok := found["word/numbering.xml"]
+	if !ok {
+		t.Fatal("missing word/numbering.xml（bullet 会静默不渲染）")
+	}
+	if !strings.Contains(num, `<w:num w:numId="1">`) {
+		t.Error("numbering.xml missing <w:num w:numId=1>")
+	}
+	rels := found["word/_rels/document.xml.rels"]
+	if !strings.Contains(rels, "numbering.xml") {
+		t.Error("document.xml.rels missing numbering relationship")
+	}
+	// 全部件 XML 良构校验：手写模板一旦出语法错误，Word 会直接拒绝打开整个文件
+	// ——比「少个 bullet」严重得多，必须在测试里拦住。
+	for name, body := range found {
+		if !strings.HasSuffix(name, ".xml") && !strings.HasSuffix(name, ".rels") {
+			continue
+		}
+		if err := xml.Unmarshal([]byte(body), new(any)); err != nil {
+			t.Errorf("part %s is not well-formed XML: %v", name, err)
+		}
+	}
+}
+
+// TestWriteMarkdownishRich A5：表格/加粗/层级。
+func TestWriteMarkdownishRich(t *testing.T) {
+	d := NewDocx()
+	md := "## 复现步骤\n- 打开 **/admin** 面板\n\n| 字段 | 值 |\n|---|---|\n| path | /admin |\n| auth | 无 |\n"
+	writeMarkdownish(d, md)
+	var buf bytes.Buffer
+	if err := d.Encode(&buf); err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc string
+	for _, f := range zr.File {
+		if f.Name == "word/document.xml" {
+			rc, _ := f.Open()
+			var b bytes.Buffer
+			_, _ = b.ReadFrom(rc)
+			rc.Close()
+			doc = b.String()
+		}
+	}
+	for _, frag := range []string{
+		"<w:tbl>",  // 表格真 OOXML 化
+		"<w:b/>",   // 加粗 run
+		"Heading4", // ## 不再压平到 H3
+		"w:numId",  // bullet 编号引用
+	} {
+		if !strings.Contains(doc, frag) {
+			t.Errorf("document.xml missing %q", frag)
+		}
+	}
+	// 分隔行 |---|---| 不能进表格内容
+	if strings.Contains(doc, "---") {
+		t.Error("table separator row leaked into document")
 	}
 }
 
