@@ -27,6 +27,7 @@ import type {
   Agent,
   ConvTokenSummary,
   Finding,
+  FindingStats,
   InterceptPending,
   LLMProfile,
   MCPServer,
@@ -132,7 +133,10 @@ function SectionTitle({
 export default function DashboardPage() {
   // data state
   const [tasks, setTasks] = React.useState<Task[]>([]);
-  const [findings, setFindings] = React.useState<Finding[]>([]);
+  // 发现不再全量拉（体检 O4：此前 findings 无上限，发现多了首屏明显变慢）——
+  // 计数/严重度分布走 findingStats（后端聚合），最近发现只拉 8 条（按时间倒序）。
+  const [findingStatsData, setFindingStatsData] = React.useState<FindingStats | null>(null);
+  const [findings, setFindings] = React.useState<Finding[]>([]); // 最近发现（≤8 条，仅列表用）
   const [stats, setStats] = React.useState<Stats | null>(null);
   const [settings, setSettings] = React.useState<Settings | null>(null);
   const [pending, setPending] = React.useState<InterceptPending[]>([]);
@@ -187,8 +191,9 @@ export default function DashboardPage() {
       if (loading) return;
       loading = true;
       try {
-        const [findings, stats, settings, pending, activity, tokens, conversationTokens] = await Promise.all([
-          api.findings(),
+        const [findingsPage, fstats, stats, settings, pending, activity, tokens, conversationTokens] = await Promise.all([
+          api.findingsPage({ page: 1, pageSize: 8, sort: "time" }),
+          api.findingStats(),
           api.stats(),
           api.settings(),
           api.interceptPending(),
@@ -197,7 +202,8 @@ export default function DashboardPage() {
           api.conversationTokens(),
         ]);
         if (!alive) return;
-        setFindings(findings);
+        setFindings(findingsPage.items);
+        setFindingStatsData(fstats);
         setStats(stats);
         setSettings(settings);
         setPending(pending);
@@ -262,13 +268,15 @@ export default function DashboardPage() {
     return m;
   }, [tasks]);
 
-  const findingsBySev = React.useMemo(() => {
-    const m = { critical: 0, high: 0, medium: 0, low: 0 };
-    for (const f of findings) {
-      if (f.severity in m) m[f.severity as keyof typeof m]++;
-    }
-    return m;
-  }, [findings]);
+  const findingsBySev = React.useMemo(
+    () => ({
+      critical: findingStatsData?.critical ?? 0,
+      high: findingStatsData?.high ?? 0,
+      medium: findingStatsData?.medium ?? 0,
+      low: findingStatsData?.low ?? 0,
+    }),
+    [findingStatsData],
+  );
 
   const sortedTasks = React.useMemo(
     () =>
@@ -528,7 +536,7 @@ export default function DashboardPage() {
             <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
               <BugIcon className="size-3" /> 确认发现
             </div>
-            <div className="font-semibold text-2xl tabular-nums">{findings.length}</div>
+            <div className="font-semibold text-2xl tabular-nums">{findingStatsData?.total ?? 0}</div>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2.5 text-[10px]">
             <span className="text-rose-500">严重 {findingsBySev.critical}</span>

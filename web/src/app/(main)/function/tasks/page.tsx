@@ -340,6 +340,25 @@ export default function TasksPage() {
   const [nowSec, setNowSec] = React.useState(() => Math.floor(Date.now() / 1000));
   const [batchControlling, setBatchControlling] = React.useState<"pause" | "resume" | null>(null);
   const [movingCategory, setMovingCategory] = React.useState(false);
+  // 冷启动引导：LLM 通道一个都没有时，新建任务必然跑不起来（体检 O1——此前
+  // 允许空链提交，任务跑到引擎才失败）。null=探测中，不拦截。
+  const [llmReady, setLlmReady] = React.useState<boolean | null>(null);
+
+  React.useEffect(() => {
+    let alive = true;
+    api
+      .llmProfiles()
+      .then((profiles) => {
+        if (alive) setLlmReady(profiles.length > 0);
+      })
+      .catch(() => {
+        // 探测失败不拦截创建——别因为一个只读探测把人挡死，让执行时报错兜底。
+        if (alive) setLlmReady(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   React.useEffect(() => {
     const raw = getLocalStorageValue(TASK_FILTER_PREFERENCE_KEY);
@@ -930,9 +949,23 @@ export default function TasksPage() {
             </div>
 
             {tasks.length === 0 ? (
-              <div className="mx-4 flex items-center justify-center rounded-lg border border-dashed py-20 text-muted-foreground text-sm lg:mx-6">
-                暂无任务，点击右上角「新建任务」开始。
-              </div>
+              llmReady === false ? (
+                // 冷启动第一屏：没配 LLM 时空列表只会让人茫然——直接给出下一步。
+                <div className="mx-4 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed py-16 text-center lg:mx-6">
+                  <p className="font-medium text-sm text-foreground">先配置 LLM 通道，再创建第一个任务</p>
+                  <p className="text-muted-foreground max-w-md text-sm">
+                    探索由 LLM 多 Agent 驱动：没有可用通道，任务创建后也无法推进。
+                    支持 Anthropic / OpenAI / 任意 OpenAI 兼容网关，建议配 ≥2 个通道开启轮询。
+                  </p>
+                  <Button asChild size="sm">
+                    <Link href="/system/llm">去配置 LLM</Link>
+                  </Button>
+                </div>
+              ) : (
+                <div className="mx-4 flex items-center justify-center rounded-lg border border-dashed py-20 text-muted-foreground text-sm lg:mx-6">
+                  暂无任务，点击右上角「新建任务」开始。
+                </div>
+              )
             ) : filtered.length === 0 ? (
               <div className="mx-4 flex items-center justify-center rounded-lg border border-dashed py-20 text-muted-foreground text-sm lg:mx-6">
                 没有匹配的任务。
@@ -3165,6 +3198,11 @@ function CreateTaskSheet({
   async function createTask() {
     if (!description.trim() || !goal.trim()) {
       toast.error("请填写描述与目标");
+      return;
+    }
+    if (profiles.length === 0) {
+      // 冷启动防呆（体检 O1）：零 LLM 通道的任务必死——在创建前拦下并给出路。
+      toast.error("尚未配置任何 LLM 通道——请先到「系统 → LLM」添加并设为激活，否则任务无法推进", { duration: 8000 });
       return;
     }
     if (sourceTaskIDs.length > MAX_SOURCE_TASKS) {

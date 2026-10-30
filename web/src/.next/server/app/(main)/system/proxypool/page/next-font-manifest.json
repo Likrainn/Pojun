@@ -1,0 +1,16 @@
+{
+  "pages": {},
+  "app": {
+    "[project]/src/app/(main)/system/proxypool/page": [
+      "static/media/Geist_Variable-s.p.0mrjj4bg00-he.woff2",
+      "static/media/GeistMono_Variable-s.p.3ms9vq719j3f8.woff2",
+      "static/media/GeistPixel_Square.p.2hsizu-z_gncm.woff2",
+      "static/media/GeistPixel_Grid.p.2ss63b6eqyzy4.woff2",
+      "static/media/GeistPixel_Circle.p.0rqe0db4f0cia.woff2",
+      "static/media/GeistPixel_Triangle.p.04xw1z5oncddb.woff2",
+      "static/media/GeistPixel_Line.p.1gvmpev-r-ty_.woff2"
+    ]
+  },
+  "appUsingSizeAdjust": true,
+  "pagesUsingSizeAdjust": false
+}

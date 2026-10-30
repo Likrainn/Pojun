@@ -777,7 +777,7 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
       ...historyById.get(row.id),
       ...row,
     }));
-  const title = taskId ? "拦截审批" : "审批记录";
+  const title = "拦截审批"; // 三处入口（侧栏/任务 tab/会话内嵌）统一一个名字，别让用户建两个心智
   return (
     <div className="flex min-w-0 flex-col gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
