@@ -578,7 +578,7 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 	}
 	out["recent_done_intents"] = compactIntents(recentDone, parentsOf, yieldsOf)
 	// 收官态势(边际收益):最近 N 轮规划后,全任务有没有新的 fact/finding 产出。
-	// 连续 ≥3 轮零新产出且 frontier 空 → 提示考虑 finish_task 收官(预算保护:
+	// 连续 ≥3 轮零新产出且 frontier 空 → 提示用 goal_met 收官(预算保护:
 	// 这时候继续派大概率烧 token 无产出)。程序算好放在这里,planner 不用自己数。
 	if t.ts != nil && t.taskID > 0 {
 		out["stall"] = t.stallOverview()
@@ -2205,17 +2205,17 @@ func (t *ToolSet) searchAllWorkerTraces() actool.CoreTool {
 		})
 }
 
-// listWorkerTraces gives a worker (which has no graph_overview and can't see the
-// intent graph) a lightweight index of the works in this task — intent_id +
-// one-line summary + state — so it can DISCOVER which works to inspect via
-// get_worker_trace. Without this a worker only knows intent_ids that come back
-// from search_all_worker_traces hits. Excludes still-open intents (not yet run →
-// no process to inspect).
+// listWorkerTraces gives planner/mainagent a lightweight index of the works in
+// this task — intent_id + one-line summary + state — so they can DISCOVER which
+// works to inspect via get_worker_trace during cross-work review. Registered in
+// MainAgentTools only: workers get their per-intent context from the engine and
+// must not wander the graph (tools_insert.go WorkerTools 注释)。Excludes
+// still-open intents (not yet run → no process to inspect).
 func (t *ToolSet) listWorkerTraces() actool.CoreTool {
 	return t.readExpTool("list_worker_traces",
 		"【通常不推荐使用，因为系统中已经给了大部分信息了】列出本任务里【已跑过的 work（意图）】索引：intent_id + 一句话方向(summary) + 状态。"+
-			"你(worker)看不到探索图，用它来发现有哪些 work 值得翻看——再用 get_worker_trace(intent_id) 看其步骤、get_worker_trace(intent_id, step_ids=[...]) 取详情。"+
-			"只列已执行的(running/done/exhausted/blocked/stopped)，不含还没跑的 open。注意：你的任务边界仍是你领到的那条意图，看别的 work 只为复用观察/避免重复劳动。",
+			"你(mainagent/planner 视角)通常已能从 graph_overview 看到全局；需要逐 work 复盘执行过程时，用它先发现有哪些 work 值得翻看——再用 get_worker_trace(intent_id) 看其步骤、get_worker_trace(intent_id, step_ids=[...]) 取详情。"+
+			"只列已执行的(running/done/exhausted/blocked/stopped)，不含还没跑的 open。",
 		obj(map[string]any{
 			"q":     str("按 summary 关键字过滤（可选）"),
 			"limit": intp("返回上限，默认 50（可选）"),
@@ -2320,7 +2320,7 @@ func (t *ToolSet) stallOverview() map[string]any {
 	// 提示位:零新产出 + 无 open → 建议收官
 	if recentNew == 0 && openCnt == 0 {
 		out["hint"] = "最近 6 小时无新 fact/finding 且无 open 意图——边际收益可能已耗尽。若目标确已尽力," +
-			"考虑用 finish_task 收官(说明理由);仍有未测方向就继续派意图。"
+			"用 goal_met 收官(reason 写明边际收益耗尽的诚实小结);仍有未测方向就继续派意图。"
 	}
 	return out
 }

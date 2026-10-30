@@ -4,6 +4,56 @@
 
 ## [Unreleased]
 
+## [0.3.89] - 2026-10-31
+
+> 本版为「产品全面体检」批 1（P0 缺陷修复），体检全文见
+> [docs/产品全面体检-2026-10-31.md](docs/产品全面体检-2026-10-31.md)。
+
+### 修复的问题
+
+**前端**
+
+- **四处删除无确认**：MCP 服务器 / LLM 配置 / 自定义工具 / 通知渠道此前单击
+  即删，与任务、漏洞等页的确认标准割裂，且误删直接影响运行中的 agent。统一
+  补 AlertDialog 二次确认（对齐 skills 页既有模式）。
+- **登录失败原因被吞**：网络断连、限流锁定、密码未初始化一律误报「用户名或
+  密码错误」，诱导用户反复试密码（越试越锁）。按 HTTP 状态分型展示。
+- **LLM 调用记录筛选变更不重置页码**：useEffect 依赖数组漏写，改筛选后停留
+  旧页码导致列表看似为空。
+
+**Agent 链路**
+
+- **`list_worker_traces` 未注册进任何工具清单**——与 v0.3.87 listener 漏注册
+  同类（实现/描述/清单三方向互斥）。归属 mainagent（跨 work 复盘入口）并注册，
+  描述同步从 worker 视角改为 mainagent/planner 视角。
+- **`expand_digest` 纯读工具误用 writeExpTool 注册**：丢 ReadOnly/Concurrent
+  标记，被调度层串行化。改 readExpTool。
+- **stall 收官提示引导调用不存在的 `finish_task`**（实际工具是 `goal_met`），
+  恰在收官时刻触发一次工具报错。
+- **planner 提示词与实际不符**：承诺的概览字段 `sites_without_endpoints` 从
+  未产出；list_assets 参数描述陈旧（q/company_id → 实际 dsl/type/id/ids）。
+  已对齐 graphOverviewData 真实字段清单。
+- **终局规划轮无墙钟**：`runFinalPlannerRound` 直接同步调 Plan 且 ctx 无
+  deadline——Plan 卡死（上游半开连接 / compactor 自死锁，均为线上发生过的事故）
+  会让 settleTask 永卡 settling。复用普通规划轮的 goroutine + plannerRoundTimeout
+  包装，超时按未达成继续收尾。
+
+**后端 / 拦截**
+
+- **C2 配置静默写失败**：`PUT /api/c2/config` 用 `_ = SetSetting(...)` 吞错，
+  落库失败用户仍看到 200。失败回 500 + 日志。
+- **ask 审批可无限等待**：规则未声明 timeout 时 HandleAsk 无限阻塞等人，
+  审批人离场则 worker 挂死到任务超时。补全局兜底上限（默认 6 小时，到点按
+  deny 收口，可经 `intercept_ask_default_timeout_seconds` 设置覆盖）。
+- **`goal_met` 完全不进拦截体系**：一句话终结整个任务、只留「声称」痕迹且
+  无任何管控。纳入默认拦截工具集 + 新增内置 judge 规则「goal_met 收官研判」
+  （V5 seed，含已部署实例的按名补种与 enabled 工具集一次性合并）。
+
+### 新增
+
+- 内置拦截规则第 13 条：**[内置] goal_met 收官研判**（judge 类）——收官声明
+  交模型核对「是否量化达标 / 是否边际收益诚实收官」，未经核对的提前盖章打回。
+
 ## [0.3.88] - 2026-10-30
 
 ### 修复的问题

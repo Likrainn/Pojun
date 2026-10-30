@@ -34,6 +34,16 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { api } from "@/lib/api";
 import { cloneJson } from "@/lib/json";
 import type { Agent, Tool } from "@/lib/types";
@@ -561,6 +571,8 @@ function CustomToolDialog({
   const [paramsText, setParamsText] = React.useState("");
   const [testing, setTesting] = React.useState(false);
   const [testResult, setTestResult] = React.useState<{ output: string; is_error: boolean } | null>(null);
+  // 删除二次确认：自定义工具是脚本/命令执行面，删错直接影响依赖它的 Agent。
+  const [confirmDel, setConfirmDel] = React.useState(false);
 
   // (re)load form state when opening.
   React.useEffect(() => {
@@ -642,12 +654,15 @@ function CustomToolDialog({
   }
   async function del() {
     if (!tool) return;
+    setSaving(true);
     try {
       await api.deleteCustomTool(tool.key);
       toast.success("已删除");
       onSaved();
     } catch (e) {
       toast.error(`删除失败：${(e as Error).message}`);
+    } finally {
+      setSaving(false);
     }
   }
   // runTest dry-runs the CURRENT form (unsaved) with the sample params, so a
@@ -833,11 +848,32 @@ function CustomToolDialog({
             <SaveIcon /> {isNew ? "创建" : "保存"}
           </Button>
           {!isNew && (
-            <Button size="sm" variant="outline" className="text-destructive" onClick={del}>
+            <Button size="sm" variant="outline" className="text-destructive" onClick={() => setConfirmDel(true)}>
               <Trash2Icon /> 删除
             </Button>
           )}
         </div>
+
+        {/* ── 删除二次确认 ── */}
+        <AlertDialog open={confirmDel} onOpenChange={setConfirmDel}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>删除自定义工具「{tool?.key}」？</AlertDialogTitle>
+              <AlertDialogDescription>
+                绑定该工具的 Agent 将立即失去它；依赖它的任务步骤会开始失败。此操作不可撤销。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={saving}>取消</AlertDialogCancel>
+              <AlertDialogAction
+                disabled={saving}
+                onClick={(e) => { e.preventDefault(); void del(); }}
+              >
+                {saving ? "删除中…" : "删除"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </SheetContent>
     </Sheet>
   );

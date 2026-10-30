@@ -293,6 +293,9 @@ ON CONFLICT (name) DO NOTHING`,
 	if err := d.seedDefaultInterceptRulesV4(); err != nil {
 		return fmt.Errorf("seed intercept rules v4: %w", err)
 	}
+	if err := d.seedDefaultInterceptRulesV5(); err != nil {
+		return fmt.Errorf("seed intercept rules v5: %w", err)
+	}
 	if err := d.migrateListenerRuleTimeout(); err != nil {
 		return fmt.Errorf("migrate listener rule timeout: %w", err)
 	}
@@ -648,6 +651,49 @@ WHERE key='llm_judge_timeout_seconds' AND value IN ('90','90.0',' 90 ')`); err !
 		return fmt.Errorf("judge timeout: %w", err)
 	}
 	return d.SetSetting(flag, "done")
+}
+
+// seedDefaultInterceptRulesV5 brings goal_met into the intercept system
+// (v0.3.88 体检 S3)：新增 judge 规则 + 把 goal_met 合进已保存的 enabled 工具集
+// （未保存的实例走代码默认 defaultEnabledTools，那里也已加入）。
+func (d *DB) seedDefaultInterceptRulesV5() error {
+	if err := d.seedBuiltinInterceptRulesBatch("v5", "intercept_default_rules_v5_goalmet"); err != nil {
+		return err
+	}
+	// 按名补种：flag 早退也可能吞掉新规则（V4 教训：v0.3.86 全新装→0.3.87 升级
+	// 的实例 listener 规则缺失——flag 在规则入目录前已置 done）。
+	for _, r := range builtinInterceptRules {
+		if r.seedBatch != "v5" {
+			continue
+		}
+		var exists bool
+		if err := d.QueryRow(`SELECT EXISTS(SELECT 1 FROM intercept_rules WHERE name=$1)`, r.name).Scan(&exists); err != nil {
+			return fmt.Errorf("probe v5 rule %q: %w", r.name, err)
+		}
+		if exists {
+			continue // 用户编辑过或已插入——不动
+		}
+		if _, err := d.Exec(`
+INSERT INTO intercept_rules(name, enabled, priority, match_target, match_type, pattern, action, message, timeout_enabled, timeout_seconds, timeout_action)
+VALUES ($1, true, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT DO NOTHING`,
+			r.name, r.priority, r.target, r.typ, r.pattern, r.action, r.message,
+			r.timeoutEnabled, r.timeoutSeconds, r.timeoutAction,
+		); err != nil {
+			return fmt.Errorf("reseed v5 rule %q: %w", r.name, err)
+		}
+	}
+	// 已保存过 enabled 工具集的实例补 goal_met（V4 同款一次性 append）。
+	if raw, ok, err := d.GetSetting("intercept_enabled_tools"); err != nil {
+		return err
+	} else if ok {
+		if merged, changed := mergeEnabledInterceptTools(raw, "goal_met"); changed {
+			if err := d.SetSetting("intercept_enabled_tools", merged); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // migrateListenerRuleTimeout 把「启停回连接收器」这条 ask 规则的超时策略从

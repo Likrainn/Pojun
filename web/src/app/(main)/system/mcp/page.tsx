@@ -19,6 +19,16 @@ import {
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import type { MCPServer, MCPTool, Agent } from "@/lib/types";
@@ -50,6 +60,9 @@ export default function MCPPage() {
 
   const [open, setOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<MCPServer | null>(null); // null = add mode
+  // 删除二次确认（对齐 tasks/skills 的标准交互：删除直接改 agent 可用的工具面，必须确认）
+  const [pendingDelete, setPendingDelete] = React.useState<MCPServer | null>(null);
+  const [deleting, setDeleting] = React.useState(false);
   const [tab, setTab] = React.useState<"config" | "tools">("config");
   const [form, setForm] = React.useState<FormState>(emptyForm);
   const [saving, setSaving] = React.useState(false);
@@ -198,13 +211,17 @@ export default function MCPPage() {
   }
 
   async function removeServer(s: MCPServer) {
+    setDeleting(true);
     try {
       await api.deleteMcpServer(s.id);
       toast.success(`已删除：${s.name}`);
       setOpen(false);
       load();
+      setPendingDelete(null);
     } catch (e) {
       toast.error(`删除失败：${(e as Error).message}`);
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -399,7 +416,7 @@ export default function MCPPage() {
                     size="icon"
                     variant="outline"
                     aria-label="删除"
-                    onClick={() => removeServer(s)}
+                    onClick={() => setPendingDelete(s)}
                   >
                     <Trash2Icon className="text-destructive" />
                   </Button>
@@ -477,6 +494,27 @@ export default function MCPPage() {
           )}
         </SheetContent>
       </Sheet>
+
+      {/* ── 删除二次确认 ── */}
+      <AlertDialog open={!!pendingDelete} onOpenChange={(o) => { if (!o) setPendingDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除 MCP 服务器「{pendingDelete?.name}」？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将移除该服务器及其全部工具发现结果；引用其工具的 Agent 会立即失去这些工具。此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleting}
+              onClick={(e) => { e.preventDefault(); if (pendingDelete) void removeServer(pendingDelete); }}
+            >
+              {deleting ? "删除中…" : "删除"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

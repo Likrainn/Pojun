@@ -12,6 +12,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -46,6 +56,9 @@ export default function NotifyPage() {
   const [form, setForm] = React.useState<ChannelForm>(emptyForm("dingtalk"));
   const [saving, setSaving] = React.useState(false);
   const [testing, setTesting] = React.useState(false);
+  // 删除二次确认：误删在用渠道会让告警静默丢失。
+  const [pendingDelete, setPendingDelete] = React.useState<NotificationChannel | null>(null);
+  const [deleting, setDeleting] = React.useState(false);
 
   const [globalSaving, setGlobalSaving] = React.useState(false);
   const [baseURL, setBaseURL] = React.useState("");
@@ -211,13 +224,17 @@ export default function NotifyPage() {
   }
 
   async function removeChannel(ch: NotificationChannel) {
+    setDeleting(true);
     try {
       await api.notifyDeleteChannel(ch.id);
       toast.success(`已删除：${ch.name}`);
       setOpen(false);
       load();
+      setPendingDelete(null);
     } catch (e) {
       toast.error(`删除失败：${(e as Error).message}`);
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -383,9 +400,7 @@ export default function NotifyPage() {
                         aria-label="删除"
                         onClick={(e) => {
                           e.stopPropagation();
-                          // void 显式丢弃 Promise：removeChannel 自己 catch 并 toast，
-                          // 这里不需要 await（onClick 不是 async）。
-                          void removeChannel(ch);
+                          setPendingDelete(ch);
                         }}
                       >
                         <Trash2Icon className="text-destructive" />
@@ -600,6 +615,27 @@ export default function NotifyPage() {
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* ── 删除二次确认 ── */}
+      <AlertDialog open={!!pendingDelete} onOpenChange={(o) => { if (!o) setPendingDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除通知渠道「{pendingDelete?.name}」？</AlertDialogTitle>
+            <AlertDialogDescription>
+              删除后命中该渠道过滤规则的告警将不再投递。此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleting}
+              onClick={(e) => { e.preventDefault(); if (pendingDelete) void removeChannel(pendingDelete); }}
+            >
+              {deleting ? "删除中…" : "删除"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

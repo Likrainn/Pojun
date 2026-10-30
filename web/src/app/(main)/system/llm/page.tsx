@@ -24,6 +24,16 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
@@ -820,6 +830,9 @@ export default function LLMPage() {
   // 「编辑 X」闪成「新建」。editing = null 表示新建。
   const [editOpen, setEditOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<LLMProfile | null>(null);
+  // 删除二次确认：误删正在被任务引用的 LLM 配置会让进行中的任务直接断粮。
+  const [pendingDelete, setPendingDelete] = React.useState<LLMProfile | null>(null);
+  const [deleting, setDeleting] = React.useState(false);
   const openEditor = React.useCallback((p: LLMProfile | null) => {
     setEditing(p);
     setEditOpen(true);
@@ -868,12 +881,16 @@ export default function LLMPage() {
       toast.error("无法删除当前激活的配置");
       return;
     }
+    setDeleting(true);
     try {
       await api.deleteLLMProfile(p.id);
       toast.success(`已删除：${p.name}`);
       await load();
+      setPendingDelete(null);
     } catch (e) {
       toast.error(`删除失败：${(e as Error).message}`);
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -987,7 +1004,7 @@ export default function LLMPage() {
                         aria-label="删除配置"
                         onClick={(e) => {
                           e.stopPropagation();
-                          void remove(p);
+                          setPendingDelete(p);
                         }}
                       >
                         <Trash2Icon className="text-destructive" />
@@ -1012,6 +1029,27 @@ export default function LLMPage() {
 
       <ProfileSheet profile={editing} open={editOpen} onOpenChange={setEditOpen} onSaved={() => void load()} />
       <PoolSheet open={poolOpen} onOpenChange={setPoolOpen} pool={pool} onReload={loadPool} />
+
+      {/* ── 删除二次确认 ── */}
+      <AlertDialog open={!!pendingDelete} onOpenChange={(o) => { if (!o) setPendingDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除 LLM 配置「{pendingDelete?.name}」？</AlertDialogTitle>
+            <AlertDialogDescription>
+              使用该配置的任务与会话会立即切换到其它可用通道；若它是轮询池成员，将同时从池中移除。此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleting}
+              onClick={(e) => { e.preventDefault(); if (pendingDelete) void remove(pendingDelete); }}
+            >
+              {deleting ? "删除中…" : "删除"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

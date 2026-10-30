@@ -268,18 +268,33 @@ func (s *Server) c2ConfigPut(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, "mode 只允许 direct/ssh/manual")
 			return
 		}
-		_ = s.m.pg.SetSetting(settingC2RelayMode, m)
-	}
-	put := func(key string, v *string) {
-		if v != nil {
-			_ = s.m.pg.SetSetting(key, *v)
+		if err := s.m.pg.SetSetting(settingC2RelayMode, m); err != nil {
+			writeErr(w, 500, "保存 mode 失败: "+err.Error())
+			return
 		}
 	}
-	put(settingC2RelayHost, req.Host)
-	put(settingC2RelaySSH, req.SSH)
-	put(settingC2RelayPass, req.Pass)
-	put(settingC2RelayKey, req.Key)
-	put(settingC2RelayIface, req.Iface)
+	// 落库失败必须回错——配置写丢了用户却看到 200，下次重连回连地址就错了。
+	put := func(key string, v *string) error {
+		if v == nil {
+			return nil
+		}
+		return s.m.pg.SetSetting(key, *v)
+	}
+	for _, kv := range []struct {
+		key string
+		val *string
+	}{
+		{settingC2RelayHost, req.Host},
+		{settingC2RelaySSH, req.SSH},
+		{settingC2RelayPass, req.Pass},
+		{settingC2RelayKey, req.Key},
+		{settingC2RelayIface, req.Iface},
+	} {
+		if err := put(kv.key, kv.val); err != nil {
+			writeErr(w, 500, "保存 "+kv.key+" 失败: "+err.Error())
+			return
+		}
+	}
 	s.c2ConfigGet(w, r)
 }
 

@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"sort"
 	"strconv"
@@ -141,10 +142,13 @@ func (i *Interceptor) SetReviewer(r Reviewer) {
 
 // defaultEnabledTools is the hard-coded set of tools that enter the intercept
 // rule system when no intercept_enabled_tools setting has been saved.
+// goal_met 一句话终结整个任务且不走 prove_goal 证据链（v0.3.88 体检 S3）——
+// 入集后可被规则命中（内置 judge 规则「goal_met 收官研判」随 V5 seed 落库）。
 var defaultEnabledTools = []string{
 	"Bash", "WebFetch", "web_search",
 	"shell_open", "shell_send",
 	"listener_start", "listener_stop",
+	"goal_met",
 	"Write", "Edit", "MultiEdit",
 }
 
@@ -361,7 +365,16 @@ const (
 	settingJudgeFailAction       = "llm_judge_fail_action"
 	settingJudgeAskTimeoutSecs   = "llm_judge_ask_timeout_seconds"
 	settingJudgeAskTimeoutAction = "llm_judge_ask_timeout_action"
+
+	// ask 审批（规则未声明 timeout 时）的全局兜底上限。规则级 TimeoutEnabled
+	// 之外的最后一道墙：审批人离场不能让 worker 无限挂死（v0.3.88 体检 S2）。
+	settingAskDefaultTimeoutSecs = "intercept_ask_default_timeout_seconds"
 )
+
+// defaultAskTimeoutSecs：6 小时。语义与 judge 侧 180s 不同——这里是「规则
+// 声明了要人拍板、但没人声明等多久」，等的是**操作员回来上班**，所以给足
+// 一个工作日内的量级；到点按 deny 收口（拒绝永远是 ask 类规则的安全侧），
+// 结果进审批历史（status=timeout）可追溯。
 
 // Judge default values.
 //
@@ -390,6 +403,9 @@ const (
 	defaultJudgeFailAction       = "ask"
 	defaultJudgeAskTimeoutSecs   = 180
 	defaultJudgeAskTimeoutAction = "allow"
+
+	// ask 全局兜底上限：6h（见 settingAskDefaultTimeoutSecs 注释）。
+	defaultAskTimeoutSecs = 6 * 60 * 60
 )
 
 // JudgeConfig is the resolved LLM-fallback-judge configuration. Prompt is always
@@ -788,9 +804,32 @@ func (i *Interceptor) HandleAsk(ctx context.Context, convID int64, dec Decision,
 	}
 
 	if !dec.TimeoutEnabled {
-		// No timeout: wait indefinitely until user decides or worker stops.
+		// 规则未声明超时 ≠ 无限等待：审批人离场时 worker 会挂死到任务超时，
+		// 整个任务的预算跟着烧完（v0.3.88 体检 S2）。给一个全局兜底上限——
+		// 到点按 deny 收口（ask 守的是能力边界变更，拒绝永远是安全侧），
+		// 记日志让运维能在审批历史里看到「timeout」结果。上限可在系统设置
+		// intercept_ask_default_timeout_seconds 覆盖（秒）。
+		ceiling := i.getSettingInt(settingAskDefaultTimeoutSecs, defaultAskTimeoutSecs)
+		if ceiling <= 0 {
+			ceiling = defaultAskTimeoutSecs
+		}
+		timer := time.NewTimer(time.Duration(ceiling) * time.Second)
+		defer timer.Stop()
 		select {
 		case allowed := <-ch:
+			return allowed
+		case <-timer.C:
+			log.Printf("[intercept] ask 审批 #%d 超过全局兜底上限(%ds)无人处理，按 deny 收口", pendingID, ceiling)
+			allowed := false
+			action := "deny"
+			resolved, err := i.db.ResolveIntercept(pendingID, "timeout", action, "审批超过兜底上限无人处理，按拒绝处理")
+			if err != nil {
+				return false
+			}
+			if !resolved {
+				detail, err := i.db.GetInterceptDetail(pendingID)
+				return err == nil && detail != nil && (detail.Status == "allowed" || (detail.Audit != nil && detail.Audit.EffectiveAction == "allow"))
+			}
 			return allowed
 		case <-ctx.Done():
 			_, _ = i.db.ResolveIntercept(pendingID, "denied", "deny", "工作已取消")

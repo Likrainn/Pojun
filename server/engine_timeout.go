@@ -267,12 +267,24 @@ func (e *Engine) runFinalPlannerRound(ctx context.Context, t *Task) (met bool) {
 		Summary: fmt.Sprintf("任务超时收尾·终局判定(第 %d 轮)", e.nextPlannerRound(t.ID))})
 	tTaskID, _ := strconv.ParseInt(t.ID, 10, 64)
 	e.BeginLLMCall(t.ID)
-	met, reason, err := planner.Plan(fctx, tTaskID, e.m.assets, t.Store, t.Goal, t.drainTriggers(), emit)
+	// 终局轮与普通规划轮同款墙钟护栏：fctx 是无 deadline 的 server 根 ctx，而
+	// settleTask 在等这一步落终态——Plan 若卡死（上游半开连接/compactor 自死锁，
+	// 两类都是线上发生过的事故），任务会永远停在 settling。超时=按「未达成」
+	// 返回，走正常的超时收尾流程；卡死的 goroutine 泄漏是两害取其轻。
+	roundCtx, roundCancel := context.WithTimeout(fctx, plannerRoundLimit())
+	defer roundCancel()
+	res := runPlannerRound(roundCtx, func(pctx context.Context) (bool, string, error) {
+		return planner.Plan(pctx, tTaskID, e.m.assets, t.Store, t.Goal, t.drainTriggers(), emit)
+	})
 	e.EndLLMCall(t.ID)
-	if err != nil {
-		log.Printf("[deadline] task %s 终局规划出错: %v", t.ID, err)
-	} else if met {
-		log.Printf("[deadline] task %s 终局判定目标达成: %s", t.ID, reason)
+	if res.err != nil && roundCtx.Err() != nil {
+		log.Printf("[deadline] task %s 终局规划超时(%s)，按未达成继续收尾", t.ID, plannerRoundLimit())
+		return false
 	}
-	return met
+	if res.err != nil {
+		log.Printf("[deadline] task %s 终局规划出错: %v", t.ID, res.err)
+	} else if res.met {
+		log.Printf("[deadline] task %s 终局判定目标达成: %s", t.ID, res.reason)
+	}
+	return res.met
 }

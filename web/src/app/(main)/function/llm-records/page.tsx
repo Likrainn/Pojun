@@ -191,10 +191,11 @@ export default function LLMRecordsPage() {
     return () => clearTimeout(t);
   }, [session]);
 
-  // Reset page on filter change.
+  // Reset page on filter change（依赖必须列全——漏了会让改筛选后停在旧页码，
+  // 列表看似为空，曾被写成空依赖数组只执行一次）。
   React.useEffect(() => {
     setPage(0);
-  }, []);
+  }, [model, sessionQ, pickedTask]);
 
   // Load list.
   React.useEffect(() => {

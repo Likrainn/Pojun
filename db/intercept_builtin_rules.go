@@ -512,6 +512,28 @@ var builtinInterceptRules = []builtinRule{
 		timeoutAction:  judgeTimeoutActionAllow,
 		priority:       80,
 	},
+
+	// ── 收官研判：goal_met 一句话终结整个任务且只留「声称」痕迹 ────────
+	// v0.3.88 体检 S3：此前 goal_met 完全不进拦截体系（连 enabled 工具集都没进），
+	// 模型可以在无量化核对的情况下收官整个任务——提示词护栏（prove_goal 前核对
+	// coverage.pct）拦不住非 prove_goal 路径。judge（而非 deny/ask）：正常收官是
+	// 高频合法动作，走模型研判核对「是否量化达标/是否边际收益收官」即可；
+	// 研判通过放行、未达标打回，两者都有留痕。
+	{
+		name:           "[内置] goal_met 收官研判",
+		seedBatch:      "v5",
+		target:         "tool_name",
+		typ:            "regex",
+		pattern:        `^goal_met$`,
+		action:         "judge",
+		class:          classJudge,
+		rationale:      "goal_met 直接终结整个任务且不走 prove_goal 的逐条证据链。交模型研判：目标是否已量化达标，或是否属「边际收益已耗尽」的诚实收官；未经核对的提前盖章应打回。",
+		message:        "整体收官声明（goal_met）已交由模型核对目标达成情况研判",
+		timeoutEnabled: true,
+		timeoutSeconds: judgeTimeoutSeconds,
+		timeoutAction:  judgeTimeoutActionAllow,
+		priority:       90,
+	},
 }
 
 // builtinRulePattern 返回指定内置规则的 pattern。

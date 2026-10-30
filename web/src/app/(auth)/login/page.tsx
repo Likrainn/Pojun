@@ -76,8 +76,22 @@ export default function LoginPage() {
       const { token } = await api.login("ARTEX", password);
       auth.setToken(token);
       window.location.replace("/function/tasks");
-    } catch {
-      setError("用户名或密码错误");
+    } catch (e) {
+      // 分型展示：网络断、限流锁定、未初始化、密码错是四种完全不同的用户动作
+      // （查网络 / 等待 / 去 /setup / 重输），一律报"密码错误"会诱导用户反复试
+      // 密码（越试越锁）。api 层把服务端 error 文本与 HTTP status 挂在 Error 上。
+      const err = e as Error & { status?: number };
+      if (!err.status) {
+        setError("无法连接到后端服务，请确认服务已启动");
+      } else if (err.status === 429) {
+        setError(err.message || "尝试过于频繁，账号已临时锁定，请稍后再试");
+      } else if (err.status === 403 && err.message.includes("未初始化")) {
+        setError("密码尚未初始化，请先完成首次设置");
+      } else if (err.status === 401) {
+        setError("用户名或密码错误");
+      } else {
+        setError(err.message || "登录失败，请稍后再试");
+      }
     } finally {
       setLoading(false);
     }

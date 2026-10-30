@@ -707,6 +707,9 @@ func (t *ToolSet) MainAgentTools() []actool.CoreTool {
 	return []actool.CoreTool{
 		t.graphOverview(), t.listFindings(), t.listFacts(), t.nodeDetail(),
 		t.expandDigest(), // cold-digest §6.1
+		// list_worker_traces：work 索引（intent_id+summary+state），先发现再看
+		// get_worker_trace——planner/main 的跨 work 复盘入口（worker 不给，见下）。
+		t.listWorkerTraces(),
 		t.getWorkerOutput(), t.getWorkerTrace(), t.searchAllWorkerTraces(), t.addHint(), t.addIntent(),
 		// steer_work：人可对某条正在运行的意图(work)实时注入纠偏指令（不打断、不丢进展）。
 		t.steerWorkTool(),
