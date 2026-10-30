@@ -10,7 +10,6 @@ import { useCurrentUser } from "@/hooks/use-current-user";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-import { AccountSwitcher } from "./sidebar/account-switcher";
 import { LayoutControls } from "./sidebar/layout-controls";
 import { SearchDialog } from "./sidebar/search-dialog";
 import { ThemeSwitcher } from "./sidebar/theme-switcher";
@@ -71,7 +70,6 @@ export function MainContent({ children }: { children: ReactNode }) {
             <UpdateBadge />
             <LayoutControls />
             <ThemeSwitcher />
-            <AccountSwitcher users={[currentUser]} />
           </div>
         </div>
       </header>
