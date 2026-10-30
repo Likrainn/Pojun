@@ -15,7 +15,8 @@ import (
 
 // Docx 是一份正在组装的文档;方法按顺序追加元素。
 type Docx struct {
-	buf bytes.Buffer
+	buf        bytes.Buffer
+	headerText string // 页眉文字（SetHeaderText；空 = 默认「渗透测试报告」）
 }
 
 // NewDocx 建立空文档(自动加封面后的第一个标题也由调用方控制)。
@@ -164,11 +165,41 @@ func (d *Docx) PageBreak() {
 	d.buf.WriteString(`<w:p><w:r><w:br w:type="page"/></w:r></w:p>`)
 }
 
+// CoverLine 封面行：居中、可指定半点字号（sz）与颜色。空文本输出空行（撑版面用）。
+func (d *Docx) CoverLine(text string, sz int, bold bool) {
+	pPr := `<w:pPr><w:jc w:val="center"/><w:spacing w:before="120" w:after="120"/></w:pPr>`
+	if text == "" {
+		fmt.Fprintf(&d.buf, `<w:p>%s</w:p>`, pPr)
+		return
+	}
+	rpr := "<w:rPr>"
+	if bold {
+		rpr += "<w:b/>"
+	}
+	if sz > 0 {
+		rpr += fmt.Sprintf(`<w:sz w:val="%d"/><w:szCs w:val="%d"/>`, sz, sz)
+	}
+	rpr += "</w:rPr>"
+	fmt.Fprintf(&d.buf, `<w:p>%s<w:r>%s<w:t xml:space="preserve">%s</w:t></w:r></w:p>`, pPr, rpr, esc(text))
+}
+
+// TOC 目录字段：Word 打开时按 updateFields 设置自动刷新（settings.xml 已置
+// updateFields，见 Encode）。\o "1-3" 收 Heading1-3——H4（漏洞明细小节）不进目录。
+func (d *Docx) TOC() {
+	d.buf.WriteString(`<w:p><w:fldSimple w:instr=" TOC \o &quot;1-3&quot; \h \z \u ">` +
+		`<w:r><w:t>（在 Word 中按 F9 或打印预览可刷新目录）</w:t></w:r></w:fldSimple></w:p>`)
+}
+
 // Encode 打包成 .docx 字节流。
 func (d *Docx) Encode(w io.Writer) error {
-	document := `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>` +
+	// 页眉页脚引用走 r: 命名空间（headerReference/footerReference 的 r:id）。
+	document := `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>` +
 		d.buf.String() +
-		`<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`
+		`<w:sectPr>` +
+		`<w:headerReference w:type="default" r:id="rIdHdr"/>` +
+		`<w:footerReference w:type="default" r:id="rIdFtr"/>` +
+		`<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>` +
+		`</w:sectPr></w:body></w:document>`
 
 	contentTypes := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -177,6 +208,9 @@ func (d *Docx) Encode(w io.Writer) error {
 <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
 <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
 <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
+<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
+<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
 </Types>`
 
 	rels := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -189,9 +223,69 @@ func (d *Docx) Encode(w io.Writer) error {
 	documentRels := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
+<Relationship Id="rIdHdr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
+<Relationship Id="rIdFtr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
+<Relationship Id="rIdSet" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>
 </Relationships>`
 
-	numbering := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+	// settings.xml：updateFields 让 Word 打开文档时自动刷新 TOC/PAGE 等字段。
+	settings := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:updateFields w:val="true"/>
+</w:settings>`
+
+	// 页眉：报告名（右侧小字灰色，底边框分隔线）；页脚：页码字段。
+	hdr := d.headerText
+	if hdr == "" {
+		hdr = "渗透测试报告"
+	}
+	header := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="4" w:space="1" w:color="999999"/></w:pBdr><w:jc w:val="right"/></w:pPr>
+<w:r><w:rPr><w:color w:val="808080"/><w:sz w:val="16"/></w:rPr><w:t xml:space="preserve">%s</w:t></w:r></w:p>
+</w:hdr>`, esc(hdr))
+
+	footer := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:p><w:pPr><w:jc w:val="center"/></w:pPr>
+<w:r><w:rPr><w:color w:val="808080"/><w:sz w:val="16"/></w:rPr><w:t xml:space="preserve">第 </w:t></w:r>
+<w:r><w:fldChar w:fldCharType="begin"/></w:r>
+<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>
+<w:r><w:fldChar w:fldCharType="end"/></w:r>
+<w:r><w:rPr><w:color w:val="808080"/><w:sz w:val="16"/></w:rPr><w:t xml:space="preserve"> 页</w:t></w:r>
+</w:p>
+</w:ftr>`
+
+	zw := zip.NewWriter(w)
+	files := []struct{ name, body string }{
+		{"[Content_Types].xml", contentTypes},
+		{"_rels/.rels", rels},
+		{"word/document.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + document},
+		{"word/_rels/document.xml.rels", documentRels},
+		{"word/styles.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + docxStyles},
+		{"word/numbering.xml", numbering()},
+		{"word/settings.xml", settings},
+		{"word/header1.xml", header},
+		{"word/footer1.xml", footer},
+	}
+	for _, f := range files {
+		fw, err := zw.Create(f.name)
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(fw, strings.NewReader(f.body)); err != nil {
+			return err
+		}
+	}
+	return zw.Close()
+}
+
+// SetHeaderText 自定义页眉文字（客户名/报告名）。须在 Encode 前调用。
+func (d *Docx) SetHeaderText(text string) { d.headerText = text }
+
+// numbering numbering.xml 部件：numId=1 → bullet 项目符号（Bullet 方法引用它）。
+func numbering() string {
+	return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 <w:abstractNum w:abstractNumId="0">
 <w:multiLevelType w:val="hybridMultilevel"/>
@@ -205,27 +299,9 @@ func (d *Docx) Encode(w io.Writer) error {
 </w:abstractNum>
 <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
 </w:numbering>`
-
-	zw := zip.NewWriter(w)
-	files := []struct{ name, body string }{
-		{"[Content_Types].xml", contentTypes},
-		{"_rels/.rels", rels},
-		{"word/document.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + document},
-		{"word/_rels/document.xml.rels", documentRels},
-		{"word/styles.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + docxStyles},
-		{"word/numbering.xml", numbering},
-	}
-	for _, f := range files {
-		fw, err := zw.Create(f.name)
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(fw, strings.NewReader(f.body)); err != nil {
-			return err
-		}
-	}
-	return zw.Close()
 }
+
+// docxNum 部件按需打包；headerText 经由 Docx 字段透传。
 
 // docxStyles 内置中文报告样式:标题黑体分级、正文宋体小四、代码 Consolas、
 // Heading1 大纲级别 0(Word 导航窗格可见 → 天然目录结构)。

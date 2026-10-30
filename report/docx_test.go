@@ -98,6 +98,8 @@ func TestBuildTaskDocxAndFindingDocx(t *testing.T) {
 		Retests: map[int64][]*db.FindingRetest{
 			42: {{FindingID: 42, Verdict: "reproduced", Summary: "PoC 复现成功", CreatedAt: time.Now()}},
 		},
+		Customer:       "示例客户",
+		AppendixAssets: map[string][]string{"ip": {"10.0.0.5", "10.0.0.6"}},
 	}
 	var buf bytes.Buffer
 	if err := BuildTaskDocx(in).Encode(&buf); err != nil {
@@ -132,6 +134,19 @@ func TestBuildTaskDocxAndFindingDocx(t *testing.T) {
 	}
 	if strings.Contains(doc, "影响资产 id:") {
 		t.Error("legacy 影响资产 id: 形态仍在（A8 未生效）")
+	}
+	// A3/A12/A16
+	for _, frag := range []string{"委托方:示例客户", "附录 A 资产清单", "internal 集别"} {
+		_ = frag // 占位防误改；实际断言在下方
+	}
+	if !strings.Contains(doc, "委托方:示例客户") {
+		t.Error("missing cover customer line (A12)")
+	}
+	if !strings.Contains(doc, "附录 A 资产清单") {
+		t.Error("missing appendix A (A16)")
+	}
+	if !strings.Contains(doc, "10.0.0.6") {
+		t.Error("appendix asset rows missing")
 	}
 	buf.Reset()
 	if err := BuildFindingDocx(f, time.Now(), map[int64]string{5: "10.0.0.5"}, nil).Encode(&buf); err != nil {
@@ -264,7 +279,7 @@ func TestTaskDocxAggregation(t *testing.T) {
 	}
 	// 已知漏洞组(3 条,变体已折叠)排第一组;注入组(2 条)次之
 	for _, frag := range []string{
-		"2.1 已知漏洞(共 3 条)", "2.2 注入(共 2 条)", "2.3 未授权访问(共 1 条)",
+		"3.1 已知漏洞(共 3 条)", "3.2 注入(共 2 条)", "3.3 未授权访问(共 1 条)",
 		"漏洞类别分布", "涉及资产数",
 	} {
 		if !strings.Contains(doc, frag) {

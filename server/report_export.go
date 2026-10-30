@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/chu0119/artex/db"
@@ -111,26 +112,67 @@ func (s *Server) exportTaskDocx(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	counts := map[string]int{}
+	appendix := map[string][]string{}
 	for _, ty := range []string{"root_domain", "ip", "subdomain", "app", "service", "endpoint"} {
 		ns, _ := s.m.Assets().QueryByType(ty, 100000, 0)
-		if len(ns) > 0 {
-			counts[ty] = len(ns)
+		if len(ns) == 0 {
+			continue
 		}
+		counts[ty] = len(ns)
+		names := make([]string, 0, len(ns)) // 附录 A 资产清单（A16）
+		for _, a := range ns {
+			if n := assetDisplayName(a); n != "" {
+				names = append(names, n)
+			}
+		}
+		appendix[ty] = names
 	}
 	doc := report.BuildTaskDocx(report.TaskDocxInput{
-		Title:       fmt.Sprintf("渗透测试报告 — %s", t.Description),
-		Goal:        t.Goal,
-		GeneratedAt: time.Now(),
-		AssetCounts: counts,
-		Findings:    findings,
-		AssetNames:  s.reportAssetNames(findings),
-		Retests:     s.reportRetests(findings),
+		Title:          fmt.Sprintf("渗透测试报告 — %s", t.Description),
+		Goal:           t.Goal,
+		GeneratedAt:    time.Now(),
+		AssetCounts:    counts,
+		Findings:       findings,
+		AssetNames:     s.reportAssetNames(findings),
+		Retests:        s.reportRetests(findings),
+		Customer:       s.taskCustomerNames(t),
+		TestWindow:     taskTestWindow(t),
+		AppendixAssets: appendix,
+		PageHeader:     fmt.Sprintf("渗透测试报告 — %s", t.Description),
 	})
 	name := fmt.Sprintf("artex-report-task%s-%s.docx", t.ID, time.Now().Format("20060102"))
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	w.WriteHeader(200)
 	_ = doc.Encode(w)
+}
+
+// taskCustomerNames 任务关联企业名（封面「委托方」行；A12）。
+func (s *Server) taskCustomerNames(t *Task) string {
+	if len(t.CompanyIDs) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(t.CompanyIDs))
+	for _, id := range t.CompanyIDs {
+		c, err := s.m.pg.Companies().GetCompany(id)
+		if err != nil || c == nil {
+			continue
+		}
+		names = append(names, c.Name)
+	}
+	return strings.Join(names, "、")
+}
+
+// taskTestWindow 测试窗口描述（封面/方法论章节；A12）。
+func taskTestWindow(t *Task) string {
+	if t.FirstRunAt <= 0 {
+		return ""
+	}
+	start := time.Unix(t.FirstRunAt, 0).UTC().Format("2006-01-02 15:04 UTC")
+	if t.CompletedAt > 0 {
+		return start + " ~ " + time.Unix(t.CompletedAt, 0).UTC().Format("2006-01-02 15:04 UTC")
+	}
+	return start + " 起（任务未收尾，数据截至报告生成时刻）"
 }
 
 // exportFindingDocx 单漏洞报告(Word)。

@@ -25,6 +25,16 @@ type TaskDocxInput struct {
 	AssetNames map[int64]string
 	// Retests finding id → 复测记录（最新在前）。报告带「复测记录」小节（A9）。
 	Retests map[int64][]*db.FindingRetest
+	// Customer 委托方（企业名，逗号连接；空 = 封面省略该行）。A12
+	Customer string
+	// TestWindow 测试窗口描述（如「2026-10-29 ~ 2026-10-31」；空 = 只给生成时间）。A12
+	TestWindow string
+	// AppendixAssets 附录资产清单：类型 → 可读名列表（A16；nil = 无附录）。
+	AppendixAssets map[string][]string
+	// Classification 密级/用途占位（空 = 默认「内部资料 · 仅限授权方」）。A12
+	Classification string
+	// PageHeader 页眉文字（空 = 「渗透测试报告」）。
+	PageHeader string
 }
 
 func sevRankKey(f *db.DBFinding) int {
@@ -43,26 +53,42 @@ func sevRankKey(f *db.DBFinding) int {
 }
 
 // BuildTaskDocx 渲染任务总报告:
-// 封面(标题/目标/时间) → 概览(资产分布 + 严重度分布 + 漏洞类别分布) →
-// 漏洞明细(按类别折叠分组,类内按严重度降序;report 正文 Markdown 转纯文本
-// 段落 + evidence 代码块)。同类漏洞×多主机的重复上报在类别层折叠呈现。
+// 封面页（居中标题/委托方/密级/日期）→ 目录页（TOC 字段）→ 一、评估概览 →
+// 二、测试范围与方法论 → 三、漏洞明细（按类别折叠分组+着色+复测+流量证据）→
+// 四、修复优先级路线图 → 附录 A 资产清单。
+// 同类漏洞×多主机的重复上报在类别层折叠呈现。
 func BuildTaskDocx(in TaskDocxInput) *Docx {
 	d := NewDocx()
-
-	// 封面
-	d.H1(in.Title)
-	if in.Goal != "" {
-		d.H3("任务目标")
-		d.P(in.Goal)
+	if in.PageHeader != "" {
+		d.SetHeaderText(in.PageHeader)
 	}
-	d.P("")
-	d.P(fmt.Sprintf("报告生成时间:%s", FormatTimeUTC(in.GeneratedAt)))
-	d.P(fmt.Sprintf("漏洞总数:%d(严重 %d / 高危 %d / 中危 %d / 低危 %d)",
+
+	// ── 封面页（A3）：居中大标题 + 元信息，替代原来的首行 H1 ──
+	for i := 0; i < 6; i++ {
+		d.CoverLine("", 0, false) // 垂直下压
+	}
+	d.CoverLine(in.Title, 52, true)
+	d.CoverLine("", 0, false)
+	if in.Customer != "" {
+		d.CoverLine("委托方:"+in.Customer, 28, false)
+	}
+	classification := in.Classification
+	if classification == "" {
+		classification = "内部资料 · 仅限授权方"
+	}
+	d.CoverLine(classification, 24, false)
+	d.CoverLine("", 0, false)
+	d.CoverLine("报告生成时间:"+FormatTimeUTC(in.GeneratedAt), 24, false)
+	d.CoverLine(fmt.Sprintf("漏洞总数:%d(严重 %d / 高危 %d / 中危 %d / 低危 %d)",
 		len(in.Findings), countSev(in.Findings, "critical"), countSev(in.Findings, "high"),
-		countSev(in.Findings, "medium"), countSev(in.Findings, "low")))
+		countSev(in.Findings, "medium"), countSev(in.Findings, "low")), 24, false)
 	d.PageBreak()
 
-	// 概览
+	// ── 目录页（A4）：TOC 字段，settings.xml updateFields 打开自动刷新 ──
+	d.TOC()
+	d.PageBreak()
+
+	// ── 一、评估概览 ──
 	d.H1("一、评估概览")
 	if len(in.AssetCounts) > 0 {
 		types := make([]string, 0, len(in.AssetCounts))
@@ -104,18 +130,50 @@ func BuildTaskDocx(in TaskDocxInput) *Docx {
 	}
 	d.PageBreak()
 
-	// 漏洞明细:按类别分组折叠(类内按严重度降序),类别按条数降序——
-	// 同一漏洞在多台主机上是多条记录,但阅读时按类别看,每类一段。
-	d.H1("二、漏洞明细")
+	// ── 二、测试范围与方法论（A14：数据都在，组章即可）──
+	d.H1("二、测试范围与方法论")
+	if in.Goal != "" {
+		d.H2("任务目标")
+		d.P(in.Goal)
+	}
+	d.H2("测试窗口")
+	if in.TestWindow != "" {
+		d.P("测试执行窗口:" + in.TestWindow)
+	}
+	d.P("报告生成时间:" + FormatTimeUTC(in.GeneratedAt))
+	if len(in.AssetCounts) > 0 {
+		d.H2("测试范围")
+		d.P("本次测试覆盖以下资产类型（明细见附录 A）:")
+		types := make([]string, 0, len(in.AssetCounts))
+		for k := range in.AssetCounts {
+			types = append(types, k)
+		}
+		sort.Strings(types)
+		parts := make([]string, 0, len(types))
+		for _, ty := range types {
+			parts = append(parts, fmt.Sprintf("%s ×%d", assetTypeCN(ty), in.AssetCounts[ty]))
+		}
+		d.Bullet(strings.Join(parts, "；"))
+	}
+	d.H2("方法论")
+	d.P("本次评估由 AI 多 Agent 自主渗透平台 ARTEX 执行:规划 Agent 依据目标与资产态势派发探" +
+		"测意图,执行 Agent 以真实工具(nmap/httpx/nuclei/ffuf/sqlmap 等)完成侦察、漏洞验证" +
+		"与利用,全程流量经记录代理留痕;漏洞结论均要求可复现证据(PoC 命令/请求响应)支撑," +
+		"critical/high 级发现建议按复测记录进行独立复验。")
+	d.P("严重度评定参照 CVSS v3.1 结合业务影响人工校准;修复优先级建议见第四章。")
+	d.PageBreak()
+
+	// ── 三、漏洞明细:按类别分组折叠(类内按严重度降序),类别按条数降序──
+	d.H1("三、漏洞明细")
 	groups := groupByClass(in.Findings)
 	for gi, g := range groups {
-		d.H2(fmt.Sprintf("2.%d %s(共 %d 条)", gi+1, g.class, len(g.items)))
+		d.H2(fmt.Sprintf("3.%d %s(共 %d 条)", gi+1, g.class, len(g.items)))
 		for fi, f := range g.items {
 			// 严重度着色（A2）：标题颜色随级别，一眼分诊
 			if hex := SeverityHex(f.Severity); hex != "" {
-				d.headingColored(fmt.Sprintf("2.%d.%d [%s] %s", gi+1, fi+1, SeverityCN(f.Severity), findingTitle(f)), 3, hex)
+				d.headingColored(fmt.Sprintf("3.%d.%d [%s] %s", gi+1, fi+1, SeverityCN(f.Severity), findingTitle(f)), 3, hex)
 			} else {
-				d.H3(fmt.Sprintf("2.%d.%d [%s] %s", gi+1, fi+1, SeverityCN(f.Severity), findingTitle(f)))
+				d.H3(fmt.Sprintf("3.%d.%d [%s] %s", gi+1, fi+1, SeverityCN(f.Severity), findingTitle(f)))
 			}
 			d.P(fmt.Sprintf("漏洞类别:%s", nz(f.VulnClass, "未分类")))
 			if len(f.AssetIDs) > 0 {
@@ -139,7 +197,113 @@ func BuildTaskDocx(in TaskDocxInput) *Docx {
 			d.P("")
 		}
 	}
+	d.PageBreak()
+
+	// ── 四、修复优先级路线图（A15：立即/计划/择机三档）──
+	d.H1("四、修复优先级路线图")
+	writeRemediationRoadmap(d, in.Findings)
+
+	// ── 附录 A：资产清单（A16）──
+	if len(in.AppendixAssets) > 0 {
+		d.PageBreak()
+		d.H1("附录 A 资产清单")
+		types := make([]string, 0, len(in.AppendixAssets))
+		for k := range in.AppendixAssets {
+			types = append(types, k)
+		}
+		sort.Strings(types)
+		const appendixCap = 200 // 单类型最多列 200 条,超出提示去平台查看
+		for _, ty := range types {
+			names := in.AppendixAssets[ty]
+			if len(names) == 0 {
+				continue
+			}
+			d.H2(assetTypeCN(ty) + fmt.Sprintf("(共 %d)", len(names)))
+			shown := names
+			if len(shown) > appendixCap {
+				shown = shown[:appendixCap]
+			}
+			rows := make([][]string, 0, len(shown))
+			for i, n := range shown {
+				rows = append(rows, []string{fmt.Sprint(i + 1), n})
+			}
+			d.Table([]string{"#", "资产"}, rows)
+			if len(names) > appendixCap {
+				d.P(fmt.Sprintf("（其余 %d 条略，可在平台「资产」页查看全部。）", len(names)-appendixCap))
+			}
+		}
+	}
 	return d
+}
+
+// writeRemediationRoadmap 修复优先级三档表（A15）。
+// v1 用「清单+通用指引」形态——每条漏洞的专项修复建议已在详细报告正文的
+// 「修复建议」节，这里解决的是“先修哪个”的排序问题。
+func writeRemediationRoadmap(d *Docx, fs []*db.DBFinding) {
+	tiers := []struct {
+		title  string
+		sevs   []string
+		advice string
+	}{
+		{"立即整改(建议 7 天内)", []string{"critical", "high"},
+			"存在被直接利用/造成数据泄露风险,建议立即安排修复并临时缓解(WAF 规则/下线/访问控制收紧)。",
+		},
+		{"近期计划(建议 30 天内)", []string{"medium"},
+			"需特定条件利用或影响有限,纳入常规迭代修复,修复后走复测验证。",
+		},
+		{"择机安排", []string{"low", "info"},
+			"风险较低或为加固建议,随版本迭代处理;涉及配置类项目可先行调整。",
+		},
+	}
+	for _, tier := range tiers {
+		var items []*db.DBFinding
+		for _, f := range fs {
+			for _, s := range tier.sevs {
+				if strings.EqualFold(f.Severity, s) {
+					items = append(items, f)
+					break
+				}
+			}
+		}
+		d.H2(tier.title)
+		if len(items) == 0 {
+			d.P("本档暂无。")
+			continue
+		}
+		d.P(tier.advice)
+		sort.SliceStable(items, func(i, j int) bool { return sevRankKey(items[i]) < sevRankKey(items[j]) })
+		rows := make([][]string, 0, len(items))
+		for i, f := range items {
+			rows = append(rows, []string{fmt.Sprint(i + 1), findingTitle(f), SeverityCN(f.Severity), statusCN(f.Status)})
+		}
+		d.TableFills([]string{"#", "漏洞", "严重度", "当前状态"}, rows, nil)
+	}
+}
+
+// statusCN 分拣状态中文（路线图表用）。
+func statusCN(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "pending":
+		return "待处理"
+	case "in_progress":
+		return "处理中"
+	case "confirmed":
+		return "已确认"
+	case "resolved":
+		return "已处理"
+	case "fixed":
+		return "已修复"
+	case "false_positive":
+		return "误报"
+	case "ignored":
+		return "忽略"
+	case "duplicate":
+		return "重复"
+	case "risk_accepted":
+		return "风险接受"
+	default:
+		return nz(s, "-")
+	}
 }
 
 // assetNames 资产 id 列表 → 可读名（A8）。缺映射的回退 "id:N"。
@@ -430,14 +594,6 @@ func countSev(fs []*db.DBFinding, sev string) int {
 		}
 	}
 	return n
-}
-
-func joinIDs(ids []int64) string {
-	parts := make([]string, len(ids))
-	for i, v := range ids {
-		parts[i] = fmt.Sprint(v)
-	}
-	return strings.Join(parts, ", ")
 }
 
 // assetTypeCN 资产类型中文(概览表用)。
