@@ -63,6 +63,7 @@ import type {
   Session,
   SessionStatus,
   SessionTokenUsage,
+  TaskCostEstimate,
   TaskLLMResolution,
   TaskLLMResolutions,
   TaskNode,
@@ -690,6 +691,8 @@ export function SessionsTab({ taskId }: { taskId: string }) {
   const [sseLive, setSseLive] = React.useState(false);
   // Whole-task token total (all agents), polled from the backend aggregate.
   const [taskTokens, setTaskTokens] = React.useState<TokenTotal | null>(null);
+  // 任务成本估算（内置参考价；与 token 总量同一轮询节奏，变化更慢所以放宽到 30s）。
+  const [taskCost, setTaskCost] = React.useState<TaskCostEstimate | null>(null);
   const [sessionTokens, setSessionTokens] = React.useState<Record<string, SessionTokenUsage>>({});
   const [llmResolutions, setLLMResolutions] = React.useState<TaskLLMResolutions | null>(null);
   // Pending intercept requests for this task — used to show warning icons on sessions.
@@ -848,10 +851,22 @@ export function SessionsTab({ taskId }: { taskId: string }) {
           // Polling is best-effort; the next interval retries automatically.
         });
     void load();
+    const loadCost = () =>
+      api
+        .taskCost(taskId)
+        .then((r) => {
+          if (alive) setTaskCost(r);
+        })
+        .catch(() => {
+          // 成本估算失败不影响会话流；下一轮重试。
+        });
+    void loadCost();
+    const tc = setInterval(loadCost, 30000);
     const t = setInterval(load, 5000);
     return () => {
       alive = false;
       clearInterval(t);
+      clearInterval(tc);
     };
   }, [taskId]);
 
@@ -938,6 +953,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
     setOlderIntentsHasMore(false);
     setHasLoadedOlderIntentsPage(false);
     setTaskTokens(null);
+    setTaskCost(null);
     setSessionTokens({});
     setLLMResolutions(null);
     setSseLive(false);
@@ -1722,12 +1738,27 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                       cache={taskTokens.cache_read_tokens}
                       output={taskTokens.output_tokens}
                     />
+                    {taskCost && taskCost.cost_usd > 0 ? (
+                      <>
+                        <span>·</span>
+                        <span>≈${taskCost.cost_usd.toFixed(2)}</span>
+                      </>
+                    ) : null}
                   </div>
                 </TooltipTrigger>
                 <TooltipContent>
                   输入 {taskTokens.input_tokens.toLocaleString()} · 输出 {taskTokens.output_tokens.toLocaleString()} ·
                   缓存读取 {taskTokens.cache_read_tokens.toLocaleString()} · 缓存写入{" "}
                   {taskTokens.cache_write_tokens.toLocaleString()}
+                  {taskCost ? (
+                    <>
+                      <br />
+                      成本 ≈ ${taskCost.cost_usd.toFixed(2)}（{taskCost.pricing_note}）
+                      {taskCost.unpriced_models.length > 0
+                        ? ` 未定价模型：${taskCost.unpriced_models.join("、")}（成本被低估）`
+                        : ""}
+                    </>
+                  ) : null}
                 </TooltipContent>
               </Tooltip>
             )}

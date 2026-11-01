@@ -810,6 +810,15 @@ export interface TokenTotal {
   cache_write_tokens: number;
 }
 
+// 单任务成本估算（GET /api/tokens/cost?task=）。金额按内置参考价换算，
+// 仅用于相对对比；unpriced_models 非空说明有模型不在定价表，成本被低估。
+export interface TaskCostEstimate {
+  task: { task_id: string; calls: number; input_tokens: number; output_tokens: number };
+  cost_usd: number;
+  unpriced_models: string[];
+  pricing_note: string;
+}
+
 // Global per-profile token spend from the llm_usage ledger (GET /api/tokens/usage).
 export interface ProfileUsage {
   profile_name: string;

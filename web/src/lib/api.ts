@@ -76,6 +76,7 @@ import type {
   PromptVersion,
   SessionTokenUsage,
   Settings,
+  TaskCostEstimate,
   Severity,
   SkillCall,
   SkillItem,
@@ -714,6 +715,8 @@ export const api = {
       sessions: arr(r.sessions),
       total: r.total,
     })),
+  // 任务成本估算（内置参考价；响应带 pricing_note 与未定价模型）。
+  taskCost: (task: string) => get<TaskCostEstimate>(`/tokens/cost${tq(task)}`),
   tokenDaily: (days = 30) => get<DailyTokenBucket[]>(`/tokens/daily?days=${days}`).then(arr),
   conversationTokens: () =>
     get<ConvTokenSummary[]>("/tokens/conversations")

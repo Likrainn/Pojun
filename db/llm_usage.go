@@ -18,7 +18,7 @@ type LLMUsage struct {
 	// IntentID (B7) 是该调用归属的具体意图（worker session 后缀 i<n>），0 = 不挂意图的
 	// 调用（planner/mainagent/compactor）。态势据此给意图节点标 token 消耗。
 	IntentID     int64  `json:"intent_id"`
-	Worker       string `json:"worker"`       // agent lane: worker / planner / mainagent / goals
+	Worker       string `json:"worker"` // agent lane: worker / planner / mainagent / goals
 	Model        string `json:"model"`
 	ProfileName  string `json:"profile_name"`
 	LatencyMs    int    `json:"latency_ms"`
@@ -107,7 +107,7 @@ VALUES (NULLIF($1,''),$2,$3,NULLIF($4,''),NULLIF($5,''),NULLIF($6,''),$7,$8,$9,$
 type IntentTokenUsage struct {
 	IntentID     int64 `json:"intent_id"`
 	Calls        int   `json:"calls"`
-	InputTokens  int64 `json:"input_tokens"`  // 含 cache_read/cache_write:为这段上下文花的入口侧 token
+	InputTokens  int64 `json:"input_tokens"` // 含 cache_read/cache_write:为这段上下文花的入口侧 token
 	OutputTokens int64 `json:"output_tokens"`
 }
 
@@ -390,4 +390,80 @@ func ParseExpID(s string) int64 {
 		return 0
 	}
 	return n
+}
+
+// UsageModelRow 是 llm_usage 按 (profile, model) 的历史全量聚合行——成本估算
+// 需要模型维度（定价按模型），而 UsageByProfile 只有 profile 维度。
+type UsageModelRow struct {
+	ProfileName  string `json:"profile_name"`
+	Model        string `json:"model"`
+	InputTokens  int    `json:"input_tokens"`
+	OutputTokens int    `json:"output_tokens"`
+	Calls        int    `json:"calls"`
+}
+
+// UsageByModel returns per-(profile, model) lifetime token totals. Only the
+// live llm_usage ledger is covered (archived-task aggregates carry no model
+// dimension); callers should label the derived cost as the live-table estimate.
+func (d *DB) UsageByModel() ([]UsageModelRow, error) {
+	rows, err := d.Query(`
+SELECT COALESCE(profile_name,'') AS profile_name, COALESCE(model,'') AS model,
+       COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COUNT(*)
+FROM llm_usage
+GROUP BY profile_name, model
+ORDER BY SUM(input_tokens)+SUM(output_tokens) DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UsageModelRow{}
+	for rows.Next() {
+		var r UsageModelRow
+		if err := rows.Scan(&r.ProfileName, &r.Model, &r.InputTokens, &r.OutputTokens, &r.Calls); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// TaskUsage is one task's live token totals (for per-task cost display).
+type TaskUsage struct {
+	TaskID       string `json:"task_id"`
+	Calls        int    `json:"calls"`
+	InputTokens  int    `json:"input_tokens"`
+	OutputTokens int    `json:"output_tokens"`
+}
+
+// UsageByTask returns token totals for one exact task_id.
+func (d *DB) UsageByTask(taskID string) (TaskUsage, error) {
+	u := TaskUsage{TaskID: taskID}
+	err := d.QueryRow(`
+SELECT COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0)
+FROM llm_usage WHERE task_id=$1`, taskID).Scan(&u.Calls, &u.InputTokens, &u.OutputTokens)
+	return u, err
+}
+
+// UsageModelsByTask returns per-model token rows for one task so the caller can
+// price each model separately.
+func (d *DB) UsageModelsByTask(taskID string) ([]UsageModelRow, error) {
+	rows, err := d.Query(`
+SELECT COALESCE(profile_name,'') AS profile_name, COALESCE(model,'') AS model,
+       COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COUNT(*)
+FROM llm_usage WHERE task_id=$1
+GROUP BY profile_name, model
+ORDER BY SUM(input_tokens)+SUM(output_tokens) DESC`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UsageModelRow{}
+	for rows.Next() {
+		var r UsageModelRow
+		if err := rows.Scan(&r.ProfileName, &r.Model, &r.InputTokens, &r.OutputTokens, &r.Calls); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
