@@ -231,7 +231,7 @@ func TestWriteMarkdownishRich(t *testing.T) {
 	for _, frag := range []string{
 		"<w:tbl>",  // 表格真 OOXML 化
 		"<w:b/>",   // 加粗 run
-		"Heading4", // ## 不再压平到 H3
+		"Heading2", // ## → 公文二级楷体标题（不再压平到 H3）
 		"w:numId",  // bullet 编号引用
 	} {
 		if !strings.Contains(doc, frag) {

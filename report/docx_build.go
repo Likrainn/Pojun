@@ -6,6 +6,7 @@ package report
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -493,21 +494,21 @@ func BuildFindingDocx(in FindingDocxInput) *Docx {
 	}
 	d.P(fmt.Sprintf("发现时间:%s · 发现者:%s", FormatTimeUTC(f.CreatedAt), nz(f.Worker, "-")))
 	if s := strings.TrimSpace(f.Summary); s != "" {
-		d.H2("一、漏洞概述")
+		d.Hei1("一、漏洞概述")
 		d.P(s)
 	}
 	if body := strings.TrimSpace(f.Report); body != "" {
-		d.H2("二、详细报告")
+		d.Hei1("二、详细报告")
 		writeMarkdownish(d, body)
 	}
 	if ev := strings.TrimSpace(f.Evidence); ev != "" {
-		d.H2("三、证据 / PoC")
+		d.Hei1("三、证据 / PoC")
 		d.Code(ev)
 	}
 	// 四、流量证据 / 五、复测记录 —— 与总报告同源（A9/A10）
 	writeTrafficEvidenceDocx(d, f)
 	if len(in.Retests) > 0 {
-		d.H2("复测记录")
+		d.Hei1("复测记录")
 		latest := in.Retests[0]
 		line := fmt.Sprintf("最近复测:%s · %s", retestVerdictCN(latest.Verdict), FormatTimeUTC(latest.CreatedAt))
 		if s := strings.TrimSpace(latest.Summary); s != "" {
@@ -587,9 +588,11 @@ func writeMarkdownish(d *Docx, md string) {
 		case strings.HasPrefix(trimmed, "### "):
 			d.H4(strings.TrimPrefix(trimmed, "### "))
 		case strings.HasPrefix(trimmed, "## "):
-			d.H4(strings.TrimPrefix(trimmed, "## "))
+			// 公文二级标题：楷体三号（v0.4.3 对齐参考件）
+			d.Kai2(strings.TrimPrefix(trimmed, "## "))
 		case strings.HasPrefix(trimmed, "# "):
-			d.H3(strings.TrimPrefix(trimmed, "# "))
+			// 公文一级标题：黑体三号（v0.4.3 对齐参考件）
+			d.Hei1(strings.TrimPrefix(trimmed, "# "))
 		case strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* "):
 			// 嵌套列表：行首每 2 个空格一级（reporter 常写二级清单），ilvl 交给
 			// numbering.xml 的多级定义；压平会让层级关系全丢（v0.4.0）。
@@ -598,18 +601,36 @@ func writeMarkdownish(d *Docx, md string) {
 			if lvl > 2 {
 				lvl = 2
 			}
-			fmt.Fprintf(&d.buf, `<w:p><w:pPr><w:numPr><w:ilvl w:val="%d"/><w:numId w:val="1"/></w:numPr></w:pPr>`, lvl)
+			fmt.Fprintf(&d.buf, `<w:p><w:pPr><w:numPr><w:ilvl w:val="%d"/><w:numId w:val="1"/></w:numPr><w:ind w:firstLine="0" w:left="%d"/><w:jc w:val="both"/></w:pPr>`, lvl, 720+lvl*360)
 			d.buf.WriteString(runsXML(parseRich(strings.TrimPrefix(strings.TrimPrefix(trimmed, "- "), "* "))))
 			d.buf.WriteString(`</w:p>`)
 		case trimmed == "":
 			// 段间空行,段落间距已由样式给,跳过
 		default:
+			// 公文序号标题识别（v0.4.3 对齐参考件）：reporter 正文里常出现
+			// 「一、排查经过」（黑体一级）与「（一）现场证据采集。」（楷体二级），
+			// 短行按标题排版，长行仍按正文（避免误伤带内容的段落）。
+			if gongwenHeiRe.MatchString(trimmed) && len([]rune(trimmed)) <= 40 {
+				d.Hei1(trimmed)
+				continue
+			}
+			if gongwenKaiRe.MatchString(trimmed) && len([]rune(trimmed)) <= 30 {
+				d.Kai2(trimmed)
+				continue
+			}
 			d.PRich(trimmed)
 		}
 	}
 	flushTable()
 	flushCode()
 }
+
+// 公文序号标题识别：一、/二、… 开头（黑体一级）、（一）/（二）… 开头（楷体二级）。
+// 只对【整行短语】生效——带正文内容的段落不误伤。
+var (
+	gongwenHeiRe = regexp.MustCompile(`^[一二三四五六七八九十]{1,3}、`)
+	gongwenKaiRe = regexp.MustCompile(`^（[一二三四五六七八九十]{1,3}）`)
+)
 
 // splitMarkdownRow 拆一行 | a | b | → [a, b]。
 func splitMarkdownRow(ln string) []string {

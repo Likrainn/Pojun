@@ -152,9 +152,20 @@ func (d *Docx) Code(text string) {
 	d.buf.WriteString(b.String())
 }
 
+// Hei1 公文一级标题：黑体三号、首行缩进 2 字符（如「一、评估概览」）。
+func (d *Docx) Hei1(text string) {
+	d.buf.WriteString(fmt.Sprintf(`<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p>`, esc(text)))
+}
+
+// Kai2 公文二级标题：楷体三号、首行缩进 2 字符（如「（一）复现步骤」）。
+func (d *Docx) Kai2(text string) {
+	d.buf.WriteString(fmt.Sprintf(`<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p>`, esc(text)))
+}
+
 // Bullet 无序列表项。
 func (d *Docx) Bullet(text string) {
-	fmt.Fprintf(&d.buf, `<w:p><w:pPr><w:numPr><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p>`, esc(text))
+	// ind firstLine=0：清 Normal 的公文首行缩进，缩进交给 numbering 定义
+	fmt.Fprintf(&d.buf, `<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr><w:ind w:firstLine="0"/><w:jc w:val="both"/></w:pPr><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p>`, esc(text))
 }
 
 // Table 带表头的表格。rows 与 header 列数不一致时按最短补齐。
@@ -212,15 +223,21 @@ func (d *Docx) PageBreak() {
 
 // CoverLine 封面行：居中、可指定半点字号（sz）与颜色。空文本输出空行（撑版面用）。
 func (d *Docx) CoverLine(text string, sz int, bold bool) {
-	pPr := `<w:pPr><w:jc w:val="center"/><w:spacing w:before="120" w:after="120"/></w:pPr>`
+	// 覆盖 Normal 的两端对齐/首行缩进/28 磅行距——封面行居中、行距独立控制。
+	line := 560
+	spacing := fmt.Sprintf(`<w:spacing w:before="120" w:after="0" w:line="%d" w:lineRule="exact"/>`, line)
+	if text == "" {
+		spacing = `<w:spacing w:before="0" w:after="0" w:line="720" w:lineRule="exact"/>`
+	}
+	pPr := fmt.Sprintf(`<w:pPr>%s<w:ind w:firstLine="0"/><w:jc w:val="center"/></w:pPr>`, spacing)
 	if text == "" {
 		fmt.Fprintf(&d.buf, `<w:p>%s</w:p>`, pPr)
 		return
 	}
 	rpr := "<w:rPr>"
 	if bold {
-		// 公文封面标题用黑体（正文仿宋、标题黑体是 GB/T 9704 惯例）
-		rpr += `<w:rFonts w:ascii="Calibri" w:eastAsia="黑体"/><w:b/>`
+		// 公文文件标题：黑体二号，不加粗（黑体本身即强调，对齐参考件 rPr）
+		rpr += `<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="黑体"/><w:b w:val="0"/>`
 	}
 	if sz > 0 {
 		rpr += fmt.Sprintf(`<w:sz w:val="%d"/><w:szCs w:val="%d"/>`, sz, sz)
@@ -231,17 +248,20 @@ func (d *Docx) CoverLine(text string, sz int, bold bool) {
 
 // CoverLineColored 带色的封面行（单漏洞封面按严重度着色用）。
 func (d *Docx) CoverLineColored(text string, sz int, hex string, bold bool) {
+	// 与 CoverLine 同版式（居中/清缩进/行距覆盖）；公文标题黑体不加粗，ascii
+	// 统一 Times New Roman。
 	boldXML := ""
 	if bold {
-		// 封面标题黑体（GB/T 9704 惯例），与 CoverLine bold 路径一致
-		boldXML = `<w:rFonts w:ascii="Calibri" w:eastAsia="黑体"/><w:b/>`
+		boldXML = `<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="黑体"/><w:b w:val="0"/>`
+	} else {
+		boldXML = `<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="仿宋"/><w:b w:val="0"/>`
 	}
 	szXML := ""
 	if sz > 0 {
 		szXML = fmt.Sprintf(`<w:sz w:val="%d"/><w:szCs w:val="%d"/>`, sz, sz)
 	}
 	fmt.Fprintf(&d.buf,
-		`<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="120" w:after="120"/></w:pPr><w:r><w:rPr>%s<w:color w:val="%s"/>%s<w:t xml:space="preserve">%s</w:t></w:r></w:p>`,
+		`<w:p><w:pPr><w:spacing w:before="120" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="0"/><w:jc w:val="center"/></w:pPr><w:r><w:rPr>%s<w:color w:val="%s"/>%s<w:t xml:space="preserve">%s</w:t></w:r></w:p>`,
 		boldXML, hex, szXML, esc(text))
 }
 
@@ -255,12 +275,15 @@ func (d *Docx) TOC() {
 // Encode 打包成 .docx 字节流。
 func (d *Docx) Encode(w io.Writer) error {
 	// 页眉页脚引用走 r: 命名空间（headerReference/footerReference 的 r:id）。
+	// 页面设置对齐公文参考件：页边距 上2098/右1474/下1984/左1587，docGrid 360。
+	// 公文无页眉——headerReference 已移除，页码走页脚「— N —」。
 	document := `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>` +
 		d.buf.String() +
 		`<w:sectPr>` +
-		`<w:headerReference w:type="default" r:id="rIdHdr"/>` +
 		`<w:footerReference w:type="default" r:id="rIdFtr"/>` +
-		`<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>` +
+		`<w:pgSz w:w="11906" w:h="16838"/>` +
+		`<w:pgMar w:top="2098" w:right="1474" w:bottom="1984" w:left="1587" w:header="720" w:footer="720" w:gutter="0"/>` +
+		`<w:cols w:space="720"/><w:docGrid w:linePitch="360"/>` +
 		`</w:sectPr></w:body></w:document>`
 
 	contentTypes := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -271,7 +294,6 @@ func (d *Docx) Encode(w io.Writer) error {
 <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
 <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
 <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
-<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
 <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
 </Types>`
 
@@ -285,7 +307,6 @@ func (d *Docx) Encode(w io.Writer) error {
 	documentRels := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
-<Relationship Id="rIdHdr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
 <Relationship Id="rIdFtr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
 <Relationship Id="rIdSet" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>
 </Relationships>`
@@ -296,25 +317,15 @@ func (d *Docx) Encode(w io.Writer) error {
 <w:updateFields w:val="true"/>
 </w:settings>`
 
-	// 页眉：报告名（右侧小字灰色，底边框分隔线）；页脚：页码字段。
-	hdr := d.headerText
-	if hdr == "" {
-		hdr = "渗透测试报告"
-	}
-	header := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="4" w:space="1" w:color="999999"/></w:pBdr><w:jc w:val="right"/></w:pPr>
-<w:r><w:rPr><w:color w:val="808080"/><w:sz w:val="16"/></w:rPr><w:t xml:space="preserve">%s</w:t></w:r></w:p>
-</w:hdr>`, esc(hdr))
-
+	// 公文页码：页脚居中「— N —」（4 号半角宋体数字、两侧一字线），无页眉。
 	footer := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 <w:p><w:pPr><w:jc w:val="center"/></w:pPr>
-<w:r><w:rPr><w:color w:val="808080"/><w:sz w:val="16"/></w:rPr><w:t xml:space="preserve">第 </w:t></w:r>
+<w:r><w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr><w:t xml:space="preserve">— </w:t></w:r>
 <w:r><w:fldChar w:fldCharType="begin"/></w:r>
 <w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>
 <w:r><w:fldChar w:fldCharType="end"/></w:r>
-<w:r><w:rPr><w:color w:val="808080"/><w:sz w:val="16"/></w:rPr><w:t xml:space="preserve"> 页</w:t></w:r>
+<w:r><w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr><w:t xml:space="preserve"> —</w:t></w:r>
 </w:p>
 </w:ftr>`
 
@@ -327,7 +338,6 @@ func (d *Docx) Encode(w io.Writer) error {
 		{"word/styles.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + docxStyles},
 		{"word/numbering.xml", numbering()},
 		{"word/settings.xml", settings},
-		{"word/header1.xml", header},
 		{"word/footer1.xml", footer},
 	}
 	for _, f := range files {
@@ -371,29 +381,31 @@ func numbering() string {
 // 代码 Consolas 小五紧排+底纹。Heading1 大纲级别 0（Word 导航窗格可见）。
 const docxStyles = `<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 <w:docDefaults><w:rPrDefault><w:rPr>
-<w:rFonts w:ascii="Times New Roman" w:eastAsia="仿宋_GB2312" w:hAnsi="Times New Roman"/>
+<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="仿宋"/>
+<w:b w:val="0"/><w:color w:val="000000"/>
 <w:sz w:val="32"/><w:szCs w:val="32"/>
-</w:rPr></w:rPrDefault>
-<w:pPrDefault><w:pPr><w:spacing w:line="560" w:lineRule="exact"/></w:pPr></w:pPrDefault></w:docDefaults>
+</w:rPr></w:rPrDefault></w:docDefaults>
 <w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/>
-<w:pPr><w:spacing w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLineChars="200" w:firstLine="640"/></w:pPr></w:style>
+<w:pPr><w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/>
+<w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr></w:style>
 <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/>
-<w:pPr><w:outlineLvl w:val="0"/><w:spacing w:before="240" w:after="120" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="0"/></w:pPr>
-<w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="黑体"/><w:b/><w:sz w:val="32"/></w:rPr></w:style>
+<w:pPr><w:outlineLvl w:val="0"/><w:spacing w:before="120" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
+<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="黑体"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/>
-<w:pPr><w:outlineLvl w:val="1"/><w:spacing w:before="200" w:after="100" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="0"/></w:pPr>
-<w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="黑体"/><w:b/><w:sz w:val="28"/></w:rPr></w:style>
+<w:pPr><w:outlineLvl w:val="1"/><w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
+<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="楷体"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/>
-<w:pPr><w:outlineLvl w:val="2"/><w:spacing w:before="160" w:after="80" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="0"/></w:pPr>
-<w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="黑体"/><w:b/><w:sz w:val="24"/></w:rPr></w:style>
+<w:pPr><w:outlineLvl w:val="2"/><w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
+<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="黑体"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Heading4"><w:name w:val="heading 4"/><w:basedOn w:val="Normal"/>
-<w:pPr><w:outlineLvl w:val="3"/><w:spacing w:before="120" w:after="60" w:line="460" w:lineRule="exact"/><w:ind w:firstLine="0"/></w:pPr>
-<w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="黑体"/><w:b/><w:sz w:val="24"/></w:rPr></w:style>
+<w:pPr><w:outlineLvl w:val="3"/><w:spacing w:before="0" w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="640"/><w:jc w:val="both"/></w:pPr>
+<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="黑体"/><w:b w:val="0"/><w:color w:val="000000"/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/>
-<w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/><w:ind w:left="240" w:firstLine="0"/>
-<w:shd w:val="clear" w:fill="F5F5F5"/>
+<w:pPr><w:spacing w:before="60" w:after="60" w:line="240" w:lineRule="auto"/>
+<w:ind w:left="240" w:firstLine="0"/><w:jc w:val="left"/>
+<w:shd w:val="clear" w:fill="F7F7F7"/>
 <w:pBdr><w:left w:val="single" w:sz="12" w:space="4" w:color="BFBFBF"/></w:pBdr></w:pPr>
-<w:rPr><w:rFonts w:ascii="Consolas" w:eastAsia="宋体" w:hAnsi="Consolas"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr></w:style>
+<w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:eastAsia="宋体"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr></w:style>
 <w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/>
 <w:tblPr><w:tblBorders>
 <w:top w:val="single" w:sz="4" w:color="999999"/><w:left w:val="single" w:sz="4" w:color="999999"/>
