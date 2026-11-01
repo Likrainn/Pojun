@@ -197,8 +197,10 @@ func TestFindingWorkflowAutoHintToPlannerAndSetting(t *testing.T) {
 	workflowCall(t, ctx, s.toolGetFindingTraffic(), map[string]any{"finding_id": recorded.FindingID}, false)
 	tools, def, closeTools := agent.AugmentTools(ctx, "planner", ts.PlannerTools())
 	defer closeTools()
-	if def.FindingGuidance != "" {
-		t.Fatal("disabled feature still injects guidance")
+	// 关闭自动绑定时不得再宣传流量绑定（traffic_refs / evidence_hint_id）；
+	// v0.4.5 证据纪律（L1–L4/安全机制判定）与绑定开关无关，允许保留。
+	if strings.Contains(def.FindingGuidance, "traffic_refs") || strings.Contains(def.FindingGuidance, "evidence_hint_id") {
+		t.Fatal("disabled feature still advertises traffic binding guidance")
 	}
 	for _, tool := range tools {
 		if tool.Name() == "bind_finding_traffic" {
@@ -327,7 +329,7 @@ func TestFindingWorkflowReporterBindsBeforeWritingReport(t *testing.T) {
 	}
 	off, offDef, closeOff := agent.AugmentTools(ctx, "reporter", nil)
 	defer closeOff()
-	if offDef.FindingGuidance != "" {
+	if strings.Contains(offDef.FindingGuidance, "traffic_refs") || strings.Contains(offDef.FindingGuidance, "evidence_hint_id") {
 		t.Fatal("off reporter still receives auto-binding guidance")
 	}
 	for _, tool := range off {

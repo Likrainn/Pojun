@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -59,7 +61,10 @@ func TestEvidenceGuidanceInjected(t *testing.T) {
 		}
 	}
 	FindingTrafficBindingEnabled = func() bool { return true }
-	_, reporterG := findingWorkflowTools("reporter", findingTool)
+	// reporter 的报告结构补充只在它有 update_finding_report 时注入。
+	fakeUpdate := writeTool("update_finding_report", "fake", map[string]any{"type": "object", "properties": map[string]any{}},
+		func(context.Context, json.RawMessage) (actool.Result, error) { return actool.Text("ok"), nil })
+	_, reporterG := findingWorkflowTools("reporter", append(append([]actool.CoreTool{}, findingTool...), fakeUpdate))
 	if !strings.Contains(reporterG, "前置条件") || !strings.Contains(reporterG, "影响证明") {
 		t.Fatalf("reporter annex missing: %q", reporterG)
 	}

@@ -117,7 +117,10 @@ func evidenceGuidanceFor(agentKey string, tools []actool.CoreTool) string {
 	if has["report_finding"] || has["add_task_hint"] || has["add_hint"] {
 		g += evidenceDisciplineGuidance
 	}
-	if agentKey == "reporter" {
+	// reporter 的报告结构补充只在它真的有写报告工具时注入：没有
+	// update_finding_report 的装配（如自动绑定关闭的测试场景）不注入，
+	// 保持"无报告工具 → 无报告指导"的契约。
+	if agentKey == "reporter" && has["update_finding_report"] {
 		g += reporterEvidenceAnnex
 	}
 	return g
