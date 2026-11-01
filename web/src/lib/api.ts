@@ -730,6 +730,8 @@ export const api = {
     get<{ artifacts: TaskArtifact[] }>(`/tasks/${taskId}/artifacts`).then((r) => arr(r.artifacts)),
   artifactUrl: (taskId: string, artifactId: number) => `/api/tasks/${taskId}/artifacts/${artifactId}`,
   artifactsExportUrl: (taskId: string) => `/api/tasks/${taskId}/artifacts/export`,
+  scanTaskArtifacts: (taskId: string) =>
+    post<{ added: number; skipped: number; truncated: number }>(`/tasks/${taskId}/artifacts/scan`, {}),
   tokenDaily: (days = 30) => get<DailyTokenBucket[]>(`/tokens/daily?days=${days}`).then(arr),
   conversationTokens: () =>
     get<ConvTokenSummary[]>("/tokens/conversations")

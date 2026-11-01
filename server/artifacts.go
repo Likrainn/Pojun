@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -129,51 +131,7 @@ func (s *Server) RecordArtifact(taskID, findingID int64, runDir, relPath, name, 
 		}
 	}
 
-	data, err := os.ReadFile(abs)
-	if err != nil {
-		return nil, fmt.Errorf("读取文件失败：%w", err)
-	}
-	sum := sha256.Sum256(data)
-	sha := hex.EncodeToString(sum[:])
-
-	// 去重：同任务同内容直接返回已有登记，不重复落盘。
-	if list, err := pg.ListTaskArtifacts(taskKey); err == nil {
-		for i := range list {
-			if list[i].SHA256 == sha && list[i].SizeBytes == info.Size() {
-				return &list[i], nil
-			}
-		}
-	}
-
-	if strings.TrimSpace(name) == "" {
-		name = filepath.Base(clean)
-	}
-	name = sanitizeArtifactName(name)
-	autoKind, autoMime := artifactKindByExt(name)
-	kind = strings.ToLower(strings.TrimSpace(kind))
-	if kind == "" || kind == "auto" {
-		kind = autoKind
-	}
-	dir := s.taskArtifactsDir(taskKey)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("创建附件目录失败：%w", err)
-	}
-	storage := filepath.Join("tasks", taskKey, "artifacts",
-		fmt.Sprintf("%d-%s", time.Now().UnixNano(), name))
-	dst := filepath.Join(s.m.dir, storage)
-	if err := os.WriteFile(dst, data, 0o600); err != nil {
-		return nil, fmt.Errorf("写入附件失败：%w", err)
-	}
-	a := &db.TaskArtifact{
-		TaskID: taskKey, FindingID: findingID, Name: name, Kind: kind, Mime: autoMime,
-		SizeBytes: int64(len(data)), SHA256: sha, SourceURL: sourceURL,
-		Note: note, Storage: storage,
-	}
-	if err := pg.InsertTaskArtifact(context.Background(), a); err != nil {
-		_ = os.Remove(dst)
-		return nil, fmt.Errorf("登记附件失败：%w", err)
-	}
-	return a, nil
+	return s.recordArtifactAbs(abs, taskKey, findingID, name, kind, sourceURL, note, info.Size())
 }
 
 // listTaskArtifacts 任务附件列表（不含存储路径）。
@@ -303,4 +261,149 @@ func artifactListJSON(list []db.TaskArtifact) []map[string]any {
 		})
 	}
 	return out
+}
+
+// recordArtifactAbs 以绝对路径登记附件（调用方已完成路径边界校验）。
+func (s *Server) recordArtifactAbs(abs, taskKey string, findingID int64, name, kind, sourceURL, note string, size int64) (*db.TaskArtifact, error) {
+	pg := s.m.PG()
+	if pg == nil {
+		return nil, fmt.Errorf("PG 不可用")
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return nil, fmt.Errorf("读取文件失败：%w", err)
+	}
+	sum := sha256.Sum256(data)
+	sha := hex.EncodeToString(sum[:])
+
+	// 去重：同任务同内容直接返回已有登记，不重复落盘。
+	if list, err := pg.ListTaskArtifacts(taskKey); err == nil {
+		for i := range list {
+			if list[i].SHA256 == sha && list[i].SizeBytes == size {
+				return &list[i], nil
+			}
+		}
+	}
+
+	if strings.TrimSpace(name) == "" {
+		name = filepath.Base(abs)
+	}
+	name = sanitizeArtifactName(name)
+	autoKind, autoMime := artifactKindByExt(name)
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind == "" || kind == "auto" {
+		kind = autoKind
+	}
+	dir := s.taskArtifactsDir(taskKey)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("创建附件目录失败：%w", err)
+	}
+	storage := filepath.Join("tasks", taskKey, "artifacts",
+		fmt.Sprintf("%d-%s", time.Now().UnixNano(), name))
+	dst := filepath.Join(s.m.dir, storage)
+	if err := os.WriteFile(dst, data, 0o600); err != nil {
+		return nil, fmt.Errorf("写入附件失败：%w", err)
+	}
+	a := &db.TaskArtifact{
+		TaskID: taskKey, FindingID: findingID, Name: name, Kind: kind, Mime: autoMime,
+		SizeBytes: int64(len(data)), SHA256: sha, SourceURL: sourceURL,
+		Note: note, Storage: storage,
+	}
+	if err := pg.InsertTaskArtifact(context.Background(), a); err != nil {
+		_ = os.Remove(dst)
+		return nil, fmt.Errorf("登记附件失败：%w", err)
+	}
+	return a, nil
+}
+
+// scanTaskArtifactDir 扫描任务工作目录里的历史图片并补登记（v0.4.10）。
+// 场景：老任务在附件功能上线前就把照片抓到了工作目录，需要让它们立刻出现在
+// 前端与报告里。限量 60 张、跳过已有（sha256 去重）、跳过 artifacts 自身。
+func (s *Server) scanTaskArtifactDir(taskID string) (added, skipped, truncated int, err error) {
+	pg := s.m.PG()
+	if pg == nil {
+		return 0, 0, 0, fmt.Errorf("PG 不可用")
+	}
+	root := filepath.Join(s.m.dir, "tasks", taskID)
+	artifactsDir := s.taskArtifactsDir(taskID)
+	existing := map[string]bool{}
+	if list, e := pg.ListTaskArtifacts(taskID); e == nil {
+		for _, a := range list {
+			existing[a.SHA256] = true
+		}
+	}
+	const limit = 60
+	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if path == artifactsDir {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		switch ext {
+		case ".png", ".jpg", ".jpeg", ".gif", ".webp":
+		default:
+			return nil
+		}
+		if added >= limit {
+			truncated++
+			return nil
+		}
+		info, e := d.Info()
+		if e != nil || info.Size() <= 0 || info.Size() > maxArtifactFileBytes {
+			return nil
+		}
+		// sha256 预检（避免读大文件后才发现重复）
+		f, e := os.Open(path)
+		if e != nil {
+			return nil
+		}
+		h := sha256.New()
+		if _, e = io.Copy(h, f); e != nil {
+			f.Close()
+			return nil
+		}
+		f.Close()
+		sum := hex.EncodeToString(h.Sum(nil))
+		if existing[sum] {
+			skipped++
+			return nil
+		}
+		// 文件名 URL 解码（历史照片常见 %E7%AD%BE 形式），让图注可读。
+		base := filepath.Base(path)
+		if decoded, e := url.QueryUnescape(base); e == nil && decoded != "" {
+			base = decoded
+		}
+		rel, _ := filepath.Rel(root, path)
+		_, e = s.recordArtifactAbs(path, taskID, 0, base, "auto", "", "工作目录历史文件："+rel, info.Size())
+		if e != nil {
+			return nil
+		}
+		existing[sum] = true
+		added++
+		return nil
+	})
+	return added, skipped, truncated, walkErr
+}
+
+// scanTaskArtifacts 扫描任务工作目录里的历史图片并补登记（v0.4.10）。
+// POST /api/tasks/{id}/artifacts/scan
+func (s *Server) scanTaskArtifacts(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("id")
+	added, skipped, truncated, err := s.scanTaskArtifactDir(taskID)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"added": added, "skipped": skipped, "truncated": truncated,
+		"note": "已把任务工作目录里的图片补登记为证据附件（单次最多 60 张）；建议在任务结束后执行，避免把临时文件也收进来。",
+	})
 }

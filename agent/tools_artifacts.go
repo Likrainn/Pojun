@@ -30,7 +30,20 @@ const artifactGuidance = `
 - 数据样本：扒到的敏感数据只存**证明性样本**（如前 20 条记录/前 50 行），不要存全量 PII；全量数据留在工作目录供分析，不随报告分发。
 - 日志/HTML/JSON：命令输出、接口原始响应、页面源码，存成 .txt/.json/.html 再登记。
 - 每个漏洞至少登记 1 张关键截图（能截到的话）；截不到（无浏览器/非 HTTP）就跳过并在证据里说明原因，不要伪造。
-- 登记时传 finding_id（report_finding 返回的独立漏洞 ID）：该漏洞的详情页与单漏洞报告才会展示这张图；任务级材料（目标首页等）不传。`
+- 登记时传 finding_id（report_finding 返回的独立漏洞 ID）：该漏洞的详情页与单漏洞报告才会展示这张图；任务级材料（目标首页等）不传。
+
+━━ 存储桶 / 文件读取 / 上传类漏洞：照片就是证据 ━━
+只写“拿到了存储桶 / 能读文件”不算证明，**必须把抓到的文件本身留成证据**：
+1. 从 bucket/接口下载 5–9 个关键文件样本（照片优先：收款收据、签呈表、报销单、聊天截图、证件照等），存到工作目录（文件名 URL 编码的先解码成可读名）。
+2. 展示方式自己判断：
+   - 1–3 张且单张清晰 → 逐张登记（每张一个附件，note 写清 bucket/路径 + 文件名 + 证明什么）。
+   - 多张需要证明“批量/存储桶里有大量照片” → 拼成一张 3×3 样品图（每格带文件名水印），再登记（note 写“存储桶 <bucket> 内文件样本 N 张，文件名为水印”）。
+   - 拼图命令（Kali 已装 ImageMagick，已验证）：
+     ` + "`magick montage ./*.jpg ./*.png -tile 3x3 -geometry 420x315+10+10 -background white -fill '#333333' -pointsize 13 -label '%t' montage.png`" + `
+   - 需要在单图上叠文件名水印时：
+     ` + "`magick in.jpg -gravity south -background '#00000080' -fill white -pointsize 18 -annotate +0+8 'filename.jpg' out.jpg`" + `
+   - 含身份证号/人脸等敏感信息但必须证明真实性的，先做模糊处理再登记（` + "`magick in.jpg -region 60%x25%+20%+40% -blur 0x12 out.jpg`" + ` 之类），并在 note 说明脱敏位置。
+3. 登记时带 source_url（bucket 的对象 URL）与 finding_id；note 里写明样本数量。报告里用 ![说明](artifact:<id>) 引用，图注写清 bucket/文件与“样本 N 张”。`
 
 // saveEvidence 把工作目录里的文件登记为任务附件。
 func (t *ToolSet) saveEvidence() actool.CoreTool {

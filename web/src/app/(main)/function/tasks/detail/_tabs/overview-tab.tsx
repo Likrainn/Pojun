@@ -30,6 +30,7 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
+import { toast } from "sonner";
 import type {
   AuthCheckResult,
   AssetInterceptKind,
@@ -1395,19 +1396,37 @@ function TaskAuthCard({ taskId }: { taskId: string }) {
 // 顶部一键下载证据包（zip：附件 + manifest）。没有附件时整卡不渲染。
 function TaskArtifactsCard({ taskId }: { taskId: string }) {
   const [list, setList] = React.useState<TaskArtifact[]>([]);
+  const [scanning, setScanning] = React.useState(false);
+  const load = React.useCallback(
+    (alive: { v: boolean }) =>
+      api
+        .taskArtifacts(taskId)
+        .then((items) => {
+          if (alive.v) setList(items);
+        })
+        .catch(() => {}),
+    [taskId],
+  );
   React.useEffect(() => {
-    let alive = true;
-    api
-      .taskArtifacts(taskId)
-      .then((items) => {
-        if (alive) setList(items);
-      })
-      .catch(() => {});
+    const alive = { v: true };
+    void load(alive);
     return () => {
-      alive = false;
+      alive.v = false;
     };
-  }, [taskId]);
-  if (list.length === 0) return null;
+  }, [load]);
+  const scan = async () => {
+    setScanning(true);
+    try {
+      const r = await api.scanTaskArtifacts(taskId);
+      toast.success(`已补登记 ${r.added} 张（跳过 ${r.skipped}，超出 ${r.truncated}）`);
+      const alive = { v: true };
+      await load(alive);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setScanning(false);
+    }
+  };
   const images = list.filter((a) => a.kind === "image");
   const files = list.filter((a) => a.kind !== "image");
   const fmtSize = (n: number) => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`);
@@ -1416,15 +1435,28 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <ImageIcon className="size-4 text-primary" /> 证据附件（{list.length}）
-          <Button size="sm" variant="outline" className="ml-auto" asChild>
-            <a href={api.artifactsExportUrl(taskId)}>下载证据包</a>
-          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            <Button size="sm" variant="ghost" disabled={scanning} onClick={() => void scan()}>
+              {scanning ? "扫描中…" : "扫描工作目录补登记"}
+            </Button>
+            {list.length > 0 && (
+              <Button size="sm" variant="outline" asChild>
+                <a href={api.artifactsExportUrl(taskId)}>下载证据包</a>
+              </Button>
+            )}
+          </div>
         </CardTitle>
         <CardDescription>
           截图与数据样本来自任务执行过程；数据按样本策略保存（证明性样本，非全量）。随报告导出的证据包内含 manifest（来源/时间/sha256）。
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        {list.length === 0 && (
+          <p className="text-muted-foreground text-sm">
+            暂无证据附件。可点右上「扫描工作目录补登记」把历史任务已抓到的图片纳入证据库；新任务会由
+            worker 在取证时自动登记。
+          </p>
+        )}
         {images.length > 0 && (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {images.map((a) => (
