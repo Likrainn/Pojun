@@ -442,19 +442,52 @@ func groupByClass(fs []*db.DBFinding) []classGroup {
 	return out
 }
 
+// FindingDocxInput 是单漏洞报告的输入（v0.4.0：与总报告同级的封面/页眉）。
+type FindingDocxInput struct {
+	Finding        *db.DBFinding
+	GeneratedAt    time.Time
+	AssetNameMap   map[int64]string
+	Retests        []*db.FindingRetest
+	Customer       string // 委托方（空 = 省略该行）
+	Classification string // 密级占位（空 = 默认「内部资料 · 仅限授权方」）
+}
+
 // BuildFindingDocx 渲染单漏洞报告(复现步骤/证据/修复建议的自包含文档)。
-func BuildFindingDocx(f *db.DBFinding, generatedAt time.Time, assetNameMap map[int64]string, retests []*db.FindingRetest) *Docx {
+// v0.4.0：补真封面页（居中标题/委托方/密级/日期）+ 页眉（漏洞名）——与总报告
+// 同一交付标准；正文里的请求/响应/复测章节沿用 v0.3.93 的渲染。
+func BuildFindingDocx(in FindingDocxInput) *Docx {
+	f := in.Finding
+	generatedAt := in.GeneratedAt
 	d := NewDocx()
+	d.SetHeaderText("渗透测试报告 — " + findingTitle(f))
+
+	// 封面页（与总报告同版式）
+	for i := 0; i < 6; i++ {
+		d.CoverLine("", 0, false)
+	}
 	if hex := SeverityHex(f.Severity); hex != "" {
-		d.headingColored(fmt.Sprintf("[%s] %s", SeverityCN(f.Severity), findingTitle(f)), 1, hex)
+		d.CoverLineColored(fmt.Sprintf("[%s] %s", SeverityCN(f.Severity), findingTitle(f)), 44, hex, true)
 	} else {
-		d.H1(fmt.Sprintf("[%s] %s", SeverityCN(f.Severity), findingTitle(f)))
+		d.CoverLine(fmt.Sprintf("[%s] %s", SeverityCN(f.Severity), findingTitle(f)), 44, true)
 	}
-	d.P(fmt.Sprintf("漏洞类别:%s · 严重度:%s", nz(f.VulnClass, "未分类"), SeverityCN(f.Severity)))
+	d.CoverLine("", 0, false)
+	if in.Customer != "" {
+		d.CoverLine("委托方:"+in.Customer, 28, false)
+	}
+	classification := in.Classification
+	if classification == "" {
+		classification = "内部资料 · 仅限授权方"
+	}
+	d.CoverLine(classification, 24, false)
+	d.CoverLine("", 0, false)
+	d.CoverLine("报告生成时间:"+FormatTimeUTC(generatedAt), 24, false)
+	d.PageBreak()
+
+	d.P(fmt.Sprintf("漏洞类别:%s · 严重度:%s · 状态:%s", nz(f.VulnClass, "未分类"), SeverityCN(f.Severity), statusCN(f.Status)))
 	if len(f.AssetIDs) > 0 {
-		d.P(fmt.Sprintf("影响资产:%s", assetNames(f.AssetIDs, assetNameMap)))
+		d.P(fmt.Sprintf("影响资产:%s", assetNames(f.AssetIDs, in.AssetNameMap)))
 	}
-	d.P(fmt.Sprintf("发现时间:%s · 报告生成:%s", FormatTimeUTC(f.CreatedAt), FormatTimeUTC(generatedAt)))
+	d.P(fmt.Sprintf("发现时间:%s · 发现者:%s", FormatTimeUTC(f.CreatedAt), nz(f.Worker, "-")))
 	if s := strings.TrimSpace(f.Summary); s != "" {
 		d.H2("一、漏洞概述")
 		d.P(s)
@@ -469,16 +502,16 @@ func BuildFindingDocx(f *db.DBFinding, generatedAt time.Time, assetNameMap map[i
 	}
 	// 四、流量证据 / 五、复测记录 —— 与总报告同源（A9/A10）
 	writeTrafficEvidenceDocx(d, f)
-	if len(retests) > 0 {
+	if len(in.Retests) > 0 {
 		d.H2("复测记录")
-		latest := retests[0]
+		latest := in.Retests[0]
 		line := fmt.Sprintf("最近复测:%s · %s", retestVerdictCN(latest.Verdict), FormatTimeUTC(latest.CreatedAt))
 		if s := strings.TrimSpace(latest.Summary); s != "" {
 			line += " · " + s
 		}
 		d.P(line)
-		if len(retests) > 1 {
-			d.P(fmt.Sprintf("历史复测共 %d 次。", len(retests)))
+		if len(in.Retests) > 1 {
+			d.P(fmt.Sprintf("历史复测共 %d 次。", len(in.Retests)))
 		}
 	}
 	return d
@@ -544,8 +577,15 @@ func writeMarkdownish(d *Docx, md string) {
 		case strings.HasPrefix(trimmed, "# "):
 			d.H3(strings.TrimPrefix(trimmed, "# "))
 		case strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* "):
-			d.buf.WriteString(`<w:p><w:pPr><w:numPr><w:numId w:val="1"/></w:numPr></w:pPr>`)
-			d.buf.WriteString(runsXML(parseBold(strings.TrimPrefix(strings.TrimPrefix(trimmed, "- "), "* "))))
+			// 嵌套列表：行首每 2 个空格一级（reporter 常写二级清单），ilvl 交给
+			// numbering.xml 的多级定义；压平会让层级关系全丢（v0.4.0）。
+			indent := len(ln) - len(strings.TrimLeft(ln, " 	"))
+			lvl := indent / 2
+			if lvl > 2 {
+				lvl = 2
+			}
+			fmt.Fprintf(&d.buf, `<w:p><w:pPr><w:numPr><w:ilvl w:val="%d"/><w:numId w:val="1"/></w:numPr></w:pPr>`, lvl)
+			d.buf.WriteString(runsXML(parseRich(strings.TrimPrefix(strings.TrimPrefix(trimmed, "- "), "* "))))
 			d.buf.WriteString(`</w:p>`)
 		case trimmed == "":
 			// 段间空行,段落间距已由样式给,跳过

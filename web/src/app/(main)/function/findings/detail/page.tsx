@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { CopyButton } from "@/components/copy-button";
 import { FindingRetestPanel } from "@/components/finding-retest-panel";
 import { FindingTrafficPanel } from "@/components/finding-traffic-panel";
+import { EvidenceView } from "@/components/evidence-view";
 import { Markdown } from "@/components/markdown";
 import { StatusBadge } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -191,9 +192,7 @@ function FindingDetailInner() {
                 </CardHeader>
                 <CardContent>
                   {finding.evidence ? (
-                    <pre className="max-h-[46vh] overflow-auto whitespace-pre-wrap rounded-md bg-muted px-3 py-2 font-mono text-xs">
-                      {finding.evidence}
-                    </pre>
+                    <EvidenceView text={finding.evidence} className="max-h-[60vh] overflow-y-auto pr-1" />
                   ) : (
                     <p className="text-muted-foreground text-sm">（无证据）</p>
                   )}

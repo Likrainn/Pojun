@@ -149,7 +149,11 @@ func TestBuildTaskDocxAndFindingDocx(t *testing.T) {
 		t.Error("appendix asset rows missing")
 	}
 	buf.Reset()
-	if err := BuildFindingDocx(f, time.Now(), map[int64]string{5: "10.0.0.5"}, nil).Encode(&buf); err != nil {
+	if err := BuildFindingDocx(FindingDocxInput{
+		Finding:      f,
+		GeneratedAt:  time.Now(),
+		AssetNameMap: map[int64]string{5: "10.0.0.5"},
+	}).Encode(&buf); err != nil {
 		t.Fatal(err)
 	}
 	if buf.Len() == 0 {

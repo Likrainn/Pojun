@@ -7,6 +7,7 @@ import Link from "next/link";
 import { ArrowDownIcon, ArrowUpIcon, ArrowUpRightIcon, ChevronRightIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import { EvidenceView } from "@/components/evidence-view";
 import { StatusBadge } from "@/components/status-badge";
 import { FindingTrafficPanel } from "@/components/finding-traffic-panel";
 import { Badge } from "@/components/ui/badge";
@@ -144,9 +145,7 @@ function Row({
                 <summary className="cursor-pointer font-medium text-muted-foreground text-xs select-none group-open:mb-1">
                   原始证据 / PoC（点开收起）
                 </summary>
-                <pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap rounded-md border bg-background p-3 font-mono text-xs">
-                  {f.evidence}
-                </pre>
+                <EvidenceView text={f.evidence} className="mt-1 max-h-72 overflow-y-auto" />
               </details>
             </>
           ) : (

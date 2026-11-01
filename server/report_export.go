@@ -193,7 +193,22 @@ func (s *Server) exportFindingDocx(w http.ResponseWriter, r *http.Request) {
 	}
 	names := s.reportAssetNames([]*db.DBFinding{f})
 	retests, _ := s.m.pg.ListFindingRetests(f.ID)
-	doc := report.BuildFindingDocx(f, time.Now(), names, retests)
+	customer := ""
+	classification := ""
+	if f.TaskID != nil && *f.TaskID > 0 {
+		if t := s.m.ResolveTask(strconv.FormatInt(*f.TaskID, 10)); t != nil {
+			customer = s.taskCustomerNames(t)
+			classification = "内部资料 · 仅限授权方"
+		}
+	}
+	doc := report.BuildFindingDocx(report.FindingDocxInput{
+		Finding:        f,
+		GeneratedAt:    time.Now(),
+		AssetNameMap:   names,
+		Retests:        retests,
+		Customer:       customer,
+		Classification: classification,
+	})
 	name := fmt.Sprintf("artex-finding-%d-%s.docx", f.ID, time.Now().Format("20060102"))
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)

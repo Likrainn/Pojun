@@ -47,15 +47,44 @@ func (d *Docx) H4(text string) { d.heading(text, 4) }
 type Run struct {
 	Text string
 	Bold bool
+	Code bool // 内联代码（`x`）：Consolas 字体区分
 }
 
 // PRich 富文本段落：支持 **加粗** 级别（Markdown 富渲染 A5 的底层）。\n 拆多段。
 func (d *Docx) PRich(text string) {
 	for _, line := range strings.Split(text, "\n") {
 		d.buf.WriteString(`<w:p>`)
-		d.buf.WriteString(runsXML(parseBold(line)))
+		d.buf.WriteString(runsXML(parseRich(line)))
 		d.buf.WriteString(`</w:p>`)
 	}
+}
+
+// parseRich 在 **加粗** 之上再支持 `内联代码`（Consolas 字体区分，v0.4.0）：
+// reporter 正文大量 `POST /path`、`totalRows` 标记，原样输出反引号很难读。
+func parseRich(line string) []Run {
+	var out []Run
+	rest := line
+	for {
+		i := strings.Index(rest, "`")
+		if i < 0 {
+			break
+		}
+		if i > 0 {
+			out = append(out, parseBold(rest[:i])...)
+		}
+		rest = rest[i+1:]
+		j := strings.Index(rest, "`")
+		if j < 0 {
+			out = append(out, Run{Text: "`"})
+			break
+		}
+		out = append(out, Run{Text: rest[:j], Code: true})
+		rest = rest[j+1:]
+	}
+	if len(rest) > 0 || len(out) == 0 {
+		out = append(out, parseBold(rest)...)
+	}
+	return out
 }
 
 // parseBold 把一行按 **bold** 拆成 Run 序列。不成对的 ** 按字面处理。
@@ -83,9 +112,16 @@ func parseBold(line string) []Run {
 func runsXML(runs []Run) string {
 	var b strings.Builder
 	for _, r := range runs {
-		rpr := ""
+		var props []string
 		if r.Bold {
-			rpr = "<w:rPr><w:b/></w:rPr>"
+			props = append(props, "<w:b/>")
+		}
+		if r.Code {
+			props = append(props, `<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/>`)
+		}
+		rpr := ""
+		if len(props) > 0 {
+			rpr = "<w:rPr>" + strings.Join(props, "") + "</w:rPr>"
 		}
 		fmt.Fprintf(&b, `<w:r>%s<w:t xml:space="preserve">%s</w:t></w:r>`, rpr, esc(r.Text))
 	}
@@ -181,6 +217,16 @@ func (d *Docx) CoverLine(text string, sz int, bold bool) {
 	}
 	rpr += "</w:rPr>"
 	fmt.Fprintf(&d.buf, `<w:p>%s<w:r>%s<w:t xml:space="preserve">%s</w:t></w:r></w:p>`, pPr, rpr, esc(text))
+}
+
+// CoverLineColored 带色的封面行（单漏洞封面按严重度着色用）。
+func (d *Docx) CoverLineColored(text string, sz int, hex string, bold bool) {
+	fmt.Fprintf(&d.buf,
+		`<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="120" w:after="120"/></w:pPr><w:r><w:rPr>%s<w:color w:val="%s"/>%s<w:t xml:space="preserve">%s</w:t></w:r></w:p>`,
+		func() string { if bold { return "<w:b/>" }; return "" }(),
+		hex,
+		func() string { if sz > 0 { return fmt.Sprintf(`<w:sz w:val="%d"/><w:szCs w:val="%d"/>`, sz, sz) }; return "" }(),
+		esc(text))
 }
 
 // TOC 目录字段：Word 打开时按 updateFields 设置自动刷新（settings.xml 已置
