@@ -17,8 +17,12 @@ import (
 // Docx 是一份正在组装的文档;方法按顺序追加元素。
 type Docx struct {
 	buf        bytes.Buffer
-	headerText string // 页眉文字（SetHeaderText；空 = 默认「渗透测试报告」）
-	fonts      []docxFont // 嵌入字体（EmbedFont；Encode 时混淆成 odttf 打包）
+	headerText string      // 页眉文字（SetHeaderText；空 = 默认「渗透测试报告」）
+	fonts      []docxFont  // 嵌入字体（EmbedFont；Encode 时混淆成 odttf 打包）
+	images     []docxImage // 报告插图（Image；Encode 时打包进 word/media）
+	// artifactImage 解析 Markdown 里的 ![说明](artifact:<id>)（host 注入：
+	// 从任务证据附件库取图片字节与图注）。nil = 不支持内嵌图片。
+	artifactImage func(id int64) (data []byte, caption string, ok bool)
 }
 
 // docxFont 一个待嵌入字体：OOXML 字体名 + TTF 原始字节。
@@ -55,6 +59,11 @@ func obfuscateFont(ttf []byte) (data []byte, key string) {
 
 // NewDocx 建立空文档(自动加封面后的第一个标题也由调用方控制)。
 func NewDocx() *Docx { return &Docx{} }
+
+// SetArtifactImageResolver 注入证据附件图片解析器（v0.5.0）。
+func (d *Docx) SetArtifactImageResolver(fn func(id int64) ([]byte, string, bool)) {
+	d.artifactImage = fn
+}
 
 var xmlEsc = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&apos;")
 
@@ -322,7 +331,7 @@ func (d *Docx) Encode(w io.Writer) error {
 	// 页眉页脚引用走 r: 命名空间（headerReference/footerReference 的 r:id）。
 	// 页面设置对齐公文参考件：页边距 上2098/右1474/下1984/左1587，docGrid 360。
 	// 公文无页眉——headerReference 已移除，页码走页脚「— N —」。
-	document := `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>` +
+	document := `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>` +
 		d.buf.String() +
 		`<w:sectPr>` +
 		`<w:footerReference w:type="default" r:id="rIdFtr"/>` +
@@ -342,6 +351,12 @@ func (d *Docx) Encode(w io.Writer) error {
 <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
 <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
 <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>`
+	if len(d.images) > 0 {
+		contentTypes += `
+<Default Extension="png" ContentType="image/png"/>
+<Default Extension="jpg" ContentType="image/jpeg"/>
+<Default Extension="gif" ContentType="image/gif"/>`
+	}
 	if len(d.fonts) > 0 {
 		// odttf 的 content type：官方 MIME（Word 自产嵌入文档同款）——
 		// 写 application/octet-stream 时 Word 直接判「文件损坏」拒开。
@@ -367,6 +382,10 @@ func (d *Docx) Encode(w io.Writer) error {
 <Relationship Id="rIdSty" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 <Relationship Id="rIdFtr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
 <Relationship Id="rIdSet" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>`
+	for _, img := range d.images {
+		documentRels += fmt.Sprintf(`
+<Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/%s"/>`, img.rid, img.name)
+	}
 	if len(d.fonts) > 0 {
 		documentRels += `
 <Relationship Id="rIdFT" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>`
@@ -409,6 +428,16 @@ func (d *Docx) Encode(w io.Writer) error {
 		{"word/numbering.xml", numbering()},
 		{"word/settings.xml", settings},
 		{"word/footer1.xml", footer},
+	}
+	// 报告插图：word/media/imageN.ext（关系已在 document.xml.rels 里）。
+	for _, img := range d.images {
+		fw, err := zw.Create("word/media/" + img.name)
+		if err != nil {
+			return err
+		}
+		if _, err := fw.Write(img.data); err != nil {
+			return err
+		}
 	}
 	// 嵌入字体：fontTable.xml（字体名 → odttf 关系 + fontKey）与每字体的
 	// word/fonts/fontN.odttf（其关系表 word/_rels/fontTable.xml.rels）。

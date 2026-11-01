@@ -819,6 +819,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/tokens/usage", s.pgUsageStats)            // 全局 llm_usage 聚合（仪表盘新版视图）
 	mux.HandleFunc("GET /api/tokens/cost", s.pgUsageCost)              // 成本估算（内置参考价，?task= 看单任务）
 	mux.HandleFunc("POST /api/tasks/{id}/auth-check", s.taskAuthCheck) // 登录凭据自检（真实发一次登录请求）
+	// 证据附件（v0.5.0）：列表 / 单文件下载 / 证据包 zip。
+	mux.HandleFunc("GET /api/tasks/{id}/artifacts", s.listTaskArtifacts)
+	mux.HandleFunc("GET /api/tasks/{id}/artifacts/export", s.exportTaskArtifacts)
+	mux.HandleFunc("GET /api/tasks/{id}/artifacts/{aid}", s.downloadTaskArtifact)
 
 	mux.HandleFunc("GET /api/audit", s.getAudit)
 	mux.HandleFunc("POST /api/gc", s.gc)

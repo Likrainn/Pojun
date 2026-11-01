@@ -24,7 +24,7 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import { statusMeta } from "@/lib/status";
-import type { Finding, FindingStatus, Severity } from "@/lib/types";
+import type { Finding, FindingStatus, Severity, TaskArtifact } from "@/lib/types";
 
 import { FindingLineageView } from "./lineage";
 
@@ -176,14 +176,11 @@ function FindingDetailInner() {
                   <p className="whitespace-pre-wrap text-sm leading-relaxed">{finding.summary || "（无摘要）"}</p>
                 </CardContent>
               </Card>
-              {/* 关联流量紧跟摘要：报文查看是本页最高频的操作，此前被埋在
-                  证据块(46vh)与长报告之间，用户实测「看不见」（v0.3.98）。 */}
-              <FindingTrafficPanel
-                key={id}
-                findingId={id}
-                contextTask={contextTaskId || undefined}
-                readOnly={finding.inherited}
-                onChanged={load}
+              {/* 现场截图（v0.4.9）：关键照片在详情页直接可见，不用翻 Word。
+                  只展示 finding_id 归属本漏洞的图片附件。 */}
+              <FindingShots
+                taskId={finding.task_id ? String(finding.task_id) : contextTaskId}
+                findingId={String(id)}
               />
               <FindingRetestPanel key={`retest-${id}`} findingId={id} readOnly={finding.inherited} onCompleted={load} />
               <Card>
@@ -217,6 +214,15 @@ function FindingDetailInner() {
                   )}
                 </CardContent>
               </Card>
+              {/* 关联流量放在报告之后（v0.4.9）：先看结论与叙事，再下钻原始报文；
+                  此前紧跟摘要过于靠上，用户反馈位置怪。 */}
+              <FindingTrafficPanel
+                key={id}
+                findingId={id}
+                contextTask={contextTaskId || undefined}
+                readOnly={finding.inherited}
+                onChanged={load}
+              />
             </div>
 
             {/* 右栏：状态区 */}
@@ -344,5 +350,51 @@ export default function FindingDetailPage() {
     <React.Suspense fallback={null}>
       <FindingDetailInner />
     </React.Suspense>
+  );
+}
+
+
+// FindingShots 漏洞现场截图（v0.4.9）：任务附件里 finding_id 归属本漏洞的图片。
+// 缩略图直接引用附件下载地址（同源 cookie 认证），点击原图新窗口打开。
+function FindingShots({ taskId, findingId }: { taskId?: string; findingId: string }) {
+  const [shots, setShots] = React.useState<TaskArtifact[]>([]);
+  React.useEffect(() => {
+    if (!taskId) return;
+    let alive = true;
+    api
+      .taskArtifacts(taskId)
+      .then((list) => {
+        if (alive) setShots(list.filter((a) => a.kind === "image" && String(a.finding_id ?? "") === findingId));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [taskId, findingId]);
+  if (!taskId || shots.length === 0) return null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm">现场截图（{shots.length}）</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-3 sm:grid-cols-2">
+        {shots.map((a) => (
+          <figure key={a.id} className="min-w-0">
+            <a href={api.artifactUrl(taskId, a.id)} target="_blank" rel="noreferrer">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={api.artifactUrl(taskId, a.id)}
+                alt={a.note || a.name}
+                className="w-full rounded border object-contain"
+                loading="lazy"
+              />
+            </a>
+            <figcaption className="mt-1 break-words text-muted-foreground text-xs">
+              {a.note || a.name}
+            </figcaption>
+          </figure>
+        ))}
+      </CardContent>
+    </Card>
   );
 }

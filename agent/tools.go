@@ -67,6 +67,11 @@ func compactIntents(ns []*db.Node, parentsOf, yieldsOf map[int64][]int64, tokens
 // One ToolSet is created per planner/worker run; per-run signals live here.
 type ToolSet struct {
 	findingRecorder FindingRecorder
+	// artifactRecorder 由 host 注入（v0.5.0 证据附件）；nil=当前环境不支持存档。
+	artifactRecorder ArtifactRecorder
+	// runDir 是本次运行的专属工作目录（worker 在这里产生截图/样本），
+	// save_evidence 的相对路径基准；由 Worker.Execute 注入。
+	runDir string
 	as              *db.AssetStore   // asset store (optional; nil = asset tools not available)
 	cs              *db.CompanyStore // company store (optional)
 	ts              *db.ExplorationStore
@@ -194,6 +199,12 @@ func NewToolSet(ts *db.ExplorationStore, worker string) *ToolSet {
 // SetTaskID sets the PG task id on this ToolSet so that report_finding can
 // dual-write to the standalone findings table (which survives task deletion).
 func (t *ToolSet) SetTaskID(id int64) { t.taskID = id }
+
+// SetArtifactRecorder 注入证据附件存储（host 实现）。
+func (t *ToolSet) SetArtifactRecorder(r ArtifactRecorder) { t.artifactRecorder = r }
+
+// SetRunDir 注入本次运行的工作目录（save_evidence 的相对路径基准）。
+func (t *ToolSet) SetRunDir(dir string) { t.runDir = dir }
 
 // SetCoverageEnabled records whether this task has the asset-coverage feature on
 // (default enabled). Passing false makes graphOverviewData omit the coverage block

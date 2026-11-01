@@ -8,6 +8,7 @@ import {
   BugIcon,
   CheckIcon,
   ClockIcon,
+  ImageIcon,
   KeyRoundIcon,
   CoinsIcon,
   ListChecksIcon,
@@ -39,6 +40,7 @@ import type {
   Task,
   TaskConstraint,
   TaskGoal,
+  TaskArtifact,
   TaskAuthConfigView,
   TaskNode,
   TaskScopeRow,
@@ -455,6 +457,8 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       </Card>
       {/* 任务级登录凭据（v0.4.8）：摘要 + 一次真实登录自检；未配置时不渲染。 */}
       <TaskAuthCard taskId={taskId} />
+      {/* 证据附件（v0.4.9）：截图缩略图 + 数据样本/日志列表 + 证据包下载。 */}
+      <TaskArtifactsCard taskId={taskId} />
       {/* 目标管理：查看/新增/修改/删除本任务的探索目标。新增与修改会通知规划者并复活任务，
           删除仅通知规划者（不复活）。目标 = 最终可交付/可核验的结果，不是攻击步骤或侦察动作。 */}
       <Card>
@@ -1382,6 +1386,81 @@ function TaskAuthCard({ taskId }: { taskId: string }) {
           </span>
         </CardContent>
       )}
+    </Card>
+  );
+}
+
+
+// TaskArtifactsCard 任务证据附件（v0.4.9）：图片直接出缩略图，其他文件列清单；
+// 顶部一键下载证据包（zip：附件 + manifest）。没有附件时整卡不渲染。
+function TaskArtifactsCard({ taskId }: { taskId: string }) {
+  const [list, setList] = React.useState<TaskArtifact[]>([]);
+  React.useEffect(() => {
+    let alive = true;
+    api
+      .taskArtifacts(taskId)
+      .then((items) => {
+        if (alive) setList(items);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [taskId]);
+  if (list.length === 0) return null;
+  const images = list.filter((a) => a.kind === "image");
+  const files = list.filter((a) => a.kind !== "image");
+  const fmtSize = (n: number) => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <ImageIcon className="size-4 text-primary" /> 证据附件（{list.length}）
+          <Button size="sm" variant="outline" className="ml-auto" asChild>
+            <a href={api.artifactsExportUrl(taskId)}>下载证据包</a>
+          </Button>
+        </CardTitle>
+        <CardDescription>
+          截图与数据样本来自任务执行过程；数据按样本策略保存（证明性样本，非全量）。随报告导出的证据包内含 manifest（来源/时间/sha256）。
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {images.length > 0 && (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {images.map((a) => (
+              <figure key={a.id} className="min-w-0">
+                <a href={api.artifactUrl(taskId, a.id)} target="_blank" rel="noreferrer">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={api.artifactUrl(taskId, a.id)}
+                    alt={a.note || a.name}
+                    className="w-full rounded border object-contain"
+                    loading="lazy"
+                  />
+                </a>
+                <figcaption className="mt-1 break-words text-muted-foreground text-xs">
+                  {a.note || a.name}
+                  {a.finding_id ? ` · 漏洞 #${a.finding_id}` : ""}
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        )}
+        {files.length > 0 && (
+          <div className="flex flex-col divide-y rounded border">
+            {files.map((a) => (
+              <div key={a.id} className="flex min-w-0 items-center gap-2 px-3 py-2 text-sm">
+                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">{a.kind}</span>
+                <span className="min-w-0 flex-1 truncate">{a.name}</span>
+                <span className="shrink-0 text-muted-foreground text-xs">{fmtSize(a.size_bytes)}</span>
+                <Button size="sm" variant="ghost" asChild>
+                  <a href={api.artifactUrl(taskId, a.id)}>下载</a>
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
     </Card>
   );
 }

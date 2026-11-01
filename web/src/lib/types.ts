@@ -812,6 +812,21 @@ export interface TokenTotal {
   cache_write_tokens: number;
 }
 
+// 任务级证据附件（v0.4.9）：截图/数据样本/日志，随报告导出证据包。
+export interface TaskArtifact {
+  id: number;
+  task_id: string;
+  finding_id?: number;
+  name: string;
+  kind: string; // image|data|log|html|other
+  mime?: string;
+  size_bytes: number;
+  sha256?: string;
+  source_url?: string;
+  note?: string;
+  created_at: string;
+}
+
 // 任务级目标登录凭据（创建时输入；API 只回传视图，密码/TOTP 永不返回）。
 export interface TaskAuthConfigInput {
   enabled: boolean;

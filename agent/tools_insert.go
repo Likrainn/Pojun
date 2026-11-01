@@ -697,6 +697,9 @@ func (t *ToolSet) WorkerTools() []actool.CoreTool {
 		t.apiContractTool(),
 		// search_recent_critical：按【时间】查最近披露的高危漏洞（不需先知道组件名/CVE 号）。
 		t.searchRecentCritical(),
+		// save_evidence / list_artifacts：证据附件（v0.5.0）——截图/数据样本/日志
+		// 落盘登记，随报告导出证据包；报告里用 ![说明](artifact:<id>) 引用。
+		t.saveEvidence(), t.listArtifacts(),
 		// 以下工具仍【不给】worker，只留给 planner/main（读上下文、跨 work 复盘是规划职责，
 		// worker 只做单条意图的执行与写回）：list_facts / list_companies / list_worker_traces。
 	}

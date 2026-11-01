@@ -1,0 +1,103 @@
+package db
+
+import (
+	"context"
+	"time"
+)
+
+// TaskArtifact 是任务级证据附件（v0.5.0）：worker 扒到的数据样本、截图、
+// 日志等，落盘到任务目录并登记，随报告导出成证据包。默认只存"证明性样本"
+// （敏感数据前 N 条），全量数据留在任务工作目录，不随报告分发（合规）。
+type TaskArtifact struct {
+	ID     int64  `json:"id"`
+	TaskID string `json:"task_id"`
+	// FindingID 可选：这张图/这个样本证明哪个漏洞（worker 报完漏洞后登记时带上）。
+	// 0 = 任务级材料（如目标首页截图），不进单个漏洞的详情页。
+	FindingID int64     `json:"finding_id,omitempty"`
+	Name      string    `json:"name"` // 展示名（含扩展名）
+	Kind      string    `json:"kind"` // image|data|log|html|other
+	Mime      string    `json:"mime,omitempty"`
+	SizeBytes int64     `json:"size_bytes"`
+	SHA256    string    `json:"sha256,omitempty"`
+	SourceURL string    `json:"source_url,omitempty"`
+	Note      string    `json:"note,omitempty"` // 报告图注/附件说明
+	Storage   string    `json:"-"`              // data 目录下的相对路径（不对外）
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// EnsureTaskArtifactsTable 幂等建表（服务启动时调用）。
+func (d *DB) EnsureTaskArtifactsTable() error {
+	_, err := d.Exec(`
+CREATE TABLE IF NOT EXISTS task_artifacts (
+    id          BIGSERIAL PRIMARY KEY,
+    task_id     TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'other',
+    mime        TEXT,
+    size_bytes  BIGINT NOT NULL DEFAULT 0,
+    sha256      TEXT,
+    source_url  TEXT,
+    note        TEXT,
+    storage_path TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_task_artifacts_task ON task_artifacts(task_id);
+ALTER TABLE task_artifacts ADD COLUMN IF NOT EXISTS finding_id BIGINT;
+CREATE INDEX IF NOT EXISTS idx_task_artifacts_finding ON task_artifacts(finding_id);
+`)
+	return err
+}
+
+// InsertTaskArtifact 登记一个附件（文件已由 host 落盘）。
+func (d *DB) InsertTaskArtifact(ctx context.Context, a *TaskArtifact) error {
+	return d.QueryRowContext(ctx, `
+INSERT INTO task_artifacts(task_id,finding_id,name,kind,mime,size_bytes,sha256,source_url,note,storage_path)
+VALUES ($1,NULLIF($2,0),$3,$4,NULLIF($5,''),$6,NULLIF($7,''),NULLIF($8,''),NULLIF($9,''),$10)
+RETURNING id, created_at`,
+		a.TaskID, a.FindingID, a.Name, a.Kind, a.Mime, a.SizeBytes, a.SHA256, a.SourceURL, a.Note, a.Storage).
+		Scan(&a.ID, &a.CreatedAt)
+}
+
+// ListTaskArtifacts 按时间列出任务附件。
+func (d *DB) ListTaskArtifacts(taskID string) ([]TaskArtifact, error) {
+	rows, err := d.Query(`
+SELECT id,task_id,COALESCE(finding_id,0),name,kind,COALESCE(mime,''),size_bytes,COALESCE(sha256,''),
+       COALESCE(source_url,''),COALESCE(note,''),storage_path,created_at
+FROM task_artifacts WHERE task_id=$1 ORDER BY id`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TaskArtifact
+	for rows.Next() {
+		var a TaskArtifact
+		if err := rows.Scan(&a.ID, &a.TaskID, &a.FindingID, &a.Name, &a.Kind, &a.Mime, &a.SizeBytes,
+			&a.SHA256, &a.SourceURL, &a.Note, &a.Storage, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// GetTaskArtifact 取单个附件元数据（导出/报告嵌图用）。
+func (d *DB) GetTaskArtifact(id int64) (*TaskArtifact, error) {
+	var a TaskArtifact
+	err := d.QueryRow(`
+SELECT id,task_id,COALESCE(finding_id,0),name,kind,COALESCE(mime,''),size_bytes,COALESCE(sha256,''),
+       COALESCE(source_url,''),COALESCE(note,''),storage_path,created_at
+FROM task_artifacts WHERE id=$1`, id).
+		Scan(&a.ID, &a.TaskID, &a.FindingID, &a.Name, &a.Kind, &a.Mime, &a.SizeBytes,
+			&a.SHA256, &a.SourceURL, &a.Note, &a.Storage, &a.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// CountTaskArtifacts 返回任务附件数量与总字节数（限额检查用）。
+func (d *DB) CountTaskArtifacts(taskID string) (count int, bytes int64, err error) {
+	err = d.QueryRow(`SELECT COUNT(*), COALESCE(SUM(size_bytes),0) FROM task_artifacts WHERE task_id=$1`, taskID).
+		Scan(&count, &bytes)
+	return
+}

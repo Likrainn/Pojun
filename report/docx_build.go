@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,6 +37,9 @@ type TaskDocxInput struct {
 	Classification string
 	// PageHeader 页眉文字（空 = 「渗透测试报告」）。
 	PageHeader string
+	// ArtifactImage 证据附件图片解析器（v0.5.0）：Markdown 里
+	// ![说明](artifact:<id>) 会内嵌为图片；nil = 降级为文字说明。
+	ArtifactImage func(id int64) (data []byte, caption string, ok bool)
 }
 
 func sevRankKey(f *db.DBFinding) int {
@@ -61,6 +65,7 @@ func sevRankKey(f *db.DBFinding) int {
 func BuildTaskDocx(in TaskDocxInput) *Docx {
 	d := NewDocx()
 	embedGongwenFonts(d) // 公文字体随文档嵌入（GB/T 9704 全链路）
+	d.SetArtifactImageResolver(in.ArtifactImage)
 	if in.PageHeader != "" {
 		d.SetHeaderText(in.PageHeader)
 	}
@@ -446,7 +451,9 @@ func groupByClass(fs []*db.DBFinding) []classGroup {
 
 // FindingDocxInput 是单漏洞报告的输入（v0.4.0：与总报告同级的封面/页眉）。
 type FindingDocxInput struct {
-	Finding        *db.DBFinding
+	Finding *db.DBFinding
+	// ArtifactImage 证据附件图片解析器（v0.5.0，见 TaskDocxInput.ArtifactImage）。
+	ArtifactImage  func(id int64) (data []byte, caption string, ok bool)
 	GeneratedAt    time.Time
 	AssetNameMap   map[int64]string
 	Retests        []*db.FindingRetest
@@ -462,6 +469,7 @@ func BuildFindingDocx(in FindingDocxInput) *Docx {
 	generatedAt := in.GeneratedAt
 	d := NewDocx()
 	embedGongwenFonts(d) // 公文字体随文档嵌入（GB/T 9704 全链路）
+	d.SetArtifactImageResolver(in.ArtifactImage)
 	d.SetHeaderText("渗透测试报告 — " + findingTitle(f))
 
 	// 封面页（与总报告同版式）
@@ -586,6 +594,26 @@ func writeMarkdownish(d *Docx, md string) {
 			continue
 		}
 		flushTable()
+		// 证据附件图片：![说明](artifact:<id>) → 内嵌截图 + 图注（v0.5.0）。
+		if artRe.MatchString(trimmed) {
+			m := artRe.FindStringSubmatch(trimmed)
+			alt, rawID := strings.TrimSpace(m[1]), m[2]
+			id, _ := strconv.ParseInt(rawID, 10, 64)
+			inserted := false
+			if id > 0 && d.artifactImage != nil {
+				if data, caption, ok := d.artifactImage(id); ok {
+					if caption == "" {
+						caption = alt
+					}
+					inserted = d.Image(data, caption)
+				}
+			}
+			if !inserted {
+				// 附件缺失/非图片/环境不支持：降级成一行说明，不中断报告。
+				d.P("（证据图片：" + alt + "，附件缺失或不可嵌入）")
+			}
+			continue
+		}
 		switch {
 		case strings.HasPrefix(trimmed, "### "):
 			d.H4(strings.TrimPrefix(trimmed, "### "))
@@ -632,6 +660,8 @@ func writeMarkdownish(d *Docx, md string) {
 var (
 	gongwenHeiRe = regexp.MustCompile(`^[一二三四五六七八九十]{1,3}、`)
 	gongwenKaiRe = regexp.MustCompile(`^（[一二三四五六七八九十]{1,3}）`)
+	// artRe 匹配报告里的证据图片引用：![说明](artifact:12)
+	artRe = regexp.MustCompile(`^!\[(.*?)\]\(artifact:(\d+)\)$`)
 )
 
 // splitMarkdownRow 拆一行 | a | b | → [a, b]。

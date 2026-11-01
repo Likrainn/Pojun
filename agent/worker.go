@@ -54,16 +54,18 @@ type WebSearchOpts struct {
 
 type Worker struct {
 	findingRecorder FindingRecorder
-	prov            llm.Provider
-	model           string
-	workDir         string
-	proxyAddr       string
-	proxyCACert     string            // recording proxy's CA cert path (for WebFetch HTTPS verify)
-	webSearch       WebSearchOpts     // web_search tool backend selection (off by default)
-	tx              *transcript.Store // raw LLM conversation persistence (nil = off)
-	window          int               // context window in tokens (for compaction)
-	windowFn        func() int        // optional dynamic task-chain minimum
-	maxTurns        int               // max agent turns per run (0 = unlimited)
+	// artifactRecorder 由 host 注入：证据附件（截图/样本/日志）落盘登记。
+	artifactRecorder ArtifactRecorder
+	prov             llm.Provider
+	model            string
+	workDir          string
+	proxyAddr        string
+	proxyCACert      string            // recording proxy's CA cert path (for WebFetch HTTPS verify)
+	webSearch        WebSearchOpts     // web_search tool backend selection (off by default)
+	tx               *transcript.Store // raw LLM conversation persistence (nil = off)
+	window           int               // context window in tokens (for compaction)
+	windowFn         func() int        // optional dynamic task-chain minimum
+	maxTurns         int               // max agent turns per run (0 = unlimited)
 	// runTimeout is the wall-clock budget for the main exploration of one intent
 	// (0 = unlimited). When it fires, the run is cut and a settlement round is
 	// forced so already-identified facts get written back instead of being lost.
@@ -154,6 +156,9 @@ func (w *Worker) SetRunTimeout(run time.Duration) {
 
 // SetTaskAuthBlock 设置任务级登录凭据渲染块（host 装配时调用；空串=不注入）。
 func (w *Worker) SetTaskAuthBlock(block string) { w.taskAuthBlock = block }
+
+// SetArtifactRecorder 注入证据附件存储（host 实现）。
+func (w *Worker) SetArtifactRecorder(r ArtifactRecorder) { w.artifactRecorder = r }
 
 // settleWrapUpPrompt is injected by the SDK settlement phase when a worker hits its
 // turn/time budget: stop probing, write back what was found, then end with a
@@ -464,6 +469,8 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// worker 有。仅【全局态势 overview】留在启动 user 消息里——它可降级、容忍 stale，压掉无碍。
 	// 本次意图的专属工作目录 <workDir>/tasks/<taskID>/i<intentID>，引擎侧先建好。
 	runDir := ensureRunDir(w.workDir, taskID, intent.ID)
+	tsx.SetRunDir(runDir)                       // save_evidence 的相对路径基准
+	tsx.SetArtifactRecorder(w.artifactRecorder) // 证据附件落盘登记
 	// The run-wide intent is not the current tool action. Do not forward it or
 	// inherit a parent run's background into the action reviewer.
 	ctx = intercept.WithReviewContext(ctx, runDir, intercept.ReviewBackground{})
@@ -475,6 +482,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	if w.taskAuthBlock != "" {
 		sysBody += w.taskAuthBlock // 任务级登录凭据（v0.4.8）：先登录再测
 	}
+	sysBody += artifactGuidance // 证据附件（v0.5.0）：截图/样本存档纪律
 	// 意图块 → 意图锚定资产块 → 相关既有事实 → 启动指令，依次追加到 system 尾部
 	//（与 constraintBlock 同一套追加法）。
 	sysBody += renderIntentTask(intent)

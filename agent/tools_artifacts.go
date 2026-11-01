@@ -1,0 +1,90 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	actool "github.com/Autumn-27/norma/tool"
+	"github.com/chu0119/artex/db"
+)
+
+// ArtifactRecorder 由 host（server）实现：校验路径边界与限额、复制到任务附件
+// 目录并落库。agent 只负责"把工作目录里的文件交出去"，不直接写附件库。
+type ArtifactRecorder interface {
+	RecordArtifact(taskID, findingID int64, runDir, relPath, name, kind, sourceURL, note string) (*db.TaskArtifact, error)
+}
+
+// ListTaskArtifacts 是 host 注入的附件列表读取（agent 工具用）。nil = 不可用。
+var ListTaskArtifacts func(taskID string) ([]db.TaskArtifact, error)
+
+// artifactGuidance 注入 worker system prompt：截图与证据存档的时机纪律
+// （v0.5.0）。报告要"有照片"，前提是 worker 在正确时刻截图并登记。
+const artifactGuidance = `
+
+━━ 证据附件（截图 / 数据样本 / 日志）━━
+确认漏洞或拿到关键证据后，把**能证明结论的原始材料**登记为任务附件：
+- 截图：用 browser/playwright 工具访问目标页面截图（登录后的数据列表、后台界面、IDOR 越权页、上传/下载结果、命令回显页面），或用 chromium headless 兜底：
+  ` + "`chromium --headless --disable-gpu --screenshot=<工作目录内路径>.png --window-size=1440,900 '<URL>'`" + `
+  截图后用 save_evidence 登记，note 写清"哪个系统的什么页面、证明什么"（这是报告图注）。
+- 数据样本：扒到的敏感数据只存**证明性样本**（如前 20 条记录/前 50 行），不要存全量 PII；全量数据留在工作目录供分析，不随报告分发。
+- 日志/HTML/JSON：命令输出、接口原始响应、页面源码，存成 .txt/.json/.html 再登记。
+- 每个漏洞至少登记 1 张关键截图（能截到的话）；截不到（无浏览器/非 HTTP）就跳过并在证据里说明原因，不要伪造。
+- 登记时传 finding_id（report_finding 返回的独立漏洞 ID）：该漏洞的详情页与单漏洞报告才会展示这张图；任务级材料（目标首页等）不传。`
+
+// saveEvidence 把工作目录里的文件登记为任务附件。
+func (t *ToolSet) saveEvidence() actool.CoreTool {
+	return writeTool("save_evidence",
+		"把工作目录里的证据文件登记为任务附件（截图 / 数据样本 / 日志 / HTML / JSON），随报告导出成证据包。默认只存证明性样本：敏感数据只存前 20 条左右，不要存全量 PII。同一文件重复登记会去重。",
+		obj(map[string]any{
+			"path":       str("工作目录内的相对路径（如 shots/login-userlist.png）"),
+			"name":       str("可选：展示名（含扩展名）；省略用文件名"),
+			"kind":       str("可选：image|data|log|html|auto（默认按扩展名推断）"),
+			"source_url": str("可选：采集来源 URL"),
+			"note":       str("说明：证明什么（截图会作为报告图注，务必具体）"),
+			"finding_id": map[string]any{"type": "integer", "description": "可选：这块证据证明哪个漏洞（report_finding 返回的 finding_id）。带上后该漏洞详情页与单漏洞报告会展示这张图"},
+		}, "path"), func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+			var a struct {
+				Path, Name, Kind, SourceURL, Note string
+				FindingID                         int64 `json:"finding_id"`
+			}
+			if err := json.Unmarshal(in, &a); err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			if t.artifactRecorder == nil {
+				return actool.Errorf("证据附件存储不可用（当前运行环境未启用）"), nil
+			}
+			if t.taskID <= 0 {
+				return actool.Errorf("save_evidence 需要任务上下文"), nil
+			}
+			if t.runDir == "" {
+				return actool.Errorf("save_evidence 需要当前运行目录（内部未注入）"), nil
+			}
+			rec, err := t.artifactRecorder.RecordArtifact(t.taskID, a.FindingID, t.runDir, a.Path, a.Name, a.Kind, a.SourceURL, a.Note)
+			if err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			out, _ := json.Marshal(map[string]any{
+				"artifact_id": rec.ID, "name": rec.Name, "kind": rec.Kind,
+				"size_bytes": rec.SizeBytes, "note": rec.Note,
+			})
+			return actool.Text(fmt.Sprintf("evidence saved: artifact %d\n%s\n报告撰写时可用 ![说明](artifact:%d) 引用这张图。", rec.ID, out, rec.ID)), nil
+		})
+}
+
+// listArtifacts 列出本任务已登记的证据附件（worker 核对、reporter 引用用）。
+func (t *ToolSet) listArtifacts() actool.CoreTool {
+	return writeTool("list_artifacts",
+		"列出本任务已登记的证据附件（id/名称/类型/大小/说明/来源）。撰写报告时用 ![图注](artifact:<id>) 把图片插进报告。",
+		obj(map[string]any{}), func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+			if ListTaskArtifacts == nil || t.taskID <= 0 {
+				return actool.Text("[]"), nil
+			}
+			list, err := ListTaskArtifacts(fmt.Sprint(t.taskID))
+			if err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			out, _ := json.Marshal(map[string]any{"artifacts": list})
+			return actool.Text(string(out)), nil
+		})
+}

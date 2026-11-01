@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/chu0119/artex/db"
 	actool "github.com/Autumn-27/norma/tool"
+	"github.com/chu0119/artex/db"
 )
 
 const findingIDGuidance = "\n\n**漏洞编号约定**：finding_id 是独立漏洞记录 ID；finding_node_id 是探索节点 ID。list_findings / list_task_findings / node_detail / get_task_node_detail 的 id 保留为探索节点 ID，应从同一返回的 finding_id 读取独立编号。get_finding_traffic / bind_finding_traffic 用独立 finding_id。旧 update_finding_report 的 finding_id 参数仍传 finding_node_id。不要把 report_finding 第一行的数字用于证据工具，也不要遇到编号错误后猜测其他数字。"
@@ -31,7 +31,8 @@ const reporterEvidenceAnnex = `
 - ` + "`## 证据`" + ` 只放亲眼看到的原文（请求/响应/命令输出）；推断写进 ` + "`## 根因分析`" + `，不得混入证据。
 - 小节标题只写“缺陷是什么、在哪”，**不写后果**，不用“可能存在 / 疑似 / 理论上”等措辞。
 - 某些验证因环境限制未执行（无内网、无账号、组件不可达）时，在报告末尾加 ` + "`## 未验证范围`" + ` 如实说明；无法验证的部分不得写成已确认。
-- 登记的 severity 与你的判断不一致时，在「影响与危害」中写“建议复核为 X 级”并说明理由，**不得擅自改写登记值**。`
+- 登记的 severity 与你的判断不一致时，在「影响与危害」中写“建议复核为 X 级”并说明理由，**不得擅自改写登记值**。
+- 现场截图：先用 list_artifacts 查本任务证据附件；把与本漏洞相关（finding_id 匹配）或确实能说明问题的图片用 ` + "`![具体说明](artifact:<id>)`" + ` 插进「证据」小节。图注写清“什么系统的什么页面、证明了什么”；不要引用无关图片，也不要在没有图片时编造。`
 
 // The server supplies the persisted setting. A missing setting/host is off.
 // Consulted at assembly and again on writes so an already-running session

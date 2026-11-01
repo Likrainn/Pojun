@@ -78,6 +78,7 @@ import type {
   Settings,
   AuthCheckResult,
   TaskAuthConfigInput,
+  TaskArtifact,
   TaskCostEstimate,
   Severity,
   SkillCall,
@@ -724,6 +725,11 @@ export const api = {
   taskCost: (task: string) => get<TaskCostEstimate>(`/tokens/cost${tq(task)}`),
   // 登录凭据自检：用任务配置的真实登录请求验证凭据是否可用。
   taskAuthCheck: (taskId: string) => post<AuthCheckResult>(`/tasks/${taskId}/auth-check`, {}),
+  // 任务证据附件：列表 / 下载地址（图片直链同源带 cookie，可直接当 img src）。
+  taskArtifacts: (taskId: string) =>
+    get<{ artifacts: TaskArtifact[] }>(`/tasks/${taskId}/artifacts`).then((r) => arr(r.artifacts)),
+  artifactUrl: (taskId: string, artifactId: number) => `/api/tasks/${taskId}/artifacts/${artifactId}`,
+  artifactsExportUrl: (taskId: string) => `/api/tasks/${taskId}/artifacts/export`,
   tokenDaily: (days = 30) => get<DailyTokenBucket[]>(`/tokens/daily?days=${days}`).then(arr),
   conversationTokens: () =>
     get<ConvTokenSummary[]>("/tokens/conversations")

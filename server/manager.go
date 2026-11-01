@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	actool "github.com/Autumn-27/norma/tool"
 	"github.com/chu0119/artex/agent"
 	pgdb "github.com/chu0119/artex/db"
 	"github.com/chu0119/artex/enrich"
@@ -23,7 +24,6 @@ import (
 	"github.com/chu0119/artex/intercept"
 	"github.com/chu0119/artex/traffic"
 	"github.com/chu0119/artex/vulnintel"
-	actool "github.com/Autumn-27/norma/tool"
 )
 
 // Task is one engagement: a description + goal + its own exploration store,
@@ -528,6 +528,9 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	if err := pg.EnsureLLMRecordsTable(); err != nil {
 		log.Printf("[llmrec] create table: %v", err)
 	}
+	if err := pg.EnsureTaskArtifactsTable(); err != nil {
+		return nil, err
+	}
 	if err := pg.EnsureLLMUsageTable(); err != nil {
 		log.Printf("[llmusage] create table: %v", err)
 	}
@@ -764,7 +767,6 @@ func (m *Manager) deepSeekSearchCreds() (baseURL, apiKey, model string) {
 	}
 	return p.BaseURL, p.APIKey, p.Model
 }
-
 
 // WebSearchEnabled reports whether web search is enabled.
 func (m *Manager) WebSearchEnabled() bool {

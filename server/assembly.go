@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Autumn-27/norma/skill"
+	actool "github.com/Autumn-27/norma/tool"
 	"github.com/chu0119/artex/agent"
 	"github.com/chu0119/artex/db"
 	"github.com/chu0119/artex/traffic"
-	"github.com/Autumn-27/norma/skill"
-	actool "github.com/Autumn-27/norma/tool"
 )
 
 // wireAgentAugment connects the PG agent_visibility table into the agent runtime:
@@ -227,6 +227,12 @@ func seedPrompts(pg *db.DB) {
 // and缺省入参 get injected. MCP/skill/host tools have no row and pass through.
 func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 	agent.FindingTrafficBindingEnabled = func() bool { return pg.GetBool(settingAgentTrafficBinding, false) }
+	// 证据附件列表（v0.4.9）：agent 的 list_artifacts 工具读取本任务已登记附件。
+	agent.ListTaskArtifacts = func(taskID string) ([]db.TaskArtifact, error) { return pg.ListTaskArtifacts(taskID) }
+	// reporter 需要看附件清单来引用截图（worker 由 builtinToolsByAgent 自动绑定）。
+	if err := pg.AddAgentToToolBinding("reporter", []string{"list_artifacts"}); err != nil {
+		log.Printf("[tools] reporter 绑定 list_artifacts 失败: %v", err)
+	}
 	// Seed the built-in domain tools (first-insert only; DO NOTHING preserves edits).
 	// No startup prune: rows we didn't seed are left alone so future user-defined
 	// custom tools (system=false, added via the UI) survive restarts.

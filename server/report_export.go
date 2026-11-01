@@ -139,12 +139,45 @@ func (s *Server) exportTaskDocx(w http.ResponseWriter, r *http.Request) {
 		TestWindow:     taskTestWindow(t),
 		AppendixAssets: appendix,
 		PageHeader:     fmt.Sprintf("渗透测试报告 — %s", t.Description),
+		ArtifactImage:  s.artifactImageResolver(t.ID, 0),
 	})
 	name := fmt.Sprintf("artex-report-task%s-%s.docx", t.ID, time.Now().Format("20060102"))
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	w.WriteHeader(200)
 	_ = doc.Encode(w)
+}
+
+// artifactImageResolver 构造证据附件图片解析器（v0.5.0）：只解析本任务内的
+// 图片附件，非图片/跨任务/文件丢失都返回 ok=false（报告降级为文字说明）。
+func (s *Server) artifactImageResolver(taskID string, onlyFindingID int64) func(int64) ([]byte, string, bool) {
+	if taskID == "" {
+		return nil
+	}
+	return func(id int64) ([]byte, string, bool) {
+		pg := s.m.PG()
+		if pg == nil {
+			return nil, "", false
+		}
+		a, err := pg.GetTaskArtifact(id)
+		if err != nil || a == nil || a.TaskID != taskID {
+			return nil, "", false
+		}
+		// 单漏洞报告只嵌「该漏洞的图」：归属别的漏洞或任务级材料一律不嵌，
+		// 避免张冠李戴。
+		if onlyFindingID > 0 && a.FindingID != onlyFindingID {
+			return nil, "", false
+		}
+		data, ok := s.artifactImageData(a)
+		if !ok {
+			return nil, "", false
+		}
+		caption := a.Note
+		if caption == "" {
+			caption = a.Name
+		}
+		return data, caption, true
+	}
 }
 
 // taskCustomerNames 任务关联企业名（封面「委托方」行；A12）。
@@ -208,6 +241,12 @@ func (s *Server) exportFindingDocx(w http.ResponseWriter, r *http.Request) {
 		Retests:        retests,
 		Customer:       customer,
 		Classification: classification,
+		ArtifactImage: func() func(int64) ([]byte, string, bool) {
+			if f.TaskID != nil && *f.TaskID > 0 {
+				return s.artifactImageResolver(strconv.FormatInt(*f.TaskID, 10), f.ID)
+			}
+			return nil
+		}(),
 	})
 	name := fmt.Sprintf("artex-finding-%d-%s.docx", f.ID, time.Now().Format("20060102"))
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
