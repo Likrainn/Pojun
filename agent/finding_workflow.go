@@ -10,6 +10,29 @@ import (
 
 const findingIDGuidance = "\n\n**漏洞编号约定**：finding_id 是独立漏洞记录 ID；finding_node_id 是探索节点 ID。list_findings / list_task_findings / node_detail / get_task_node_detail 的 id 保留为探索节点 ID，应从同一返回的 finding_id 读取独立编号。get_finding_traffic / bind_finding_traffic 用独立 finding_id。旧 update_finding_report 的 finding_id 参数仍传 finding_node_id。不要把 report_finding 第一行的数字用于证据工具，也不要遇到编号错误后猜测其他数字。"
 
+// evidenceDisciplineGuidance 证据分级与上报门槛（借鉴 Shannon 的 L1–L4 证据
+// 阶梯与"安全机制 vs 外部约束"判定问句，v0.4.5）。放在 tool guidance 里而不是
+// DB prompt：升级即生效，且不覆盖用户自己编辑过的 agent prompt。
+const evidenceDisciplineGuidance = `
+
+**证据分级与上报门槛（report_finding 之前先自查）**：
+- 证据分四级：L1 接口有响应、参数被后端处理；L2 证明输入真实影响了后端逻辑（引号闭合、条件差异、报错差异）；L3 真实影响达成（数据外带、越权读到他人数据、命令执行回显、登录绕过）；L4 关键影响（全量数据、系统接管）。
+- **只有达到 L3 才允许报 critical / high**；L2 最多报 medium，并在 evidence 写明利用条件；L1 不报漏洞，记进 TodoWrite 存疑项。
+- 被挡住时先问一句：**挡住你的是"安全机制"（输入校验、权限判定、框架/ORM 防护、参数化查询），还是"外部运维约束"（网关、WAF、IP 白名单、组件未部署、网络隔离）？** 安全机制挡住 = 不是漏洞（顶多写加固建议），不要上报；外部约束挡住 = 可以上报，但 evidence 必须写明该前置条件，severity 按"绕过该约束后实际能拿到什么"评估并注明。
+- 观察 ≠ 推断：evidence 只写你**亲眼看到的**请求/响应原文与命令输出；从响应里"推断出"的结论写进 summary 或分析，不能当作证据。
+- severity 自查：给 critical / high 之前自问"最终谁受损、攻击者拿到了什么本不该拿的东西？"如果理由里出现"需要管理员配合 / 影响有限 / 本来就能看到"，那就不该评高危——**你的理由不能反驳你的定级**。critical 只留给：无权限或零前置，直接拿到敏感数据或执行命令。`
+
+// reporterEvidenceAnnex 报告结构补充（只在 reporter 上注入，v0.4.5 起）。
+const reporterEvidenceAnnex = `
+
+**报告结构补充**：
+- 在「复现步骤」之后加 ` + "`## 前置条件`" + `：复现所需账号/权限/网络位置/特殊配置；确实没有写“无”。
+- 加 ` + "`## 影响证明`" + `：用编号逐条列出“已实际达成的可验证影响”（例：读出 2731 条用户数据含身份证号、接管 admin 会话），每条对应证据出处；这是严重度的依据，不写推测。
+- ` + "`## 证据`" + ` 只放亲眼看到的原文（请求/响应/命令输出）；推断写进 ` + "`## 根因分析`" + `，不得混入证据。
+- 小节标题只写“缺陷是什么、在哪”，**不写后果**，不用“可能存在 / 疑似 / 理论上”等措辞。
+- 某些验证因环境限制未执行（无内网、无账号、组件不可达）时，在报告末尾加 ` + "`## 未验证范围`" + ` 如实说明；无法验证的部分不得写成已确认。
+- 登记的 severity 与你的判断不一致时，在「影响与危害」中写“建议复核为 X 级”并说明理由，**不得擅自改写登记值**。`
+
 // The server supplies the persisted setting. A missing setting/host is off.
 // Consulted at assembly and again on writes so an already-running session
 // cannot keep binding after the user switches the feature off.
@@ -44,7 +67,8 @@ func findingWorkflowTools(agentKey string, tools []actool.CoreTool) ([]actool.Co
 			}
 			out = append(out, tool)
 		}
-		return out, ""
+		// 证据纪律与流量绑定开关无关：关闭自动绑定时上报者照样要过证据门槛。
+		return out, evidenceGuidanceFor(agentKey, out)
 	}
 	out := append([]actool.CoreTool(nil), tools...)
 	has := map[string]bool{}
@@ -79,7 +103,24 @@ func findingWorkflowTools(agentKey string, tools []actool.CoreTool) ([]actool.Co
 	if guidance != "" || has["get_finding_traffic"] || has["update_finding_report"] {
 		guidance += findingIDGuidance
 	}
-	return out, guidance
+	return out, guidance + evidenceGuidanceFor(agentKey, out)
+}
+
+// evidenceGuidanceFor 按 agent 实际可见的工具集拼证据纪律（上报者）与报告结构
+// 补充（reporter）。独立成函数是为了让"关闭自动流量绑定"的分支也带上纪律段。
+func evidenceGuidanceFor(agentKey string, tools []actool.CoreTool) string {
+	has := map[string]bool{}
+	for _, t := range tools {
+		has[t.Name()] = true
+	}
+	var g string
+	if has["report_finding"] || has["add_task_hint"] || has["add_hint"] {
+		g += evidenceDisciplineGuidance
+	}
+	if agentKey == "reporter" {
+		g += reporterEvidenceAnnex
+	}
+	return g
 }
 
 func stripTrafficParameters(schema map[string]any) {

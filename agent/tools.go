@@ -1449,6 +1449,11 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		if t.ts == nil {
 			return actool.Errorf("report_finding 需要任务上下文；平台对话请通过 add_task_hint 向对应任务交接漏洞，并在提示中携带已有的 traffic_refs，由任务 Agent 登记。已登记漏洞可用 bind_finding_traffic 补绑。"), nil
 		}
+		// 证据门槛（v0.4.5）：critical/high 需要足量可核验证据；不足时打回，
+		// 模型可补证据或降级后重试，而不是让"一句话高危"进入报告。
+		if msg := validateFindingEvidence(a.Severity, a.Evidence); msg != "" {
+			return actool.Errorf(msg), nil
+		}
 		// Auto-binding off: ignore the evidence params instead of rejecting the call.
 		// stripTrafficParameters already removes them from the advertised schema, but
 		// models routinely emit fields anyway — failing here would discard a confirmed
