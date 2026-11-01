@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Autumn-27/norma/llm"
+	"github.com/Autumn-27/norma/transcript"
 	"github.com/chu0119/artex/agent"
 	"github.com/chu0119/artex/db"
 	"github.com/chu0119/artex/llmrec"
-	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/transcript"
 )
 
 type taskAgentBundle struct {
@@ -708,6 +708,16 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	wk.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
 	wk.SetWebSearch(s.webSearchFor("worker"))
 	wk.SetConstraintInject(s.constraintInjectWorker) // 操作约束注入 worker(可配置,默认开)
+	// 任务级登录凭据（v0.4.8）：装配时读一次并注入 worker system prompt。
+	// 认证配置当前只在创建任务时录入；若以后加编辑接口，需要在保存后 invalidate
+	// 本任务的 agent bundle 让下一轮重新装配。
+	if s.m.PG() != nil {
+		if id64, err := strconv.ParseInt(t.ID, 10, 64); err == nil {
+			if pgTask, err2 := s.m.PG().GetTask(id64); err2 == nil && pgTask != nil && pgTask.AuthConfig != nil && pgTask.AuthConfig.Enabled {
+				wk.SetTaskAuthBlock(pgTask.AuthConfig.PromptBlock())
+			}
+		}
+	}
 	pl := agent.NewPlanner(plannerRuntime, "task-router", s.m.dir, tx, plannerRuntime.CompactionWindow(), s.agentMaxTurns("planner"))
 	pl.SetFindingRecorder(s.evidenceStore())
 	pl.SetCompactionWindowResolver(plannerRuntime.CompactionWindow)
@@ -752,7 +762,7 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	main.SetNoaEnabled(s.m.NoaCompactionEnabled) // 实验功能:noa 上下文压缩(平台级开关,每 run 读)
 	main.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
 	main.SetWebSearch(s.webSearchFor("mainagent"))
-	main.SetSteerWork(s.engine.SteerWork) // steer_work：人对运行中 work 实时纠偏
+	main.SetSteerWork(s.engine.SteerWork)          // steer_work：人对运行中 work 实时纠偏
 	main.SetAttributions(t.Guard.AttributionStats) // Guard 归因样本（B6）→ 概览（人在环路同享打回计数与实物）
 	bundle := &taskAgentBundle{
 		runtime: goalRuntime, plannerRuntime: plannerRuntime, workerRuntime: workerRuntime,

@@ -71,6 +71,9 @@ type Worker struct {
 	// extraTools are host-provided tools (e.g. traffic query, oast) appended to
 	// the worker's graph write-back tools.
 	extraTools []actool.CoreTool
+	// taskAuthBlock 是任务级登录凭据的渲染块（v0.4.8，由 host 在装配时设置）。
+	// 非空则注入 system prompt：worker 先登录、再在会话内测试。
+	taskAuthBlock string
 	// injectConstraints resolves whether this task's operation constraints get
 	// injected into the worker system prompt. Read per run so the settings toggle
 	// takes effect without rebuilding the agent. nil = inject (default).
@@ -148,6 +151,9 @@ func (w *Worker) wantConstraints() bool { return w.injectConstraints == nil || w
 func (w *Worker) SetRunTimeout(run time.Duration) {
 	w.runTimeout = run
 }
+
+// SetTaskAuthBlock 设置任务级登录凭据渲染块（host 装配时调用；空串=不注入）。
+func (w *Worker) SetTaskAuthBlock(block string) { w.taskAuthBlock = block }
 
 // settleWrapUpPrompt is injected by the SDK settlement phase when a worker hits its
 // turn/time budget: stop probing, write back what was found, then end with a
@@ -465,6 +471,9 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	sysBody := workerSystem(w.proxyAddr, w.proxyCACert, w.workDir, runDir)
 	if w.wantConstraints() {
 		sysBody += constraintBlock(ts) // 操作约束(若有)注入系统提示,worker 执行时严格遵守
+	}
+	if w.taskAuthBlock != "" {
+		sysBody += w.taskAuthBlock // 任务级登录凭据（v0.4.8）：先登录再测
 	}
 	// 意图块 → 意图锚定资产块 → 相关既有事实 → 启动指令，依次追加到 system 尾部
 	//（与 constraintBlock 同一套追加法）。

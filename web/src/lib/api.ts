@@ -76,6 +76,8 @@ import type {
   PromptVersion,
   SessionTokenUsage,
   Settings,
+  AuthCheckResult,
+  TaskAuthConfigInput,
   TaskCostEstimate,
   Severity,
   SkillCall,
@@ -283,6 +285,7 @@ export const api = {
     planHeartbeatSeconds?: number;
     coverageEnabled?: boolean;
     interceptRules?: AssetInterceptRuleInput[];
+    authConfig?: TaskAuthConfigInput;
   }) =>
     post<Task>("/tasks", {
       name: input.name ?? "",
@@ -297,6 +300,8 @@ export const api = {
       plan_heartbeat_seconds: input.planHeartbeatSeconds ?? 0, // 0 = 后端归一到默认 600(10min)
       coverage_enabled: input.coverageEnabled ?? true, // 默认开;false=关闭资产覆盖度功能
       intercept_rules: input.interceptRules ?? [], // 任务级资产拦截规则
+      // 任务级登录凭据（v0.4.8）：密码/TOTP 只进 DB，API 永不回传。
+      auth_config: input.authConfig?.enabled ? input.authConfig : undefined,
     }),
   taskCategories: () => get<{ categories: TaskCategory[] }>("/task-categories").then((r) => arr(r.categories)),
   updateTask: (id: string, input: { name?: string; pinned?: boolean }) => patch<Task>(`/tasks/${id}`, input),
@@ -717,6 +722,8 @@ export const api = {
     })),
   // 任务成本估算（内置参考价；响应带 pricing_note 与未定价模型）。
   taskCost: (task: string) => get<TaskCostEstimate>(`/tokens/cost${tq(task)}`),
+  // 登录凭据自检：用任务配置的真实登录请求验证凭据是否可用。
+  taskAuthCheck: (taskId: string) => post<AuthCheckResult>(`/tasks/${taskId}/auth-check`, {}),
   tokenDaily: (days = 30) => get<DailyTokenBucket[]>(`/tokens/daily?days=${days}`).then(arr),
   conversationTokens: () =>
     get<ConvTokenSummary[]>("/tokens/conversations")

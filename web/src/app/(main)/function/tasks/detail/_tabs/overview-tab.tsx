@@ -8,6 +8,7 @@ import {
   BugIcon,
   CheckIcon,
   ClockIcon,
+  KeyRoundIcon,
   CoinsIcon,
   ListChecksIcon,
   PencilIcon,
@@ -29,6 +30,7 @@ import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
 import type {
+  AuthCheckResult,
   AssetInterceptKind,
   AssetInterceptRule,
   Finding,
@@ -37,6 +39,7 @@ import type {
   Task,
   TaskConstraint,
   TaskGoal,
+  TaskAuthConfigView,
   TaskNode,
   TaskScopeRow,
 } from "@/lib/types";
@@ -450,6 +453,8 @@ export function OverviewTab({ taskId }: { taskId: string }) {
           </div>
         </CardContent>
       </Card>
+      {/* 任务级登录凭据（v0.4.8）：摘要 + 一次真实登录自检；未配置时不渲染。 */}
+      <TaskAuthCard taskId={taskId} />
       {/* 目标管理：查看/新增/修改/删除本任务的探索目标。新增与修改会通知规划者并复活任务，
           删除仅通知规划者（不复活）。目标 = 最终可交付/可核验的结果，不是攻击步骤或侦察动作。 */}
       <Card>
@@ -1317,6 +1322,66 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
           </p>
         )}
       </CardContent>
+    </Card>
+  );
+}
+
+
+// TaskAuthCard 显示任务级登录凭据摘要，并提供一次真实登录自检（后端发真实请求，
+// 回显只含状态码/命中说明，不含密码）。未配置凭据时整卡不渲染。
+function TaskAuthCard({ taskId }: { taskId: string }) {
+  const [cfg, setCfg] = React.useState<TaskAuthConfigView | null>(null);
+  const [result, setResult] = React.useState<AuthCheckResult | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  React.useEffect(() => {
+    let alive = true;
+    api
+      .task(taskId)
+      .then((t) => {
+        if (alive) setCfg(t.auth_config ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [taskId]);
+  if (!cfg?.enabled) return null;
+  const check = async () => {
+    setBusy(true);
+    try {
+      setResult(await api.taskAuthCheck(taskId));
+    } catch (e) {
+      setResult({ ok: false, matched: false, detail: (e as Error).message, elapsed_ms: 0, checked_at: "" });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <KeyRoundIcon className="size-4 text-primary" /> 目标登录凭据
+          <Button size="sm" variant="outline" className="ml-auto" disabled={busy} onClick={() => void check()}>
+            {busy ? "验证中…" : "测试登录"}
+          </Button>
+        </CardTitle>
+        <CardDescription>
+          登录接口 {cfg.method} {cfg.login_url} · 用户名 {cfg.username || "—"}
+          {cfg.has_password ? " · 密码已保存（不回显）" : ""}
+          {cfg.has_totp ? " · 含 TOTP" : ""}。worker 会用它在会话内登录后再测试。
+        </CardDescription>
+      </CardHeader>
+      {result && (
+        <CardContent className="text-sm">
+          <span className={result.ok ? "text-emerald-600" : "text-red-600"}>
+            {result.ok ? "登录成功" : "登录未通过"}
+          </span>
+          <span className="text-muted-foreground">
+            {" "}
+            · {result.detail} · {result.elapsed_ms}ms
+          </span>
+        </CardContent>
+      )}
     </Card>
   );
 }

@@ -25,9 +25,9 @@ import (
 	"github.com/Autumn-27/norma/transcript"
 	"github.com/chu0119/artex/agent"
 	"github.com/chu0119/artex/db"
-	"github.com/chu0119/artex/listener"
 	"github.com/chu0119/artex/hostd"
 	"github.com/chu0119/artex/intercept"
+	"github.com/chu0119/artex/listener"
 	"github.com/chu0119/artex/llmpool"
 	"github.com/chu0119/artex/llmrec"
 	"github.com/chu0119/artex/report"
@@ -46,9 +46,9 @@ type Server struct {
 	engine *Engine
 	ctx    context.Context
 
-	skillDir string // root directory for skill subdirectories
-	keyDir   string // directory holding jwt.key (next to the executable)
-	dataDir  string // browsable workspace root
+	skillDir string       // root directory for skill subdirectories
+	keyDir   string       // directory holding jwt.key (next to the executable)
+	dataDir  string       // browsable workspace root
 	jwtKey   atomic.Value // HS256 signing key ([]byte); replaceable to revoke sessions
 
 	// lm is the process-wide callback listener. It is initialized lazily so an
@@ -236,7 +236,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 			}
 			return a.TaskTimeoutWrapupMaxTurns, true
 		}
-		wireAgentAugment(m.pg, s.skillDir, s.hostTools) // 可见 skills/MCP + 流量/编排 host 工具装配进 agent 工具集
+		wireAgentAugment(m.pg, s.skillDir, s.hostTools)        // 可见 skills/MCP + 流量/编排 host 工具装配进 agent 工具集
 		agent.SetCweSkillIndex(BuildCweSkillIndex(s.skillDir)) // CWE→方法论 skill 联动（漏洞情报工具输出 related_skills）
 		domainReg := buildDomainReg(m.Assets())
 		wireTools(m.pg, domainReg) // 内置工具表：按 agent 过滤 + 覆盖描述/schema + 注入默认值
@@ -816,8 +816,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/exploration/tokens", s.tokenStats)
 	mux.HandleFunc("GET /api/tokens/daily", s.tokenDailyStats)
 	mux.HandleFunc("GET /api/tokens/conversations", s.conversationTokens)
-	mux.HandleFunc("GET /api/tokens/usage", s.pgUsageStats) // 全局 llm_usage 聚合（仪表盘新版视图）
-	mux.HandleFunc("GET /api/tokens/cost", s.pgUsageCost)   // 成本估算（内置参考价，?task= 看单任务）
+	mux.HandleFunc("GET /api/tokens/usage", s.pgUsageStats)            // 全局 llm_usage 聚合（仪表盘新版视图）
+	mux.HandleFunc("GET /api/tokens/cost", s.pgUsageCost)              // 成本估算（内置参考价，?task= 看单任务）
+	mux.HandleFunc("POST /api/tasks/{id}/auth-check", s.taskAuthCheck) // 登录凭据自检（真实发一次登录请求）
 
 	mux.HandleFunc("GET /api/audit", s.getAudit)
 	mux.HandleFunc("POST /api/gc", s.gc)
@@ -1528,6 +1529,9 @@ type createTaskReq struct {
 	CoverageEnabled      *bool    `json:"coverage_enabled,omitempty"`  // 资产覆盖度功能;省略/null=默认开(true)。false=关闭覆盖度计算/展示/自动累积范围+隐藏 add_task_scope/list_untested_assets。company 关联不受影响。
 	// InterceptRules 任务级资产拦截/允许规则(创建时录入,存 task_intercept_rules,不进全局表)。
 	InterceptRules []taskInterceptRuleReq `json:"intercept_rules,omitempty"`
+	// AuthConfig 任务级目标登录凭据（v0.4.8）：worker 先登录再测；创建后可用
+	// POST /api/tasks/{id}/auth-check 做一次登录自检。密码/TOTP 只进 DB。
+	AuthConfig *db.TaskAuthConfig `json:"auth_config,omitempty"`
 }
 
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
@@ -1579,12 +1583,19 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "任务级拦截规则无效："+err.Error())
 		return
 	}
+	if req.AuthConfig != nil {
+		if err := req.AuthConfig.Normalize(); err != nil {
+			writeErr(w, 400, "登录配置无效："+err.Error())
+			return
+		}
+	}
 	t, err := s.m.CreateTaskWithOptions(req.Description, req.Goal, db.TaskCreateOptions{
 		Name: strings.TrimSpace(req.Name), CategoryID: req.CategoryID,
 		SourceTaskIDs: sourceIDs, CompanyIDs: req.CompanyIDs, LLMProfileIDs: req.LLMProfileIDs,
 		TimeoutSeconds: req.TimeoutSeconds, PlanHeartbeatSeconds: req.PlanHeartbeatSeconds,
 		CoverageEnabled: req.CoverageEnabled,
 		InterceptRules:  interceptRules,
+		AuthConfig:      req.AuthConfig,
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrTaskCategoryInvalid) || errors.Is(err, db.ErrTaskCategoryNotFound) {
@@ -3361,27 +3372,27 @@ func (s *Server) settingsPayload() map[string]any {
 		concLimit = defaultConcurrencyLimit // 关闭时也回显一个合理默认值给 UI
 	}
 	return map[string]any{
-		"traffic_capture":          s.m.TrafficEnabled(),
-		"agent_traffic_binding":    s.m.pg.GetBool(settingAgentTrafficBinding, false),
-		"llm_record":               s.m.LLMRecordEnabled(),
-		"web_search_enabled":       on,
-		"web_search_backend":       backend,
-		"brave_key_set":            strings.TrimSpace(braveKey) != "",
-		"tavily_key_set":           strings.TrimSpace(tavilyKey) != "",
-		"web_search_proxy":         proxy,                       // 独立出口代理(http/https/socks5)，空=直连
-		"global_proxy":             s.m.GlobalProxy(),           // 全局出口代理(http/https/socks5)，所有目标流量走它，空=直连
-		"install_proxy":            s.installProxy(),            // 装机代理：只用于宿主工具安装(apt/GitHub下载)，与目标流量无关
-		"python_interpreter":       strings.TrimSpace(pyStored), // 用户/自动设的值(空=用运行时检测)
-		"workers":                  s.m.Workers(),               // 并发工作 agent 数(默认3)；对之后启动的任务生效
+		"traffic_capture":       s.m.TrafficEnabled(),
+		"agent_traffic_binding": s.m.pg.GetBool(settingAgentTrafficBinding, false),
+		"llm_record":            s.m.LLMRecordEnabled(),
+		"web_search_enabled":    on,
+		"web_search_backend":    backend,
+		"brave_key_set":         strings.TrimSpace(braveKey) != "",
+		"tavily_key_set":        strings.TrimSpace(tavilyKey) != "",
+		"web_search_proxy":      proxy,                       // 独立出口代理(http/https/socks5)，空=直连
+		"global_proxy":          s.m.GlobalProxy(),           // 全局出口代理(http/https/socks5)，所有目标流量走它，空=直连
+		"install_proxy":         s.installProxy(),            // 装机代理：只用于宿主工具安装(apt/GitHub下载)，与目标流量无关
+		"python_interpreter":    strings.TrimSpace(pyStored), // 用户/自动设的值(空=用运行时检测)
+		"workers":               s.m.Workers(),               // 并发工作 agent 数(默认3)；对之后启动的任务生效
 		// 冷节点压缩的输出预算与墙钟上限。0 = 用默认值(32768 token / 20 分钟)。
-		"compaction_max_tokens":   s.m.CompactionTokens(),
+		"compaction_max_tokens":      s.m.CompactionTokens(),
 		"compaction_timeout_seconds": s.m.CompactionTimeout(),
-		"compaction_max_members":  s.m.CompactionMaxMembers(),
+		"compaction_max_members":     s.m.CompactionMaxMembers(),
 		// B10:压缩器钉住的 LLM 配置 id。0=跟随规划器(历史行为);>0=压缩调用永远
 		// 跑在指定配置上(不参与任务链轮转)。对之后启动的任务/运行中任务的下一轮生效。
-		"compactor_profile_id": s.m.CompactorProfileID(),
-		"task_concurrency_enabled": concOn,                      // 任务并发上限开关(默认关)
-		"task_concurrency_limit":   concLimit,                   // 同时运行任务上限(开启后默认5)
+		"compactor_profile_id":     s.m.CompactorProfileID(),
+		"task_concurrency_enabled": concOn,    // 任务并发上限开关(默认关)
+		"task_concurrency_limit":   concLimit, // 同时运行任务上限(开启后默认5)
 		// LLM 轮询(故障转移)。默认关；开启后走全局激活配置的 agent 在当前配置不可用时
 		// 自动切到下一个配置。bind_fallback 仅在轮询开启时有意义(默认关)。
 		"llm_pool_enabled":       s.m.LLMPoolEnabled(),

@@ -97,6 +97,7 @@ import {
   FieldSet,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
@@ -122,6 +123,7 @@ import { api } from "@/lib/api";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
 import { type SortDirection, useStoredSortPreference } from "@/lib/sort-preference";
 import type {
+  TaskAuthConfigInput,
   AssetInterceptRuleInput,
   ChatAttachment,
   Company,
@@ -3154,6 +3156,15 @@ function CreateTaskSheet({
   const [seedFirstIntent, setSeedFirstIntent] = React.useState(false); // 创建时下发种子意图,worker 免等首轮 planner 直接开跑;默认关闭,走标准先规划再执行
   const [coverageEnabled, setCoverageEnabled] = React.useState(true); // 资产覆盖度功能;默认开。关闭=不计算/展示覆盖度、不累积范围、隐藏范围类工具(company 关联不受影响)
   const [interceptRules, setInterceptRules] = React.useState<AssetInterceptRuleInput[]>([]); // 任务级资产拦截规则(仅本任务生效,不进全局表)
+  // 任务级目标登录凭据（v0.4.8）：worker 先登录再测；密码/TOTP 只进 DB，不回显。
+  const [authCfg, setAuthCfg] = React.useState<TaskAuthConfigInput>({
+    enabled: false,
+    login_url: "",
+    method: "POST",
+    content_type: "json",
+    username: "",
+    password: "",
+  });
   // 方式1 文件上传:建任务前把文件暂存到 drafts/<draftId>/uploads/,拿回绝对路径追加进描述。
   const [uploading, setUploading] = React.useState(false);
   const [uploadCount, setUploadCount] = React.useState(0);
@@ -3228,6 +3239,9 @@ function CreateTaskSheet({
         interceptRules: interceptRules
           .map((r) => ({ ...r, pattern: r.pattern.trim() }))
           .filter((r) => r.pattern !== ""),
+        authConfig: authCfg.enabled
+          ? { ...authCfg, login_url: authCfg.login_url.trim(), username: authCfg.username?.trim() }
+          : undefined,
       });
       toast.success("任务已创建");
       setName("");
@@ -3242,6 +3256,7 @@ function CreateTaskSheet({
       setHeartbeatMin("10");
       setSeedFirstIntent(false);
       setCoverageEnabled(true);
+      setAuthCfg({ enabled: false, login_url: "", method: "POST", content_type: "json", username: "", password: "" });
       setInterceptRules([]);
       setUploadCount(0);
       draftIdRef.current = "";
@@ -3380,6 +3395,87 @@ function CreateTaskSheet({
               <FieldDescription>
                 创建任务时会将所选企业当前已有资产加入“测试资产”，并将域名、IP、CIDR、ICP 和企业关键词提供给 Agent
                 作为范围上下文；不会自动生成意图或强制改变执行目标。
+              </FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="task-auth-url">目标登录凭据（可选）</FieldLabel>
+              <div className="grid gap-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={authCfg.enabled}
+                    onCheckedChange={(v) => setAuthCfg((c) => ({ ...c, enabled: !!v }))}
+                  />
+                  启用登录（worker 先登录、在会话内保持认证后再测试）
+                </label>
+                {authCfg.enabled && (
+                  <div className="grid gap-2 rounded-md border p-3">
+                    <Input
+                      placeholder="登录地址，如 https://target.example.com/api/login"
+                      value={authCfg.login_url}
+                      onChange={(e) => setAuthCfg((c) => ({ ...c, login_url: e.target.value }))}
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      <NativeSelect
+                        value={authCfg.method}
+                        onChange={(e) => setAuthCfg((c) => ({ ...c, method: e.target.value as "POST" | "GET" }))}
+                      >
+                        <NativeSelectOption value="POST">POST</NativeSelectOption>
+                        <NativeSelectOption value="GET">GET</NativeSelectOption>
+                      </NativeSelect>
+                      <NativeSelect
+                        value={authCfg.content_type}
+                        onChange={(e) =>
+                          setAuthCfg((c) => ({ ...c, content_type: e.target.value as "json" | "form" }))
+                        }
+                      >
+                        <NativeSelectOption value="json">JSON</NativeSelectOption>
+                        <NativeSelectOption value="form">表单</NativeSelectOption>
+                      </NativeSelect>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Input
+                        className="min-w-40 flex-1"
+                        placeholder="用户名字段名（默认 username）"
+                        value={authCfg.username_field ?? ""}
+                        onChange={(e) => setAuthCfg((c) => ({ ...c, username_field: e.target.value }))}
+                      />
+                      <Input
+                        className="min-w-40 flex-1"
+                        placeholder="密码字段名（默认 password）"
+                        value={authCfg.password_field ?? ""}
+                        onChange={(e) => setAuthCfg((c) => ({ ...c, password_field: e.target.value }))}
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Input
+                        className="min-w-40 flex-1"
+                        placeholder="用户名"
+                        value={authCfg.username ?? ""}
+                        onChange={(e) => setAuthCfg((c) => ({ ...c, username: e.target.value }))}
+                      />
+                      <Input
+                        className="min-w-40 flex-1"
+                        type="password"
+                        placeholder="密码"
+                        value={authCfg.password ?? ""}
+                        onChange={(e) => setAuthCfg((c) => ({ ...c, password: e.target.value }))}
+                      />
+                    </div>
+                    <Input
+                      placeholder="TOTP 密钥 Base32（可选，两步验证时填）"
+                      value={authCfg.totp_secret ?? ""}
+                      onChange={(e) => setAuthCfg((c) => ({ ...c, totp_secret: e.target.value }))}
+                    />
+                    <Input
+                      placeholder="成功判定：响应包含（可选，如 token / dashboard）"
+                      value={authCfg.success_contains ?? ""}
+                      onChange={(e) => setAuthCfg((c) => ({ ...c, success_contains: e.target.value }))}
+                    />
+                  </div>
+                )}
+              </div>
+              <FieldDescription>
+                凭据只保存在本机数据库，接口永不回传密码/TOTP；创建后在任务概览可「测试登录」验证。留空则不启用。
               </FieldDescription>
             </Field>
             <Field>

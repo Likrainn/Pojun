@@ -39,6 +39,8 @@ export interface Task {
   archive_blocked_by_task_id?: string; // live direct dependent that must be archived first
   company_ids?: number[]; // associated company scopes; current company assets join the task at creation
   coverage_enabled?: boolean; // 资产覆盖度功能开关(创建时定,默认开)；false=不计算/不展示覆盖度
+  // 任务级登录凭据（脱敏视图；未配置为省略）
+  auth_config?: TaskAuthConfigView;
 }
 
 export interface TaskCategory {
@@ -808,6 +810,51 @@ export interface TokenTotal {
   output_tokens: number;
   cache_read_tokens: number;
   cache_write_tokens: number;
+}
+
+// 任务级目标登录凭据（创建时输入；API 只回传视图，密码/TOTP 永不返回）。
+export interface TaskAuthConfigInput {
+  enabled: boolean;
+  login_url: string;
+  method: "POST" | "GET";
+  content_type: "json" | "form";
+  username_field?: string;
+  password_field?: string;
+  username?: string;
+  password?: string;
+  totp_secret?: string;
+  extra_fields?: Record<string, string>;
+  headers?: Record<string, string>;
+  success_status?: number;
+  success_contains?: string;
+}
+
+// API 返回的脱敏视图：has_password / has_totp 表示"配过"，不暴露内容。
+export interface TaskAuthConfigView {
+  enabled: boolean;
+  login_url: string;
+  method: string;
+  content_type: string;
+  username_field?: string;
+  password_field?: string;
+  username?: string;
+  has_password?: boolean;
+  has_totp?: boolean;
+  extra_fields?: Record<string, string>;
+  headers?: Record<string, string>;
+  success_status?: number;
+  success_contains?: string;
+}
+
+// 登录自检结果（POST /api/tasks/{id}/auth-check）。
+export interface AuthCheckResult {
+  ok: boolean;
+  status_code?: number;
+  matched: boolean;
+  detail: string;
+  elapsed_ms: number;
+  used_totp?: boolean;
+  checked_at: string;
 }
 
 // 单任务成本估算（GET /api/tokens/cost?task=）。金额按内置参考价换算，
