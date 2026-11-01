@@ -8,6 +8,7 @@ import { ArrowDownIcon, ArrowUpIcon, ArrowUpRightIcon, ChevronRightIcon } from "
 import { toast } from "sonner";
 
 import { StatusBadge } from "@/components/status-badge";
+import { FindingTrafficPanel } from "@/components/finding-traffic-panel";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger } from "@/components/ui/select";
@@ -127,10 +128,35 @@ function Row({
       </div>
       {open && (
         <div className="bg-muted/30 px-4 pb-4 pl-11">
-          <div className="mb-1 font-medium text-muted-foreground text-xs">证据 / PoC</div>
-          <pre className="overflow-auto whitespace-pre-wrap rounded-md border bg-background p-3 font-mono text-xs">
-            {f.evidence}
-          </pre>
+          {f.finding_id ? (
+            <>
+              {/* 报文查看器直接放进内联展开（用户反馈：以前要跳到发现详情页才能看，
+                  这里只有一坨 evidence JSON；现在展开即看请求/响应报文）。 */}
+              <div className="mb-3">
+                <FindingTrafficPanel
+                  findingId={String(f.finding_id)}
+                  contextTask={contextTaskId}
+                  readOnly={f.inherited}
+                  onChanged={() => {}}
+                />
+              </div>
+              <details className="group">
+                <summary className="cursor-pointer font-medium text-muted-foreground text-xs select-none group-open:mb-1">
+                  原始证据 / PoC（点开收起）
+                </summary>
+                <pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap rounded-md border bg-background p-3 font-mono text-xs">
+                  {f.evidence}
+                </pre>
+              </details>
+            </>
+          ) : (
+            <>
+              <div className="mb-1 font-medium text-muted-foreground text-xs">证据 / PoC</div>
+              <pre className="overflow-auto whitespace-pre-wrap rounded-md border bg-background p-3 font-mono text-xs">
+                {f.evidence}
+              </pre>
+            </>
+          )}
         </div>
       )}
     </div>
