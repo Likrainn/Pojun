@@ -175,7 +175,16 @@ function FindingDetailInner() {
                   <p className="whitespace-pre-wrap text-sm leading-relaxed">{finding.summary || "（无摘要）"}</p>
                 </CardContent>
               </Card>
-              <FindingRetestPanel key={id} findingId={id} readOnly={finding.inherited} onCompleted={load} />
+              {/* 关联流量紧跟摘要：报文查看是本页最高频的操作，此前被埋在
+                  证据块(46vh)与长报告之间，用户实测「看不见」（v0.3.98）。 */}
+              <FindingTrafficPanel
+                key={id}
+                findingId={id}
+                contextTask={contextTaskId || undefined}
+                readOnly={finding.inherited}
+                onChanged={load}
+              />
+              <FindingRetestPanel key={`retest-${id}`} findingId={id} readOnly={finding.inherited} onCompleted={load} />
               <Card>
                 <CardHeader>
                   <CardTitle className="text-sm">证据 / PoC</CardTitle>
@@ -190,13 +199,6 @@ function FindingDetailInner() {
                   )}
                 </CardContent>
               </Card>
-              <FindingTrafficPanel
-                key={id}
-                findingId={id}
-                contextTask={contextTaskId || undefined}
-                readOnly={finding.inherited}
-                onChanged={load}
-              />
               {/* 证据下方：详细报告(Markdown 渲染) */}
               <Card>
                 <CardHeader className="flex-row items-center justify-between">
