@@ -182,7 +182,6 @@ function FindingDetailInner() {
                 taskId={finding.task_id ? String(finding.task_id) : contextTaskId}
                 findingId={String(id)}
               />
-              <FindingRetestPanel key={`retest-${id}`} findingId={id} readOnly={finding.inherited} onCompleted={load} />
               <Card>
                 <CardHeader>
                   <CardTitle className="text-sm">证据 / PoC</CardTitle>
@@ -215,7 +214,7 @@ function FindingDetailInner() {
                 </CardContent>
               </Card>
               {/* 关联流量放在报告之后（v0.4.9）：先看结论与叙事，再下钻原始报文；
-                  此前紧跟摘要过于靠上，用户反馈位置怪。 */}
+                  v0.4.11 起默认折叠——要看时点「查看详细流量」，不占阅读篇幅。 */}
               <FindingTrafficPanel
                 key={id}
                 findingId={id}
@@ -223,6 +222,8 @@ function FindingDetailInner() {
                 readOnly={finding.inherited}
                 onChanged={load}
               />
+              {/* 复测记录放最后：属于验证后的后续动作。 */}
+              <FindingRetestPanel key={`retest-${id}`} findingId={id} readOnly={finding.inherited} onCompleted={load} />
             </div>
 
             {/* 右栏：状态区 */}

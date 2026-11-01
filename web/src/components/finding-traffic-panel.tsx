@@ -54,6 +54,8 @@ export function FindingTrafficPanel({
   const [note, setNote] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [reload, setReload] = React.useState(0);
+  // 默认收起：页面阅读顺序是「结论 → 报告 → 报文细节」，需要时再点开（v0.4.11）。
+  const [open, setOpen] = React.useState(false);
   // biome-ignore lint/correctness/useExhaustiveDependencies: retry token intentionally refreshes this request.
   React.useEffect(() => {
     let active = true;
@@ -100,17 +102,23 @@ export function FindingTrafficPanel({
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle>关联流量 {data ? `(${data.bindings.length})` : ""}</CardTitle>
-            {!readOnly ? (
-              <Button variant="outline" size="sm" disabled={!data || busy} onClick={() => setAdding(true)}>
-                <PlusIcon data-icon="inline-start" />
-                绑定流量
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" disabled={!data} onClick={() => setOpen((o) => !o)}>
+                {open ? "收起" : "查看详细流量"}
               </Button>
-            ) : (
-              <Badge variant="outline">继承证据 · 只读</Badge>
-            )}
+              {!readOnly ? (
+                <Button variant="outline" size="sm" disabled={!data || busy} onClick={() => setAdding(true)}>
+                  <PlusIcon data-icon="inline-start" />
+                  绑定流量
+                </Button>
+              ) : (
+                <Badge variant="outline">继承证据 · 只读</Badge>
+              )}
+            </div>
           </div>
           <CardDescription>按复现顺序组织请求与响应。清理原始流量后，已绑定证据仍然保留。</CardDescription>
         </CardHeader>
+        {open && (
         <CardContent className="flex flex-col gap-3">
           {error ? (
             <Alert variant="destructive">
@@ -209,6 +217,7 @@ export function FindingTrafficPanel({
             ))
           )}
         </CardContent>
+        )}
       </Card>
       {adding && data ? (
         <TrafficPickerDialog

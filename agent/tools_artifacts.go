@@ -35,13 +35,22 @@ const artifactGuidance = `
 ━━ 存储桶 / 文件读取 / 上传类漏洞：照片就是证据 ━━
 只写“拿到了存储桶 / 能读文件”不算证明，**必须把抓到的文件本身留成证据**：
 1. 从 bucket/接口下载 5–9 个关键文件样本（照片优先：收款收据、签呈表、报销单、聊天截图、证件照等），存到工作目录（文件名 URL 编码的先解码成可读名）。
-2. 展示方式自己判断：
-   - 1–3 张且单张清晰 → 逐张登记（每张一个附件，note 写清 bucket/路径 + 文件名 + 证明什么）。
-   - 多张需要证明“批量/存储桶里有大量照片” → 拼成一张 3×3 样品图（每格带文件名水印），再登记（note 写“存储桶 <bucket> 内文件样本 N 张，文件名为水印”）。
-   - 拼图命令（Kali 已装 ImageMagick，已验证）：
-     ` + "`magick montage ./*.jpg ./*.png -tile 3x3 -geometry 420x315+10+10 -background white -fill '#333333' -pointsize 13 -label '%t' montage.png`" + `
-   - 需要在单图上叠文件名水印时：
-     ` + "`magick in.jpg -gravity south -background '#00000080' -fill white -pointsize 18 -annotate +0+8 'filename.jpg' out.jpg`" + `
+2. 展示方式自己判断（**少拼、按比例、高清**；3×3 小格拼图会看不清细节，不要用）：
+   - 1 张且清晰 → 单图原分辨率登记（note 写清 bucket/路径 + 文件名 + 证明什么）。
+   - 2 张 → 并排拼一张（每张按比例缩到高 1000）。
+   - 3–4 张 → 2×2 拼一张（每张按比例缩到高 800）。
+   - 超过 4 张 → 分多张拼图（每张 2–4 张，文件名 montage-1.png、montage-2.png…），证明“批量”再补一张文件清单（ls 输出存 .txt）。
+   - 竖长截图（宽高比 < 1:1.6、以文字为主）→ 单独登记或 2 张并排，拼图时放大档（高 1200），不要塞进小格。
+   - 每张图底部叠**真实文件名水印**（URL 编码先解码；中文字体用 ` + "`/usr/share/fonts/gongwen/仿宋_GB2312.ttf`" + `）：
+   示例命令（2 张并排；3–4 张同理：两两 +append 后再 -append）：
+font=/usr/share/fonts/gongwen/仿宋_GB2312.ttf
+for f in a.jpg b.jpg; do
+  label=$(basename "$f")
+  magick "$f" -auto-orient -resize x1000     -gravity south -background '#000000a8' -splice 0x36     -fill white -pointsize 22 -font "$font"     -annotate +0+9 "$label" "wm_$(basename "$f")"
+done
+magick wm_a.jpg wm_b.jpg +append montage.png
+   - 单图叠水印：
+     ` + "`magick in.jpg -gravity south -background '#000000a8' -splice 0x36 -fill white -pointsize 22 -font /usr/share/fonts/gongwen/仿宋_GB2312.ttf -annotate +0+9 'filename.jpg' out.png`" + `
    - 含身份证号/人脸等敏感信息但必须证明真实性的，先做模糊处理再登记（` + "`magick in.jpg -region 60%x25%+20%+40% -blur 0x12 out.jpg`" + ` 之类），并在 note 说明脱敏位置。
 3. 登记时带 source_url（bucket 的对象 URL）与 finding_id；note 里写明样本数量。报告里用 ![说明](artifact:<id>) 引用，图注写清 bucket/文件与“样本 N 张”。`
 
