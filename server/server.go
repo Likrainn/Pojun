@@ -823,7 +823,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/tasks/{id}/artifacts", s.listTaskArtifacts)
 	mux.HandleFunc("POST /api/tasks/{id}/artifacts/scan", s.scanTaskArtifacts) // 历史目录补登记
 	mux.HandleFunc("GET /api/tasks/{id}/artifacts/export", s.exportTaskArtifacts)
-	mux.HandleFunc("GET /api/tasks/{id}/artifacts/{aid}", s.downloadTaskArtifact)
+	mux.HandleFunc("GET /api/tasks/{id}/artifacts/{aid}", s.serveTaskArtifact)
 
 	mux.HandleFunc("GET /api/audit", s.getAudit)
 	mux.HandleFunc("POST /api/gc", s.gc)

@@ -9,6 +9,7 @@ import {
   CheckIcon,
   ClockIcon,
   ImageIcon,
+  ImageOffIcon,
   KeyRoundIcon,
   CoinsIcon,
   ListChecksIcon,
@@ -25,6 +26,7 @@ import {
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Progress } from "@/components/ui/progress";
@@ -1392,11 +1394,15 @@ function TaskAuthCard({ taskId }: { taskId: string }) {
 }
 
 
-// TaskArtifactsCard 任务证据附件（v0.4.9）：图片直接出缩略图，其他文件列清单；
-// 顶部一键下载证据包（zip：附件 + manifest）。没有附件时整卡不渲染。
+// TaskArtifactsCard 任务证据附件（v0.4.9 起；v0.4.15 交互重做）：
+// 默认折叠；缩略图走服务端 480px 缩略图（一次拉几十张 3MB 原图会导致部分
+// 加载失败）；悬停轻微放大；点击弹层看原图；下载走独立按钮。
 function TaskArtifactsCard({ taskId }: { taskId: string }) {
   const [list, setList] = React.useState<TaskArtifact[]>([]);
   const [scanning, setScanning] = React.useState(false);
+  const [expanded, setExpanded] = React.useState(false);
+  const [preview, setPreview] = React.useState<TaskArtifact | null>(null);
+  const [broken, setBroken] = React.useState<Record<number, boolean>>({});
   const load = React.useCallback(
     (alive: { v: boolean }) =>
       api
@@ -1419,8 +1425,8 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
     try {
       const r = await api.scanTaskArtifacts(taskId);
       toast.success(`已补登记 ${r.added} 张（跳过 ${r.skipped}，超出 ${r.truncated}）`);
-      const alive = { v: true };
-      await load(alive);
+      await load({ v: true });
+      setExpanded(true);
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -1430,69 +1436,123 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
   const images = list.filter((a) => a.kind === "image");
   const files = list.filter((a) => a.kind !== "image");
   const fmtSize = (n: number) => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`);
+  const thumbUrl = (id: number) => `${api.artifactUrl(taskId, id)}?thumb=1`;
+  const fullUrl = (id: number) => api.artifactUrl(taskId, id);
+  const downloadUrl = (id: number) => `${api.artifactUrl(taskId, id)}?download=1`;
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <ImageIcon className="size-4 text-primary" /> 证据附件（{list.length}）
-          <div className="ml-auto flex items-center gap-2">
-            <Button size="sm" variant="ghost" disabled={scanning} onClick={() => void scan()}>
-              {scanning ? "扫描中…" : "扫描工作目录补登记"}
-            </Button>
-            {list.length > 0 && (
-              <Button size="sm" variant="outline" asChild>
-                <a href={api.artifactsExportUrl(taskId)}>下载证据包</a>
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ImageIcon className="size-4 text-primary" /> 证据附件（{list.length}）
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="ghost" disabled={scanning} onClick={() => void scan()}>
+                {scanning ? "扫描中…" : "扫描补登记"}
               </Button>
+              {list.length > 0 && (
+                <>
+                  <Button size="sm" variant="outline" onClick={() => setExpanded((v) => !v)}>
+                    {expanded ? "收起" : "展开查看"}
+                  </Button>
+                  <Button size="sm" variant="outline" asChild>
+                    <a href={api.artifactsExportUrl(taskId)}>下载证据包</a>
+                  </Button>
+                </>
+              )}
+            </div>
+          </CardTitle>
+          <CardDescription>
+            截图与数据样本来自任务执行过程；数据按样本策略保存（证明性样本，非全量）。点击缩略图看大图，下载走证据包或图片的单独下载。
+          </CardDescription>
+        </CardHeader>
+        {expanded && (
+          <CardContent className="flex flex-col gap-4">
+            {list.length === 0 && (
+              <p className="text-muted-foreground text-sm">
+                暂无证据附件。可点右上「扫描补登记」把历史任务已抓到的图片纳入证据库；新任务会由 worker 在取证时自动登记。
+              </p>
             )}
-          </div>
-        </CardTitle>
-        <CardDescription>
-          截图与数据样本来自任务执行过程；数据按样本策略保存（证明性样本，非全量）。随报告导出的证据包内含 manifest（来源/时间/sha256）。
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        {list.length === 0 && (
-          <p className="text-muted-foreground text-sm">
-            暂无证据附件。可点右上「扫描工作目录补登记」把历史任务已抓到的图片纳入证据库；新任务会由
-            worker 在取证时自动登记。
-          </p>
+            {images.length > 0 && (
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+                {images.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => setPreview(a)}
+                    className="group relative aspect-square overflow-hidden rounded-md border bg-muted/40 text-left"
+                    title={a.note || a.name}
+                  >
+                    {broken[a.id] ? (
+                      <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-2 text-center text-[11px] text-muted-foreground">
+                        <ImageOffIcon className="size-5" />
+                        无法预览
+                        <span className="line-clamp-2 break-all">{a.name}</span>
+                      </span>
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={thumbUrl(a.id)}
+                        alt={a.note || a.name}
+                        loading="lazy"
+                        onError={() => setBroken((b) => ({ ...b, [a.id]: true }))}
+                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+                      />
+                    )}
+                    <span className="pointer-events-none absolute inset-x-0 bottom-0 line-clamp-1 bg-black/55 px-1.5 py-0.5 text-[10px] text-white">
+                      {a.note || a.name}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {files.length > 0 && (
+              <div className="flex flex-col divide-y rounded border">
+                {files.map((a) => (
+                  <div key={a.id} className="flex min-w-0 items-center gap-2 px-3 py-2 text-sm">
+                    <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">{a.kind}</span>
+                    <span className="min-w-0 flex-1 truncate">{a.name}</span>
+                    <span className="shrink-0 text-muted-foreground text-xs">{fmtSize(a.size_bytes)}</span>
+                    <Button size="sm" variant="ghost" asChild>
+                      <a href={downloadUrl(a.id)}>下载</a>
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
         )}
-        {images.length > 0 && (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {images.map((a) => (
-              <figure key={a.id} className="min-w-0">
-                <a href={api.artifactUrl(taskId, a.id)} target="_blank" rel="noreferrer">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={api.artifactUrl(taskId, a.id)}
-                    alt={a.note || a.name}
-                    className="w-full rounded border object-contain"
-                    loading="lazy"
-                  />
-                </a>
-                <figcaption className="mt-1 break-words text-muted-foreground text-xs">
-                  {a.note || a.name}
-                  {a.finding_id ? ` · 漏洞 #${a.finding_id}` : ""}
-                </figcaption>
-              </figure>
-            ))}
-          </div>
-        )}
-        {files.length > 0 && (
-          <div className="flex flex-col divide-y rounded border">
-            {files.map((a) => (
-              <div key={a.id} className="flex min-w-0 items-center gap-2 px-3 py-2 text-sm">
-                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">{a.kind}</span>
-                <span className="min-w-0 flex-1 truncate">{a.name}</span>
-                <span className="shrink-0 text-muted-foreground text-xs">{fmtSize(a.size_bytes)}</span>
-                <Button size="sm" variant="ghost" asChild>
-                  <a href={api.artifactUrl(taskId, a.id)}>下载</a>
+      </Card>
+      <Dialog
+        open={!!preview}
+        onOpenChange={(o) => {
+          if (!o) setPreview(null);
+        }}
+      >
+        <DialogContent className="max-w-5xl">
+          <DialogHeader>
+            <DialogTitle className="break-all text-base">{preview?.note || preview?.name}</DialogTitle>
+          </DialogHeader>
+          {preview && (
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={fullUrl(preview.id)}
+                alt={preview.note || preview.name}
+                className="mx-auto max-h-[68vh] w-auto max-w-full rounded object-contain"
+              />
+              <div className="flex flex-wrap items-center justify-between gap-2 text-muted-foreground text-xs">
+                <span className="break-all">
+                  {preview.name} · {fmtSize(preview.size_bytes)}
+                  {preview.finding_id ? ` · 漏洞 #${preview.finding_id}` : ""}
+                </span>
+                <Button size="sm" variant="outline" asChild>
+                  <a href={downloadUrl(preview.id)}>下载原件</a>
                 </Button>
               </div>
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

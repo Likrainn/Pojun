@@ -2,12 +2,19 @@ package server
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	_ "image/gif"
+	"image/jpeg"
+	_ "image/png"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -153,8 +160,12 @@ func (s *Server) listTaskArtifacts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"artifacts": list})
 }
 
-// downloadTaskArtifact 下载单个附件（前端预览/单独取证用）。
-func (s *Server) downloadTaskArtifact(w http.ResponseWriter, r *http.Request) {
+// serveTaskArtifact 提供单个附件：
+//   - 图片默认 inline（前端 <img> 可直接预览），?download=1 强制下载；
+//   - ?thumb=1 返回长边 480 的 JPEG 缩略图（磁盘缓存 .thumb.jpg）——列表页
+//     用缩略图，避免一次加载几十张 3MB 原图导致部分加载失败；
+//   - 非图片一律 attachment 下载。
+func (s *Server) serveTaskArtifact(w http.ResponseWriter, r *http.Request) {
 	pg := s.m.PG()
 	if pg == nil {
 		writeErr(w, 500, "PG 不可用")
@@ -166,18 +177,120 @@ func (s *Server) downloadTaskArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a, err := pg.GetTaskArtifact(id)
-	if err != nil || a == nil {
-		writeErr(w, 404, "artifact not found")
-		return
-	}
-	if a.TaskID != r.PathValue("id") {
+	if err != nil || a == nil || a.TaskID != r.PathValue("id") {
 		writeErr(w, 404, "artifact not found")
 		return
 	}
 	abs := filepath.Join(s.m.dir, a.Storage)
-	w.Header().Set("Content-Type", a.Mime)
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, sanitizeArtifactName(a.Name)))
-	http.ServeFile(w, r, abs)
+	if _, err := os.Stat(abs); err != nil {
+		writeErr(w, 404, "attachment file missing")
+		return
+	}
+	isImage := strings.HasPrefix(a.Mime, "image/")
+	q := r.URL.Query()
+	switch {
+	case isImage && q.Get("thumb") != "":
+		thumb := abs + ".thumb.jpg"
+		if _, err := os.Stat(thumb); err != nil {
+			if err := writeThumbnail(abs, thumb, 480); err != nil {
+				// 缩略图生成失败退回原图，至少能显示。
+				w.Header().Set("Content-Type", a.Mime)
+				w.Header().Set("Cache-Control", "private, max-age=300")
+				http.ServeFile(w, r, abs)
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Header().Set("Cache-Control", "private, max-age=3600")
+		http.ServeFile(w, r, thumb)
+	case isImage && q.Get("download") == "":
+		w.Header().Set("Content-Type", a.Mime)
+		w.Header().Set("Content-Disposition", "inline")
+		w.Header().Set("Cache-Control", "private, max-age=600")
+		http.ServeFile(w, r, abs)
+	default:
+		w.Header().Set("Content-Type", a.Mime)
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, sanitizeArtifactName(a.Name)))
+		http.ServeFile(w, r, abs)
+	}
+}
+
+// writeThumbnail 用双线性缩放生成 JPEG 缩略图（长边 maxEdge），写磁盘缓存。
+// 标准库解码 png/jpeg/gif；解码失败（如 webp 未注册）由调用方退回原图。
+func writeThumbnail(src, dst string, maxEdge int) error {
+	f, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	img, _, err := image.Decode(f)
+	f.Close()
+	if err != nil {
+		return err
+	}
+	b := img.Bounds()
+	sw, sh := b.Dx(), b.Dy()
+	if sw <= 0 || sh <= 0 {
+		return fmt.Errorf("empty image")
+	}
+	scale := math.Min(float64(maxEdge)/float64(sw), float64(maxEdge)/float64(sh))
+	if scale >= 1 {
+		scale = 1
+	}
+	tw, th := int(float64(sw)*scale), int(float64(sh)*scale)
+	if tw < 1 {
+		tw = 1
+	}
+	if th < 1 {
+		th = 1
+	}
+	out := image.NewRGBA(image.Rect(0, 0, tw, th))
+	for y := 0; y < th; y++ {
+		sy := (float64(y)+0.5)*float64(sh)/float64(th) - 0.5
+		y0 := int(math.Floor(sy))
+		fy := sy - float64(y0)
+		if y0 < 0 {
+			y0 = 0
+			fy = 0
+		}
+		y1 := y0 + 1
+		if y1 >= sh {
+			y1 = sh - 1
+		}
+		for x := 0; x < tw; x++ {
+			sx := (float64(x)+0.5)*float64(sw)/float64(tw) - 0.5
+			x0 := int(math.Floor(sx))
+			fx := sx - float64(x0)
+			if x0 < 0 {
+				x0 = 0
+				fx = 0
+			}
+			x1 := x0 + 1
+			if x1 >= sw {
+				x1 = sw - 1
+			}
+			r0, g0, b0, _ := img.At(b.Min.X+x0, b.Min.Y+y0).RGBA()
+			r1, g1, b1, _ := img.At(b.Min.X+x1, b.Min.Y+y0).RGBA()
+			r2, g2, b2, _ := img.At(b.Min.X+x0, b.Min.Y+y1).RGBA()
+			r3, g3, b3, _ := img.At(b.Min.X+x1, b.Min.Y+y1).RGBA()
+			topR := float64(r0)*(1-fx) + float64(r1)*fx
+			topG := float64(g0)*(1-fx) + float64(g1)*fx
+			topB := float64(b0)*(1-fx) + float64(b1)*fx
+			botR := float64(r2)*(1-fx) + float64(r3)*fx
+			botG := float64(g2)*(1-fx) + float64(g3)*fx
+			botB := float64(b2)*(1-fx) + float64(b3)*fx
+			out.SetRGBA(x, y, color.RGBA{
+				R: uint8((topR*(1-fy) + botR*fy) / 257),
+				G: uint8((topG*(1-fy) + botG*fy) / 257),
+				B: uint8((topB*(1-fy) + botB*fy) / 257),
+				A: 255,
+			})
+		}
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, out, &jpeg.Options{Quality: 80}); err != nil {
+		return err
+	}
+	return os.WriteFile(dst, buf.Bytes(), 0o644)
 }
 
 // exportTaskArtifacts 把任务全部附件打成 zip：artifacts/<name> + manifest.json。
