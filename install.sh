@@ -810,16 +810,18 @@ install_tools(){
     apt-get "${APT_PROXY[@]}" update -qq || warn "apt update 失败，继续尝试"
     # seclists 在 apt 源里没有稳定包名，单独克隆（见 install_wordlists）；
     # 其余一次装齐，缺的包不阻断整体（不同发行版源里包名有出入）。
+    # imagemagick：报告证据拼图/文件名水印（v0.4.10 起依赖）；
+    # libreoffice-writer：docx→PDF 离线导出（可选能力，装机时一并装全）。
     apt-get "${APT_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto gobuster ffuf john \
-      netcat-openbsd dnsutils whois unzip nodejs npm python3-impacket gitleaks \
+      netcat-openbsd dnsutils whois unzip nodejs npm python3-impacket gitleaks imagemagick libreoffice-writer \
       >/dev/null 2>&1 \
       || apt-get "${APT_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto gobuster ffuf john \
-           netcat-openbsd dnsutils whois unzip nodejs npm python3-impacket \
+           netcat-openbsd dnsutils whois unzip nodejs npm python3-impacket imagemagick \
            >/dev/null \
       || warn "部分 apt 工具未装上"
   elif command -v dnf >/dev/null 2>&1; then
     dnf "${DNF_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto john nmap-ncat bind-utils unzip \
-      nodejs python3-impacket \
+      nodejs python3-impacket ImageMagick libreoffice-writer \
       || warn "dnf 部分包缺失，已装可用项"
   else
     warn "未识别的包管理器，跳过系统源工具安装"
@@ -831,6 +833,26 @@ install_tools(){
   install_wordlists
   install_pip_tools
   install_browser_mcp
+  install_fonts
+}
+
+# ── 公文字体：报告 PDF 渲染 ────────────────────────
+# docx 里字体已内嵌（odttf），Word/WPS 打开不需要系统字体；但 LibreOffice
+# 转 PDF 时读系统字体，新机器不装会 fallback。从仓库 raw 拉三件套（ASCII
+# 文件名，TTF 内部 family 名仍是仿宋_GB2312 等，docx 引用按内部名匹配）。
+# 下载失败只告警——不影响 Word 导出。
+install_fonts(){
+  local dir="/usr/share/fonts/gongwen"
+  mkdir -p "$dir" || { warn "无法创建 $dir，跳过公文字体"; return 0; }
+  local base="https://raw.githubusercontent.com/${REPO}/main/report/fonts"
+  local f
+  for f in fangsong_gb2312.ttf kaiti_gb2312.ttf fzxiaobiaosong_gbk.ttf; do
+    if [ ! -s "$dir/$f" ]; then
+      "${CURL[@]}" -fsSL "$base/$f" -o "$dir/$f" >/dev/null 2>&1         || { rm -f "$dir/$f"; warn "  公文字体 $f 下载失败（仅影响本机 docx→PDF）"; }
+    fi
+  done
+  command -v fc-cache >/dev/null 2>&1 && fc-cache -f "$dir" >/dev/null 2>&1 || true
+  ok "公文字体就位（$dir）"
 }
 
 # ── GitHub Release 单文件工具 ───────────────────

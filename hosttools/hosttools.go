@@ -145,6 +145,8 @@ var catalog = []Tool{
 	{Name: "nmap", Purpose: "端口扫描/服务指纹", Kind: KindApt, Category: CatNetwork, Apt: "nmap", Dnf: "nmap"},
 	{Name: "masscan", Purpose: "大规模端口快扫", Kind: KindApt, Category: CatNetwork, Apt: "masscan", Dnf: "masscan"},
 	{Name: "sqlmap", Purpose: "SQL 注入检测与利用", Kind: KindApt, Category: CatWeb, Apt: "sqlmap", Dnf: "sqlmap"},
+	{Name: "imagemagick", Purpose: "证据图片处理：拼图/水印/脱敏（报告照片证据必需）", Kind: KindApt, Category: CatRuntime, Apt: "imagemagick", Dnf: "ImageMagick"},
+	{Name: "libreoffice", Purpose: "docx→PDF 离线导出（可选）", Kind: KindApt, Category: CatRuntime, Apt: "libreoffice-writer", Dnf: "libreoffice-writer"},
 	{Name: "ffuf", Purpose: "目录/参数模糊枚举", Kind: KindApt, Category: CatWeb, Apt: "ffuf", Dnf: "ffuf"},
 	{Name: "gobuster", Purpose: "目录/DNS/vhost 爆破", Kind: KindApt, Category: CatWeb, Apt: "gobuster", Dnf: "gobuster"},
 	{Name: "nikto", Purpose: "Web 服务器常见问题扫描", Kind: KindApt, Category: CatWeb, Apt: "nikto", Dnf: "nikto"},

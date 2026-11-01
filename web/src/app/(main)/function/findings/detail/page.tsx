@@ -358,25 +358,32 @@ export default function FindingDetailPage() {
 // FindingShots 漏洞现场截图（v0.4.9）：任务附件里 finding_id 归属本漏洞的图片。
 // 缩略图直接引用附件下载地址（同源 cookie 认证），点击原图新窗口打开。
 function FindingShots({ taskId, findingId }: { taskId?: string; findingId: string }) {
-  const [shots, setShots] = React.useState<TaskArtifact[]>([]);
+  const [all, setAll] = React.useState<TaskArtifact[]>([]);
   React.useEffect(() => {
     if (!taskId) return;
     let alive = true;
     api
       .taskArtifacts(taskId)
       .then((list) => {
-        if (alive) setShots(list.filter((a) => a.kind === "image" && String(a.finding_id ?? "") === findingId));
+        if (alive) setAll(list.filter((a) => a.kind === "image"));
       })
       .catch(() => {});
     return () => {
       alive = false;
     };
-  }, [taskId, findingId]);
+  }, [taskId]);
+  // 优先显示归属本漏洞的图片；老数据（附件功能上线前抓的照片）没有
+  // finding_id，回退展示任务级图片并明确标注，避免"漏洞详情看不到照片"。
+  const own = all.filter((a) => String(a.finding_id ?? "") === findingId);
+  const shots = own.length > 0 ? own : all.filter((a) => !a.finding_id);
   if (!taskId || shots.length === 0) return null;
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm">现场截图（{shots.length}）</CardTitle>
+        <CardTitle className="text-sm">
+          现场截图（{shots.length}）
+          {own.length === 0 && <span className="font-normal text-muted-foreground text-xs"> · 任务级证据（未关联到具体漏洞）</span>}
+        </CardTitle>
       </CardHeader>
       <CardContent className="grid gap-3 sm:grid-cols-2">
         {shots.map((a) => (
