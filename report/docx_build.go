@@ -557,15 +557,25 @@ func writeMarkdownish(d *Docx, md string) {
 		}
 		tableBuf = tableBuf[:0]
 	}
+	// 围栏代码块收集：整块一个 Code 段落（行间 w:br）——逐行成段会让长
+	// JSON/curl 被拆成几十个独立段落堆成一片（v0.4.1）。
+	var codeBuf []string
+	flushCode := func() {
+		if len(codeBuf) > 0 {
+			d.Code(strings.Join(codeBuf, "\n"))
+			codeBuf = codeBuf[:0]
+		}
+	}
 	for _, ln := range lines {
 		trimmed := strings.TrimSpace(ln)
 		if strings.HasPrefix(trimmed, "```") {
 			flushTable()
+			flushCode()
 			inCode = !inCode
 			continue
 		}
 		if inCode {
-			d.buf.WriteString(fmt.Sprintf(`<w:p><w:pPr><w:pStyle w:val="Code"/><w:shd w:val="clear" w:fill="F2F2F2"/></w:pPr><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p>`, esc(ln)))
+			codeBuf = append(codeBuf, ln)
 			continue
 		}
 		if strings.HasPrefix(trimmed, "|") && strings.HasSuffix(trimmed, "|") {
@@ -598,6 +608,7 @@ func writeMarkdownish(d *Docx, md string) {
 		}
 	}
 	flushTable()
+	flushCode()
 }
 
 // splitMarkdownRow 拆一行 | a | b | → [a, b]。
