@@ -60,6 +60,7 @@ func sevRankKey(f *db.DBFinding) int {
 // 同类漏洞×多主机的重复上报在类别层折叠呈现。
 func BuildTaskDocx(in TaskDocxInput) *Docx {
 	d := NewDocx()
+	embedGongwenFonts(d) // 公文字体随文档嵌入（GB/T 9704 全链路）
 	if in.PageHeader != "" {
 		d.SetHeaderText(in.PageHeader)
 	}
@@ -460,6 +461,7 @@ func BuildFindingDocx(in FindingDocxInput) *Docx {
 	f := in.Finding
 	generatedAt := in.GeneratedAt
 	d := NewDocx()
+	embedGongwenFonts(d) // 公文字体随文档嵌入（GB/T 9704 全链路）
 	d.SetHeaderText("渗透测试报告 — " + findingTitle(f))
 
 	// 封面页（与总报告同版式）
