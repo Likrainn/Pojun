@@ -483,6 +483,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		sysBody += w.taskAuthBlock // 任务级登录凭据（v0.4.8）：先登录再测
 	}
 	sysBody += artifactGuidance // 证据附件（v0.5.0）：截图/样本存档纪律
+	sysBody += sqlmapGuidance   // SQL 注入专项：sqlmap 实测 + 可复测命令（v0.4.12）
 	// 意图块 → 意图锚定资产块 → 相关既有事实 → 启动指令，依次追加到 system 尾部
 	//（与 constraintBlock 同一套追加法）。
 	sysBody += renderIntentTask(intent)
@@ -693,3 +694,17 @@ func priorFactsBlock(ts *db.ExplorationStore, assetIDs []int64, limit int) strin
 	}
 	return b.String()
 }
+
+// sqlmapGuidance 是 SQL 注入类的专项取证纪律（v0.4.12）：这类漏洞提交时必须
+// 带可一键复测的 sqlmap 命令——复测方会直接复制执行，不能只给结论。
+const sqlmapGuidance = `
+
+━━ SQL 注入：必须用 sqlmap 实测，并把跑通的命令写进证据 ━━
+- 只凭报错差异、版本号、WAF 响应判断「有注入」不算确认。必须用 sqlmap 对**真实注入点**跑一次并拿到库内证据（DBMS 版本/当前库/表名，或布尔/时间盲注的实测差异）。
+- 命令要能直接复测，用保守参数起步（--batch 无交互、--flush-session 不复用缓存、--level=2 --risk=1 先确认，再按需升到 3/2）：
+  GET：` + "`sqlmap -u 'https://target/path?id=1*' --batch --flush-session --level=2 --risk=1 --technique=BEUST`" + `
+  POST：` + "`sqlmap -u 'https://target/api/login' --data 'user=1*&pass=x' --batch --flush-session --level=2 --risk=1`" + `
+  带登录：追加 ` + "`--cookie 'SESSION=...'`" + `（凭据来自任务配置）。
+- 拿到结果后把**实际跑通的完整命令**（含真实 URL/参数/附加头，不要写成模板）原样写进 evidence，并附上关键输出特征（Parameter / Type / DBMS / Payload 片段）。这是报告「复测命令」小节的来源。
+- 只读边界：默认只用注入探测与数据读取（--dump 限定表/列，先 --count/--schema）；不要用 --os-shell / --sql-shell / --file-write / --os-pwn 等写操作，除非任务明确要求且审批通过。
+- sqlmap 跑不通（网络/代理/被拦）时，用等价的手工 payload 复现并写明 sqlmap 尝试过与失败原因；**禁止编造 sqlmap 输出**。`
