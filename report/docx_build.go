@@ -483,6 +483,10 @@ func BuildFindingDocx(in FindingDocxInput) *Docx {
 	d.CoverLine("报告生成时间:"+FormatTimeUTC(generatedAt), 24, false)
 	d.PageBreak()
 
+	// 目录页（与总报告一致：TOC 字段，settings updateFields 打开自动刷新）
+	d.TOC()
+	d.PageBreak()
+
 	d.P(fmt.Sprintf("漏洞类别:%s · 严重度:%s · 状态:%s", nz(f.VulnClass, "未分类"), SeverityCN(f.Severity), statusCN(f.Status)))
 	if len(f.AssetIDs) > 0 {
 		d.P(fmt.Sprintf("影响资产:%s", assetNames(f.AssetIDs, in.AssetNameMap)))

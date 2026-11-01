@@ -135,12 +135,20 @@ func (d *Docx) P(text string) {
 	}
 }
 
-// Code 等宽代码块(证据/PoC 用):浅灰底、Consolas、保留空白。
+// Code 等宽代码块(证据/PoC 用):底纹+左竖线、Consolas、保留空白。
+// 整段合并为一个段落（行间用 w:br）——逐行成段会让长 JSON 被拆成上百个
+// 独立段落、视觉散成一片（Kali 用户实测「全堆到一块儿」的主因之一）。
 func (d *Docx) Code(text string) {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	var b strings.Builder
-	for _, line := range strings.Split(text, "\n") {
-		b.WriteString(fmt.Sprintf(`<w:p><w:pPr><w:pStyle w:val="Code"/><w:shd w:val="clear" w:fill="F2F2F2"/></w:pPr><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p>`, esc(line)))
+	b.WriteString(`<w:p><w:pPr><w:pStyle w:val="Code"/></w:pPr>`)
+	for i, line := range lines {
+		if i > 0 {
+			b.WriteString(`<w:r><w:br/></w:r>`)
+		}
+		fmt.Fprintf(&b, `<w:r><w:t xml:space="preserve">%s</w:t></w:r>`, esc(line))
 	}
+	b.WriteString(`</w:p>`)
 	d.buf.WriteString(b.String())
 }
 
@@ -163,12 +171,13 @@ func (d *Docx) TableFills(header []string, rows [][]string, fills []string) {
 		b.WriteString(`<w:gridCol w:w="1800"/>`)
 	}
 	b.WriteString(`</w:tblGrid>`)
+	// 单元格文字 10pt：正文字号升到三号后，表格若继承会巨大变形
 	cell := func(text, fill string) {
 		sty := ""
 		if fill != "" {
 			sty = fmt.Sprintf(`<w:shd w:val="clear" w:fill="%s"/>`, fill)
 		}
-		fmt.Fprintf(&b, `<w:tc><w:tcPr>%s</w:tcPr><w:p><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p></w:tc>`, sty, esc(text))
+		fmt.Fprintf(&b, `<w:tc><w:tcPr>%s</w:tcPr><w:p><w:pPr><w:spacing w:line="240" w:lineRule="auto"/><w:ind w:firstLine="0"/></w:pPr><w:r><w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:t xml:space="preserve">%s</w:t></w:r></w:p></w:tc>`, sty, esc(text))
 	}
 	b.WriteString(`<w:tr>`)
 	for _, h := range header {
@@ -210,7 +219,8 @@ func (d *Docx) CoverLine(text string, sz int, bold bool) {
 	}
 	rpr := "<w:rPr>"
 	if bold {
-		rpr += "<w:b/>"
+		// 公文封面标题用黑体（正文仿宋、标题黑体是 GB/T 9704 惯例）
+		rpr += `<w:rFonts w:ascii="Calibri" w:eastAsia="黑体"/><w:b/>`
 	}
 	if sz > 0 {
 		rpr += fmt.Sprintf(`<w:sz w:val="%d"/><w:szCs w:val="%d"/>`, sz, sz)
@@ -221,12 +231,18 @@ func (d *Docx) CoverLine(text string, sz int, bold bool) {
 
 // CoverLineColored 带色的封面行（单漏洞封面按严重度着色用）。
 func (d *Docx) CoverLineColored(text string, sz int, hex string, bold bool) {
+	boldXML := ""
+	if bold {
+		// 封面标题黑体（GB/T 9704 惯例），与 CoverLine bold 路径一致
+		boldXML = `<w:rFonts w:ascii="Calibri" w:eastAsia="黑体"/><w:b/>`
+	}
+	szXML := ""
+	if sz > 0 {
+		szXML = fmt.Sprintf(`<w:sz w:val="%d"/><w:szCs w:val="%d"/>`, sz, sz)
+	}
 	fmt.Fprintf(&d.buf,
 		`<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="120" w:after="120"/></w:pPr><w:r><w:rPr>%s<w:color w:val="%s"/>%s<w:t xml:space="preserve">%s</w:t></w:r></w:p>`,
-		func() string { if bold { return "<w:b/>" }; return "" }(),
-		hex,
-		func() string { if sz > 0 { return fmt.Sprintf(`<w:sz w:val="%d"/><w:szCs w:val="%d"/>`, sz, sz) }; return "" }(),
-		esc(text))
+		boldXML, hex, szXML, esc(text))
 }
 
 // TOC 目录字段：Word 打开时按 updateFields 设置自动刷新（settings.xml 已置
@@ -349,29 +365,35 @@ func numbering() string {
 
 // docxNum 部件按需打包；headerText 经由 Docx 字段透传。
 
-// docxStyles 内置中文报告样式:标题黑体分级、正文宋体小四、代码 Consolas、
-// Heading1 大纲级别 0(Word 导航窗格可见 → 天然目录结构)。
+// docxStyles 内置中文公文风样式（GB/T 9704 风格取舍）：
+// 正文仿宋三号（16pt）、首行缩进 2 字符、固定行距 28 磅；
+// 一级标题黑体三号、二级黑体四号、三/四级黑体小四；
+// 代码 Consolas 小五紧排+底纹。Heading1 大纲级别 0（Word 导航窗格可见）。
 const docxStyles = `<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 <w:docDefaults><w:rPrDefault><w:rPr>
-<w:rFonts w:ascii="Calibri" w:eastAsia="宋体" w:hAnsi="Calibri"/>
-<w:sz w:val="24"/><w:szCs w:val="24"/>
-</w:rPr></w:rPrDefault></w:docDefaults>
+<w:rFonts w:ascii="Times New Roman" w:eastAsia="仿宋_GB2312" w:hAnsi="Times New Roman"/>
+<w:sz w:val="32"/><w:szCs w:val="32"/>
+</w:rPr></w:rPrDefault>
+<w:pPrDefault><w:pPr><w:spacing w:line="560" w:lineRule="exact"/></w:pPr></w:pPrDefault></w:docDefaults>
 <w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/>
-<w:pPr><w:spacing w:after="120"/></w:pPr></w:style>
+<w:pPr><w:spacing w:after="0" w:line="560" w:lineRule="exact"/><w:ind w:firstLineChars="200" w:firstLine="640"/></w:pPr></w:style>
 <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/>
-<w:pPr><w:outlineLvl w:val="0"/><w:spacing w:before="360" w:after="180"/></w:pPr>
-<w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="黑体"/><w:b/><w:sz w:val="40"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/>
-<w:pPr><w:outlineLvl w:val="1"/><w:spacing w:before="280" w:after="140"/></w:pPr>
+<w:pPr><w:outlineLvl w:val="0"/><w:spacing w:before="240" w:after="120" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="0"/></w:pPr>
 <w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="黑体"/><w:b/><w:sz w:val="32"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/>
-<w:pPr><w:outlineLvl w:val="2"/><w:spacing w:before="200" w:after="120"/></w:pPr>
+<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/>
+<w:pPr><w:outlineLvl w:val="1"/><w:spacing w:before="200" w:after="100" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="0"/></w:pPr>
 <w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="黑体"/><w:b/><w:sz w:val="28"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/>
+<w:pPr><w:outlineLvl w:val="2"/><w:spacing w:before="160" w:after="80" w:line="560" w:lineRule="exact"/><w:ind w:firstLine="0"/></w:pPr>
+<w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="黑体"/><w:b/><w:sz w:val="24"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Heading4"><w:name w:val="heading 4"/><w:basedOn w:val="Normal"/>
-<w:pPr><w:outlineLvl w:val="3"/><w:spacing w:before="160" w:after="100"/></w:pPr>
+<w:pPr><w:outlineLvl w:val="3"/><w:spacing w:before="120" w:after="60" w:line="460" w:lineRule="exact"/><w:ind w:firstLine="0"/></w:pPr>
 <w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="黑体"/><w:b/><w:sz w:val="24"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/>
-<w:rPr><w:rFonts w:ascii="Consolas" w:eastAsia="宋体" w:hAnsi="Consolas"/><w:sz w:val="18"/></w:rPr></w:style>
+<w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/><w:ind w:left="240" w:firstLine="0"/>
+<w:shd w:val="clear" w:fill="F5F5F5"/>
+<w:pBdr><w:left w:val="single" w:sz="12" w:space="4" w:color="BFBFBF"/></w:pBdr></w:pPr>
+<w:rPr><w:rFonts w:ascii="Consolas" w:eastAsia="宋体" w:hAnsi="Consolas"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr></w:style>
 <w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/>
 <w:tblPr><w:tblBorders>
 <w:top w:val="single" w:sz="4" w:color="999999"/><w:left w:val="single" w:sz="4" w:color="999999"/>
