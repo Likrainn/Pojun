@@ -849,6 +849,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/vulnintel/status", s.vulnintelStatus)
 	mux.HandleFunc("PUT /api/vulnintel/config", s.vulnintelSaveConfig)
 	mux.HandleFunc("POST /api/vulnintel/sync", s.vulnintelSyncNow)
+	mux.HandleFunc("POST /api/vulnintel/sync/cancel", s.vulnintelSyncCancel)
 	mux.HandleFunc("POST /api/vulnintel/probe", s.vulnintelProbe)
 	mux.HandleFunc("GET /api/proxypool", s.proxyPoolGet)
 	mux.HandleFunc("PUT /api/proxypool", s.proxyPoolPut)
@@ -3375,6 +3376,9 @@ func (s *Server) settingsPayload() map[string]any {
 		"compaction_max_tokens":   s.m.CompactionTokens(),
 		"compaction_timeout_seconds": s.m.CompactionTimeout(),
 		"compaction_max_members":  s.m.CompactionMaxMembers(),
+		// B10:压缩器钉住的 LLM 配置 id。0=跟随规划器(历史行为);>0=压缩调用永远
+		// 跑在指定配置上(不参与任务链轮转)。对之后启动的任务/运行中任务的下一轮生效。
+		"compactor_profile_id": s.m.CompactorProfileID(),
 		"task_concurrency_enabled": concOn,                      // 任务并发上限开关(默认关)
 		"task_concurrency_limit":   concLimit,                   // 同时运行任务上限(开启后默认5)
 		// LLM 轮询(故障转移)。默认关；开启后走全局激活配置的 agent 在当前配置不可用时
@@ -3457,6 +3461,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		CompactionMaxTokens  *int `json:"compaction_max_tokens"`
 		CompactionTimeoutSec *int `json:"compaction_timeout_seconds"`
 		CompactionMaxMembers *int `json:"compaction_max_members"`
+		// B10:压缩器钉住的 LLM 配置 id。null=不改；<=0=清空(恢复跟随规划器)；
+		// >0=钉住该 id。生效时机：对运行中任务的下一轮(重建 bundle)与之后的新任务。
+		CompactorProfile *int64 `json:"compactor_profile_id"`
 		// 任务并发上限:同时「运行中」的任务数上限。关闭=不限;开启后新建任务超限则排队,有空位自动启动。
 		ConcurrencyEnabled *bool `json:"task_concurrency_enabled"`
 		ConcurrencyLimit   *int  `json:"task_concurrency_limit"`
@@ -3568,6 +3575,16 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, err.Error())
 			return
 		}
+	}
+	if req.CompactorProfile != nil {
+		// 钉住的 id 不在这里校验存在性：providerForProfile 在 pin 失效时会自然
+		// 落回落链（B10 语义），误指向已删配置不会把压缩打断。前端下拉只列有效配置。
+		if err := s.m.SetCompactorProfileID(*req.CompactorProfile); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		// bundle 按 task 缓存，重建才会带上新 pin；重建是安全的（agent 是无状态组装器）。
+		s.invalidateTaskAgents()
 	}
 	if req.ConcurrencyEnabled != nil || req.ConcurrencyLimit != nil {
 		// 部分 PUT:未给的字段用当前值兜底,避免只改一个把另一个重置。

@@ -253,8 +253,32 @@ func verifyJWT(tokenStr string, key []byte) bool {
 	return err == nil && t.Valid
 }
 
-// extractToken reads the JWT from Authorization: Bearer header,
-// artex_token cookie, or ?token= query param (for SSE connections).
+// sseQueryTokenPaths 是唯一接受 ?token= 查询参数的端点白名单：浏览器 EventSource
+// 无法带 Authorization 头,这些 URL 直连的 SSE 流端点历史上靠 query token 认证。
+// 其余任何路径不再从 query 取 token（N1 收敛）——token 会进访问日志/X-Forwarded 头/
+// Referer,能走 cookie（前端已配好）的路径不该把这个风险留着。EventSource 同源默认带
+// cookie,query 只是 cookie 不可用时的后备。side-questions 的 events 端点带请求 id,
+// 由 queryTokenAllowed 里的前缀+后缀判断覆盖。
+var sseQueryTokenPaths = map[string]bool{
+	"/api/exploration/activity/stream": true,
+	"/api/logs/stream":                 true,
+	"/api/update/stream":               true,
+}
+
+// queryTokenAllowed reports whether ?token= may be trusted for this request:
+// only the four URL-direct SSE stream endpoints (see sseQueryTokenPaths).
+func queryTokenAllowed(r *http.Request) bool {
+	if sseQueryTokenPaths[r.URL.Path] {
+		return true
+	}
+	// side-questions events 按请求 id 动态:/api/side-questions/<id>/events
+	return strings.HasPrefix(r.URL.Path, "/api/side-questions/") && strings.HasSuffix(r.URL.Path, "/events")
+}
+
+// extractToken reads the JWT from Authorization: Bearer header, or the
+// artex_token cookie. ?token= query is only honored on the SSE stream endpoints
+// (queryTokenAllowed) — elsewhere the token would leak into access logs and
+// Referer headers without giving up anything the cookie doesn't already do.
 func extractToken(r *http.Request) string {
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		return strings.TrimPrefix(h, "Bearer ")
@@ -262,7 +286,10 @@ func extractToken(r *http.Request) string {
 	if c, err := r.Cookie("artex_token"); err == nil && c.Value != "" {
 		return c.Value
 	}
-	return r.URL.Query().Get("token")
+	if queryTokenAllowed(r) {
+		return r.URL.Query().Get("token")
+	}
+	return ""
 }
 
 // requireAuth wraps h with JWT validation.

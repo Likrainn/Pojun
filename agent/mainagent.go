@@ -31,7 +31,7 @@ type MainAgent struct {
 	webSearch       WebSearchOpts                          // web_search tool backend selection (off by default)
 	workDir         string                                 // shared work dir (surfaced in prompt as artifact-output target)
 	steerWork       func(intentID int64, msg string) error // engine callback: steer a running work (nil = off)
-	attributions    func() map[string]int                  // Guard 归因读取（nil = 概览不带 guard_attributions 块）
+	attributions    func() map[string]any                  // Guard 归因读取（nil = 概览不带 guard_attributions 块）
 	nonStreamingFn  func() bool                            // resolver: use non-streaming (Complete) path? (nil = streaming)
 	noaEnabledFn    func() bool                            // resolver: use experimental noa compaction? (nil = off)
 	maxTokensFn     func() int                             // resolver: per-reply output cap (nil/0 = send no cap)
@@ -85,7 +85,7 @@ func (m *MainAgent) SetSteerWork(fn func(intentID int64, msg string) error) { m.
 
 // SetAttributions wires the per-task Guard failure-attribution reader so
 // graph_overview can carry guard_attributions（人在环路上同样能看到打回计数）.
-func (m *MainAgent) SetAttributions(fn func() map[string]int) { m.attributions = fn }
+func (m *MainAgent) SetAttributions(fn func() map[string]any) { m.attributions = fn }
 
 // mainAgentDefaultTmpl is the built-in EDITABLE body (段 [A]) of the main agent
 // prompt, seeded into agent_prompts. Goal is a {{.Goal}} template var; the 中间

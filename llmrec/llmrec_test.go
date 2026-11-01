@@ -42,12 +42,22 @@ func TestTaskIDContextUsesExplicitRegistryID(t *testing.T) {
 }
 
 func TestParseSessionFallbackIsExplorationScoped(t *testing.T) {
-	taskID, worker := parseSession("exp12-worker-i99")
+	taskID, worker, intent := parseSession("exp12-worker-i99")
 	if taskID != "12" || worker != "worker" {
 		t.Fatalf("parseSession()=(%q,%q)", taskID, worker)
 	}
-	if taskID, worker := parseSession("not-a-task"); taskID != "" || worker != "" {
-		t.Fatalf("unexpected non-session parse: (%q,%q)", taskID, worker)
+	if intent != 99 {
+		t.Fatalf("B7: intent suffix i99 should parse as 99, got %d", intent)
+	}
+	// 无后缀 / 非 i<n> 后缀 → intent 0（planner、compactor 等不挂意图的调用）。
+	if taskID, worker, intent := parseSession("exp2-planner"); taskID != "2" || worker != "planner" || intent != 0 {
+		t.Fatalf("planner session should carry intent 0, got (%q,%q,%d)", taskID, worker, intent)
+	}
+	if taskID, _, intent := parseSession("exp1-compactor"); taskID != "1" || intent != 0 {
+		t.Fatalf("compactor session should carry intent 0, got (%q,%d)", taskID, intent)
+	}
+	if taskID, worker, intent := parseSession("not-a-task"); taskID != "" || worker != "" || intent != 0 {
+		t.Fatalf("unexpected non-session parse: (%q,%q,%d)", taskID, worker, intent)
 	}
 }
 

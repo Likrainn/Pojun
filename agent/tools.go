@@ -18,13 +18,19 @@ import (
 // yields} so the planner sees both the direction and its LINEAGE — parents (the
 // upstream nodes it derived from: facts/intents/findings) and yields (the facts/
 // findings it produced) — without pulling full payloads. parentsOf/yieldsOf are
-// built from the exploration edges in graph_overview.
-func compactIntents(ns []*db.Node, parentsOf, yieldsOf map[int64][]int64) []map[string]any {
+// built from the exploration edges in graph_overview. tokens (B7, optional) maps
+// intent id → llm_usage 总 token, 给每条意图标「这个方向烧了多少」; nil = 不标。
+func compactIntents(ns []*db.Node, parentsOf, yieldsOf map[int64][]int64, tokens map[int64]int64) []map[string]any {
 	out := make([]map[string]any, 0, len(ns))
 	for _, n := range ns {
 		var p map[string]any
 		_ = json.Unmarshal(n.Payload, &p)
 		m := map[string]any{"id": n.ID, "summary": p["summary"], "state": n.State}
+		if len(tokens) > 0 {
+			if tok, ok := tokens[n.ID]; ok && tok > 0 {
+				m["tokens"] = tok
+			}
+		}
 		// stop_reason（B1）：终态意图「为什么停」。planner 提示词要求用它区分
 		// 「接续 vs 换方向」（exhausted=手段穷尽可接续 / blocked=传输故障可重试 /
 		// stopped=被 kill），此前该字段在 DB 列里但态势从不携带——planner 每轮
@@ -120,15 +126,15 @@ type ToolSet struct {
 	// the planner having to spot it folded into the graph overview. Wired for the main
 	// agent + cross-task orchestration; nil elsewhere → falls back to the bare notify.
 	notifyHint func(texts []string)
-	// attributions, if set, returns Guard failure-attribution counts (ok/blocked/error,
-	// guard/guard.go Attributions) for graph_overview 的 guard_attributions 块——planner
-	// 由此看到「这个任务被 WAF/拦截打回了 N 次」并换打法（v0.3.88 体检 N5，Observer
-	// 半成品的最后一公里）。Wired for planner/mainagent（engine per-task Guard）；nil = 块省略。
-	attributions func() map[string]int
+	// attributions, if set, returns Guard failure-attribution stats (ok/blocked/error
+	// counts + B6 recent samples, guard/guard.go AttributionStats) for graph_overview
+	// 的 guard_attributions 块——planner 由此看到「这个任务被 WAF/拦截打回了 N 次、
+	// 最近被拦的是哪几条命令」并换打法（v0.3.88 体检 N5 + B6 样本补完）。nil = 块省略。
+	attributions func() map[string]any
 }
 
 // SetAttributions wires the Guard failure-attribution reader (see ToolSet.attributions).
-func (t *ToolSet) SetAttributions(fn func() map[string]int) { t.attributions = fn }
+func (t *ToolSet) SetAttributions(fn func() map[string]any) { t.attributions = fn }
 
 // SetNotifyGoal wires the goal-add trigger callback (see ToolSet.notifyGoal). Set only
 // by the main-agent chat, so runtime-added goals are announced to the planner by name.
@@ -502,9 +508,17 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 		hotAtRender = cg.hotSet()
 	}
 	hidden := func(id int64) bool { _, c := covered[id]; return c && !hotAtRender[id] }
+	// B7:意图级 token（llm_usage 按 session 后缀 i<n> 记账）。一次拉全图,给
+	// open/running/recent_done 的每条意图标 tokens —— planner/人在环路直接看到
+	// 「哪个方向烧了多少」,是判断该不该续派最直接的账。
+	tokByIntent, _ := t.ts.TokenByIntent()
+	tokens := make(map[int64]int64, len(tokByIntent))
+	for _, it := range tokByIntent {
+		tokens[it.IntentID] = it.InputTokens + it.OutputTokens
+	}
 	const openIntentsCap = 30
 	fr, _ := t.ts.Frontier(openIntentsCap) // priority DESC, id ASC —— 优先级最高的前 N 条；真实总数见 frontier_open
-	out["open_intents"] = compactIntents(fr, parentsOf, yieldsOf)
+	out["open_intents"] = compactIntents(fr, parentsOf, yieldsOf, tokens)
 	all, _ := t.ts.ListByKind(db.KindIntent, 300)
 	var running, recentDone []*db.Node
 	for _, n := range all {
@@ -518,7 +532,7 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 			recentDone = append(recentDone, n) // 最新在前（all 按 id 降序）；折叠的已剔除，输出时截最新 N
 		}
 	}
-	out["running_intents"] = compactIntents(running, parentsOf, yieldsOf)
+	out["running_intents"] = compactIntents(running, parentsOf, yieldsOf, tokens)
 	// done_intents_total：已结束意图（done/blocked/exhausted）总数，与 recent_done_intents
 	// 平行命名——后者只是它的最新窗口截断视图。两键并排即自描述："看到的是 N/总数"，
 	// 让 planner 去重时别把"没显示"当成"没派过"，无需在提示词里另行解释。
@@ -591,7 +605,7 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 	if len(recentDone) > recentDoneCap {
 		recentDone = recentDone[:recentDoneCap]
 	}
-	out["recent_done_intents"] = compactIntents(recentDone, parentsOf, yieldsOf)
+	out["recent_done_intents"] = compactIntents(recentDone, parentsOf, yieldsOf, tokens)
 	// 收官态势(边际收益):最近 N 轮规划后,全任务有没有新的 fact/finding 产出。
 	// 连续 ≥3 轮零新产出且 frontier 空 → 提示用 goal_met 收官(预算保护:
 	// 这时候继续派大概率烧 token 无产出)。程序算好放在这里,planner 不用自己数。
@@ -887,7 +901,7 @@ func (t *ToolSet) relatedTaskOverviews() []map[string]any {
 			intent.Inherited = true
 			intent.SourceTaskID = source.Task.TaskID
 		}
-		intentResults := compactIntents(recentDone, parentsOf, yieldsOf)
+		intentResults := compactIntents(recentDone, parentsOf, yieldsOf, nil)
 		for i, intent := range recentDone {
 			intentResults[i]["summary"] = budget.take(intentResults[i]["summary"], 400)
 			acts, _, err := ts.ActivityPageForTerminalIntent(intent.ID, 0, 20)

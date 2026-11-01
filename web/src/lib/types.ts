@@ -940,6 +940,9 @@ export interface Settings {
   // 单次压缩请求的成员节点数上限。思考型模型能否收尾取决于单次输入规模
   // (实测 9 节点正常、26 节点把 32768 预算烧光也不出正文),所以要切分。
   compaction_max_members?: number;
+  // B10:压缩器钉住的 LLM 配置 id。0/未设置=跟随任务链上的规划器配置（历史行为）；
+  // >0=压缩调用永远跑在指定配置上，不参与任务链轮转。
+  compactor_profile_id?: number;
   // 任务并发上限:同时「运行中」的任务数上限。关闭=不限;开启后新建任务超限则排队,有空位自动启动。
   task_concurrency_enabled?: boolean; // 默认 false
   task_concurrency_limit?: number; // 开启后默认 5
@@ -1779,6 +1782,8 @@ export interface VulnIntelStatus {
   config?: VulnIntelConfig;
   sync_running?: boolean;
   sync_started_at?: number;
+  /** 当前轮阶段描述（「漏洞情报同步中（CVE / KEV / GHSA / PoC）」等；空 = 未在跑）。 */
+  sync_phase?: string;
   next_tick_hint?: string;
   nuclei?: {
     dir: string;

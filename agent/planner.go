@@ -30,7 +30,7 @@ type Planner struct {
 	maxTurns          int                                    // max agent turns per run (0 = unlimited)
 	killWork          func(intentID int64) error             // engine callback to terminate a running work (nil = off)
 	steerWork         func(intentID int64, msg string) error // engine callback to steer a running work mid-run (nil = off)
-	attributions      func() map[string]int                  // Guard 归因读取（nil = 概览不带 guard_attributions 块）
+	attributions      func() map[string]any                  // Guard 归因读取（nil = 概览不带 guard_attributions 块）
 	proxyAddr         string                                 // recording proxy for WebFetch (empty = direct)
 	proxyCACert       string                                 // recording proxy's CA cert path (HTTPS verify)
 	webSearch         WebSearchOpts                          // web_search tool backend selection (off by default)
@@ -127,7 +127,7 @@ func (p *Planner) SetSteerWork(fn func(intentID int64, msg string) error) { p.st
 
 // SetAttributions wires the per-task Guard failure-attribution reader so
 // graph_overview can carry guard_attributions (blocked/error 计数 → planner 换打法).
-func (p *Planner) SetAttributions(fn func() map[string]int) { p.attributions = fn }
+func (p *Planner) SetAttributions(fn func() map[string]any) { p.attributions = fn }
 
 // renderPlannerTodos formats the persistent planning todo for injection into the
 // wake-up prompt (empty when there are no todos yet — first wake-up).
@@ -160,6 +160,8 @@ func renderPlannerTodos(items []actool.Todo) string {
 //	"goal_edited"  — the human edited a goal from 总览的目标管理 (OldGoal→NewGoal 文本).
 //	"cancelled" — the human deleted intent IntentID (Detail = 删除原因). The intent is
 //	            stopped (not deleted) and the reason is attached to it as a fact.
+//	"review"   — intent IntentID ended exhausted with ZERO write-back (B2:「烧了一整轮
+//	            却什么都没留下」). Detail = 该方向最近几步的实动作摘要，事件自带复盘指令。
 type TriggerEvent struct {
 	Kind     string
 	IntentID int64
@@ -208,6 +210,14 @@ func renderTriggers(ts *db.ExplorationStore, evs []TriggerEvent) string {
 				sm = intentSummary(ts, ev.IntentID)
 			}
 			b.WriteString(fmt.Sprintf("\n- 意图 #%d 由用户删除，意图内容是：%s、删除原因是：%s。该意图已删除（不再执行）；请据此重新规划。", ev.IntentID, sm, ev.Detail))
+		case "review":
+			// B2：exhausted 且零写回。指令内嵌在事件文本里（不为此加长 planner 种子提示词）；
+			// 步骤摘要缺失时给出主动复盘的替代路径，不让指令变得空手。
+			tail := strings.TrimSpace(ev.Detail)
+			if tail == "" {
+				tail = "（步骤摘要缺失，可用 get_worker_trace 拉取该意图的执行轨迹）"
+			}
+			b.WriteString(fmt.Sprintf("\n- 意图 #%d（%s）撞上限收场，但这轮没有写回任何东西（事实 0 / 资产 0 / 漏报 0）。它最近几步的实际动作是：%s。请勿直接丢弃这段尝试：先落一条 fact（derived_from 指向该意图，写清「试过什么、为何无效」），然后再判断这个方向还值不值得派。", ev.IntentID, intentSummary(ts, ev.IntentID), tail))
 		default: // "done"
 			b.WriteString(fmt.Sprintf("\n- 意图 #%d（%s）的 worker 结束，输出结论：%s", ev.IntentID, intentSummary(ts, ev.IntentID), workerOutput(ts, ev.IntentID)))
 			// stop_reason 同步带出（B1）：exhausted=手段穷尽可接续、blocked=传输故障可重试、

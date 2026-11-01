@@ -1876,6 +1876,37 @@ func (s *ExplorationStore) ActivityDetail(id int64) (string, error) {
 // scanTrace reads the summary-only column set shared by the worker-trace tools
 // (ActivityTrace / ActivityTraceSearch). Detail is never selected here — it is
 // pulled separately, on demand, via ActivityByIDs.
+// ActivityTraceTailTerminalIntent returns the LAST `limit` steps of a terminal
+// intent's trace (newest first, reversed to chronological order before return).
+// B2 exhausted-postmortems read 这里: the review trigger carries the tail so the
+// planner can compose the "what was tried" fact without a second trace read.
+// Requires the intent to already be terminal (joined on state like its sibling).
+func (s *ExplorationStore) ActivityTraceTailTerminalIntent(nodeID int64, limit int) ([]Activity, error) {
+	if limit <= 0 {
+		limit = 3
+	}
+	rows, err := s.db.Query(`SELECT a.id, a.node_id, COALESCE(a.worker,''), COALESCE(a.kind,''), COALESCE(a.tool,''), a.is_error, COALESCE(a.summary,'')
+	FROM activity a
+	JOIN exploration_nodes n ON n.id=a.node_id AND n.exploration_id=a.exploration_id
+	WHERE a.exploration_id=$1 AND a.node_id=$2 AND n.kind='intent'
+	  AND n.state IN ('done','blocked','exhausted','stopped')
+	  AND a.kind NOT IN ('thinking','usage')
+	ORDER BY a.id DESC LIMIT $3`, s.expID, nodeID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out, err := scanTrace(rows)
+	if err != nil {
+		return nil, err
+	}
+	// DESC scan → chronological so the caller reads "last steps in order".
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
+}
+
 func scanTrace(rows *sql.Rows) ([]Activity, error) {
 	out := []Activity{}
 	for rows.Next() {

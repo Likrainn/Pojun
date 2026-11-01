@@ -5,7 +5,6 @@
 
 import type { ChatMention } from "@/lib/chat-mentions";
 import { MOCK } from "@/lib/mock/enabled";
-import { mockHandle } from "@/lib/mock/handler";
 import type {
   ActiveFindingRetest,
   Activity,
@@ -125,7 +124,13 @@ function getToken(): string | null {
 }
 
 export async function http<T>(path: string, init?: RequestInit): Promise<T> {
-  if (MOCK) return mockHandle<T>(init?.method ?? "GET", path, init?.body ?? null);
+  // Mock handler 按需加载:handler 静态引着 242KB 的 demo 数据集(data.ts),无条件
+  // import 会把它拖进首屏主包——生产构建(NEXT_PUBLIC_MOCK 未设)白白付出体积。
+  // 动态 import 让 MOCK=false 的构建走不到这条分支(DefinePlugin 折叠后整块不可达)。
+  if (MOCK) {
+    const { mockHandle } = await import("@/lib/mock/handler");
+    return mockHandle<T>(init?.method ?? "GET", path, init?.body ?? null);
+  }
   const token = getToken();
   const r = await fetch(`/api${path}`, {
     ...init,
@@ -865,6 +870,8 @@ export const api = {
   vulnintelStatus: () => get<VulnIntelStatus>(`/vulnintel/status`),
   vulnintelSaveConfig: (payload: VulnIntelConfigPatch) => put<{ ok: boolean }>(`/vulnintel/config`, payload),
   vulnintelSyncNow: () => post<{ accepted: boolean }>(`/vulnintel/sync`, {}),
+  // 中断当前同步轮（协作式取消：NVD/GHSA 请求与 nuclei git 子进程随 ctx 终止）。
+  vulnintelSyncCancel: () => post<{ cancelling: boolean }>(`/vulnintel/sync/cancel`, {}),
   vulnintelProbe: (payload?: { proxy?: string }) =>
     post<{
       proxy: string;

@@ -51,6 +51,10 @@ type taskLLMRuntime struct {
 	s        *Server
 	taskID   string
 	agentKey string
+	// pin > 0 时本 runtime 永远跑在该 profile 上（B10：压缩器等固定用途的场景），
+	// 覆盖 agent 绑定和任务链；profile 失效（被删/无 key）时落回原链继续跑。
+	// 不推进任务链的故障转移状态（绑定语义），也不参与链轮转。
+	pin int64
 }
 
 type taskLLMError struct {
@@ -111,12 +115,19 @@ type taskLLMStreamHooks struct {
 }
 
 // current resolves the provider this role runs on, by precedence:
-// Agent 绑定 → 任务 LLM 配置链 → 全局/环境配置。
-// 绑定优先于任务链：某个角色被显式指定了模型，就一直跑在那个模型上；绑定不存在或
-// 构建失败时才降级到任务链，任务链为空时再降级到全局配置。
+// pinned profile (B10) → Agent 绑定 → 任务 LLM 配置链 → 全局/环境配置。
+// pin 与绑定同语义：额度错误不推进任务链。绑定优先于任务链：某个角色被显式指定了模型，
+// 就一直跑在那个模型上；绑定不存在或构建失败时才降级到任务链，任务链为空时再降级到全局配置。
 // 返回的 profile id 只有走任务链时才非零 —— streamTaskLLM 以此判断额度错误是否
 // 应该推进任务的故障转移状态（绑定/全局路径不改任务链状态，沿用既有语义）。
 func (r *taskLLMRuntime) current() (taskLLMSelection, error) {
+	// pin 方（B10 压缩器等固定用途）：指定 profile 有效就直接返回，省掉任务状态
+	// 的 DB 读。profile 失效（被删/无 key）→ 落回下面的原链继续跑，不硬失败。
+	if r.pin > 0 {
+		if prov, cfg, ok := r.s.providerForProfile(r.pin); ok {
+			return taskLLMSelection{provider: prov, retry: cfg.Retry}, nil
+		}
+	}
 	taskNum, err := parseTaskID(r.taskID)
 	if err != nil {
 		return taskLLMSelection{}, err
@@ -156,11 +167,17 @@ func (r *taskLLMRuntime) current() (taskLLMSelection, error) {
 }
 
 // activeCfg resolves the task's currently-active LLM config, mirroring current()'s
-// source precedence (agent binding → active chain profile → global). Read-only and
+// source precedence (pin → agent binding → active chain profile → global). Read-only and
 // best-effort: ok=false when nothing resolves, leaving the per-setting fallback to
 // the caller. If failover switches profiles, the change takes effect on the next
 // agent run (a fresh Session is built per run in captureRun).
 func (r *taskLLMRuntime) activeCfg() (agent.Config, bool) {
+	// pin 方（B10）：与 current() 的 pin 分支一致，优先取钉住的配置。
+	if r.pin > 0 {
+		if _, cfg, ok := r.s.providerForProfile(r.pin); ok {
+			return cfg, true
+		}
+	}
 	taskNum, err := parseTaskID(r.taskID)
 	if err != nil {
 		return agent.Config{}, false
@@ -699,16 +716,25 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	pl.SetNoaEnabled(s.m.NoaCompactionEnabled) // 实验功能:noa 上下文压缩(平台级开关,每 run 读)
 	pl.SetKillWork(s.engine.KillWork)
 	pl.SetSteerWork(s.engine.SteerWork)
-	// Guard 归因 → graph_overview 的 guard_attributions 块（planner 看到 blocked/error
-	// 计数后可换打法，v0.3.88 体检 N5）。t.Guard 在 manager.go 建任务时必然创建。
-	pl.SetAttributions(t.Guard.Attributions)
+	// Guard 归因 → graph_overview 的 guard_attributions 块（计数 + B6 最近样本，
+	// planner 看到 blocked/error 计数与被拦命令后可换打法，v0.3.88 体检 N5）。
+	// t.Guard 在 manager.go 建任务时必然创建。
+	pl.SetAttributions(t.Guard.AttributionStats)
 	pl.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
 	pl.SetWebSearch(s.webSearchFor("planner"))
 	pl.SetConstraintInject(s.constraintInjectPlanner) // 操作约束注入 planner(可配置,默认开)
 	// cold-digest §7: 冷节点后台压缩。引擎经权威解析器实际驱动的就是这套 per-task planner
-	// (agentsForTask),Compactor 必须接在这里。走任务路由的 planner provider(§4:与 agent
-	// 同模型,随任务 LLM 链解析),压缩用 Complete 一次性生成 body。
-	compactor := agent.NewCompactor(plannerRuntime, "task-router")
+	// (agentsForTask),Compactor 必须接在这里。压缩用 Complete 一次性生成 body。
+	// B10:压缩器默认与 planner 共用 runtime(同任务链,历史行为);设置了
+	// compactor_profile_id 时给压缩器一个钉住该 profile 的独立 runtime——机械压缩
+	// 一次一发,体感上适合低价高速模型,不必跟着 planner 的长会话模型烧额度。
+	// pin 失效时 runtime 内部落回原链,不会有硬失败。设置在更新后只对新任务的
+	// bundle 生效(putSettings 里 invalidateTaskAgents 让运行中任务的下一轮也拿到)。
+	compactorRuntime := &taskLLMRuntime{s: s, taskID: t.ID, agentKey: "planner", pin: s.m.CompactorProfileID()}
+	if compactorRuntime.pin > 0 {
+		log.Printf("[compactor] task %s: 压缩器钉在 profile #%d", t.ID, compactorRuntime.pin)
+	}
+	compactor := agent.NewCompactor(compactorRuntime, "task-router")
 	// 压缩的输出预算与墙钟上限从设置读(0=用包内默认)。这两个值必须给足:
 	// 思考型模型的思考长度随 max_tokens 预算线性膨胀,预算给小了模型会一直想、
 	// 正文一个字都吐不出来(实测 1500/2048/4096/8192 全部正文为空)。
@@ -727,7 +753,7 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	main.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
 	main.SetWebSearch(s.webSearchFor("mainagent"))
 	main.SetSteerWork(s.engine.SteerWork) // steer_work：人对运行中 work 实时纠偏
-	main.SetAttributions(t.Guard.Attributions) // Guard 归因 → 概览（人在环路同享打回计数）
+	main.SetAttributions(t.Guard.AttributionStats) // Guard 归因样本（B6）→ 概览（人在环路同享打回计数与实物）
 	bundle := &taskAgentBundle{
 		runtime: goalRuntime, plannerRuntime: plannerRuntime, workerRuntime: workerRuntime,
 		mainRuntime: mainRuntime, pl: pl, wk: wk, main: main,

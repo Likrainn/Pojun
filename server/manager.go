@@ -232,6 +232,11 @@ type Manager struct {
 	vulnSyncMu        sync.Mutex
 	vulnSyncRunning   atomic.Bool
 	vulnSyncStartedAt atomic.Int64
+	// vulnSyncCancel 存当前那轮的可取消 ctx 的 CancelFunc（经 atomic.Value 包一层）；
+	// vulnSyncPhase 是当前阶段的人读描述（状态页展示「同步进行到哪一步」）。
+	// 两者都只在持有 vulnSyncMu 的那一轮里写，CancelVulnIntelSync 只读。
+	vulnSyncCancel atomic.Value // context.CancelFunc
+	vulnSyncPhase  atomic.Value // string
 	// 近期高危快通道的互斥：与主同步【不共用锁】——主同步一轮最长 30 分钟，
 	// 快通道必须能在那期间照常把新披露的高危送进库（共用锁会被拖到 30 分钟
 	// 一次，等于没有快通道）。快通道自己内部也互斥，避免重复拉同一窗口。
@@ -301,6 +306,10 @@ const (
 	// 思考型模型能否收尾取决于**单次输入规模**而非预算大小(实测 3 节点正常、
 	// 26 节点把 32768 预算烧光也不出正文),所以超大连通块必须切分。
 	settingCompactionMaxMembers = "compaction_max_members"
+	// 冷节点压缩器钉住的 LLM 配置 id（B10）。空/0 = 跟随任务链上的 planner 配置；
+	// >0 = 压缩器的一次性 Complete 调用永远跑在这个 profile 上（绑定语义：不参与
+	// 任务链轮转）。让用户能把长会话留给贵模型、把机械压缩留给便宜模型。
+	settingCompactorProfileID = "compactor_profile_id"
 	// LLM 轮询(故障转移)。默认关闭——开启后走「全局激活配置」的 agent 在当前配置
 	// 不可用(余额不足/key 失效/限流/服务异常)时自动切到下一个配置。
 	// settingLLMPoolBindFallback 仅在轮询开启时有意义:默认关闭,即 agent/任务显式
@@ -454,6 +463,35 @@ func (m *Manager) SetCompactionMaxMembers(n int) error {
 		return m.pg.SetSetting(settingCompactionMaxMembers, "")
 	}
 	return m.pg.SetSetting(settingCompactionMaxMembers, strconv.Itoa(n))
+}
+
+// CompactorProfileID 返回压缩器钉住的 LLM profile id（B10）。0/未设置 = 跟随任务链上
+// 的 planner 配置（历史行为）。
+func (m *Manager) CompactorProfileID() int64 {
+	if m == nil || m.pg == nil {
+		return 0
+	}
+	v, ok, err := m.pg.GetSetting(settingCompactorProfileID)
+	if err != nil || !ok {
+		return 0
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+// SetCompactorProfileID 持久化压缩器钉住的 profile id。id<=0 = 恢复跟随 planner（清空设置）。
+// 调用方负责由此触发的 agent 重建（putSettings 走 invalidateTaskAgents）。
+func (m *Manager) SetCompactorProfileID(id int64) error {
+	if m == nil || m.pg == nil {
+		return fmt.Errorf("数据库未就绪")
+	}
+	if id <= 0 {
+		return m.pg.SetSetting(settingCompactorProfileID, "")
+	}
+	return m.pg.SetSetting(settingCompactorProfileID, strconv.FormatInt(id, 10))
 }
 
 // Enrich returns the asset auto-completion engine (may be nil if init failed).
@@ -2005,6 +2043,18 @@ func (t *Task) NotifyFinding(intentID int64, summary string) {
 	t.trigMu.Lock()
 	t.pendingTriggers = append(t.pendingTriggers, agent.TriggerEvent{Kind: "finding", IntentID: intentID, Detail: summary})
 	t.trigMu.Unlock()
+	t.Notify()
+}
+
+// NotifyReview (B2) 记录一个意图以 exhausted 收场且**零写回**（事实/资产/漏报全 0）——
+// 「烧了一整轮却什么都没留下」。Detail 带着该方向最近几步的实动作摘要，planner 下一轮
+// 直接拿它复盘落 fact，不用再整跑轨迹。事件同样能穿过早退的收场轮（drain 在门后）。
+func (t *Task) NotifyReview(intentID int64, detail string) {
+	if intentID > 0 {
+		t.trigMu.Lock()
+		t.pendingTriggers = append(t.pendingTriggers, agent.TriggerEvent{Kind: "review", IntentID: intentID, Detail: detail})
+		t.trigMu.Unlock()
+	}
 	t.Notify()
 }
 

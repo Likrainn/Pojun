@@ -1298,6 +1298,33 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		}
 	}
 	log.Printf("[worker %s] task %s 意图 #%d 结束: %s (写回 %s)", name, t.ID, intent.ID, state, wrote)
+	// B2:exhausted 且零写回 = 「烧了一整轮、没留下任何事实/资产/漏报」。这不是普通
+	// 收场——把该方向的最近几步摘要随 review 触发发给 planner,让他复盘落 fact
+	// (血缘 derived_from 指向该意图),而不是让这段尝试就此蒸发。放在终态落库之后:
+	// ActivityTraceTailTerminalIntent 只对终态意图可见。
+	if state == "exhausted" && wrote.Total() == 0 {
+		var tail string
+		if acts, aErr := t.Store.ActivityTraceTailTerminalIntent(intent.ID, 3); aErr == nil && len(acts) > 0 {
+			parts := make([]string, 0, len(acts))
+			for _, a := range acts {
+				s := strings.TrimSpace(a.Summary)
+				if s == "" {
+					s = strings.TrimSpace(a.Tool)
+				}
+				if s == "" {
+					s = strings.TrimSpace(a.Kind)
+				}
+				// 单步摘要截到 ~200 字节,3 步也不至于把触发块撑爆。
+				if len(s) > 200 {
+					s = s[:200]
+				}
+				parts = append(parts, s)
+			}
+			tail = strings.Join(parts, "；")
+		}
+		t.NotifyReview(intent.ID, tail)
+		log.Printf("[worker %s] task %s 意图 #%d exhausted 零写回,已请求复盘 review", name, t.ID, intent.ID)
+	}
 	e.touch(t.ID)
 	t.NotifyDone(intent.ID) // results changed the graph -> wake the planner (with the just-finished intent id)
 	return true

@@ -44,6 +44,10 @@ export default function SystemSettingsPage() {
   const [compactionTimeout, setCompactionTimeout] = React.useState("0");
   const [compactionMembers, setCompactionMembers] = React.useState("0");
   const [savingCompaction, setSavingCompaction] = React.useState(false);
+  // B10:压缩器钉住的 LLM 配置。"0"=跟随规划器(历史行为)。选项来自 LLM 配置列表,
+  // 加载失败时不挡页面,只显示「跟随规划器」一项。
+  const [compactorProfile, setCompactorProfile] = React.useState("0");
+  const [llmProfileOpts, setLlmProfileOpts] = React.useState<{ id: string; name: string }[]>([]);
   // 操作约束注入范围(默认都开)。
   const [injectPlanner, setInjectPlanner] = React.useState(true);
   const [injectWorker, setInjectWorker] = React.useState(true);
@@ -66,6 +70,7 @@ export default function SystemSettingsPage() {
     setCompactionTokens(String(s.compaction_max_tokens ?? 0));
     setCompactionTimeout(String(s.compaction_timeout_seconds ?? 0));
     setCompactionMembers(String(s.compaction_max_members ?? 0));
+    setCompactorProfile(String(s.compactor_profile_id ?? 0));
     setInjectPlanner(s.constraints_inject_planner !== false);
     setInjectWorker(s.constraints_inject_worker !== false);
     setNoaCompaction(!!s.noa_compaction);
@@ -144,6 +149,11 @@ export default function SystemSettingsPage() {
       .then(apply)
       .catch(() => undefined)
       .finally(() => setLoaded(true));
+    // B10:压缩器模型下拉需要配置列表。best-effort——失败只是少几个选项。
+    api
+      .llmProfiles()
+      .then((ps) => setLlmProfileOpts(ps.map((p) => ({ id: p.id, name: p.name }))))
+      .catch(() => setLlmProfileOpts([]));
   }, [apply]);
 
   const toggleTraffic = (v: boolean) => {
@@ -198,6 +208,23 @@ export default function SystemSettingsPage() {
       })
       .catch((e) => {
         setNoaCompaction(!v); // revert on failure
+        toast.error(`保存失败：${(e as Error).message}`);
+      });
+  };
+
+  // B10:压缩器钉住的配置，onValueChange 即存（乐观更新）。对之后启动的任务与
+  // 运行中任务的下一轮生效——后端会在保存时重建任务 agent 集合。
+  const saveCompactorProfile = (v: string) => {
+    const prev = compactorProfile;
+    setCompactorProfile(v);
+    api
+      .setSettings({ compactor_profile_id: Number(v) })
+      .then((s) => {
+        apply(s);
+        toast.success(Number(v) > 0 ? "已保存压缩器模型（对之后启动的任务生效）" : "已恢复压缩器跟随规划器");
+      })
+      .catch((e) => {
+        setCompactorProfile(prev); // revert on failure
         toast.error(`保存失败：${(e as Error).message}`);
       });
   };
@@ -783,6 +810,30 @@ export default function SystemSettingsPage() {
               <Button onClick={saveCompaction} disabled={!loaded || savingCompaction}>
                 保存
               </Button>
+            </div>
+            {/* B10:压缩器模型。规划器跑贵模型时，把机械的冷节点压缩钉在便宜模型上省钱;
+                一次一发的设计让压缩对速度远比对话敏感，低价高速模型反而是更搭的选型。 */}
+            <div className="flex flex-wrap items-center gap-2">
+              <Label htmlFor="compactor-profile" className="w-40 text-sm">
+                压缩器模型
+              </Label>
+              <Select value={compactorProfile} onValueChange={saveCompactorProfile}>
+                <SelectTrigger id="compactor-profile" className="w-72">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">跟随规划器（默认）</SelectItem>
+                  {llmProfileOpts.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <span className="text-muted-foreground text-xs">
+                冷节点压缩是后台的一次性调用，适合钉在低价模型上省钱。钉住的配置被删/无 Key
+                时自动落回跟随规划器；额度耗尽按绑定语义直接失败（换配置或改回「跟随规划器」）。
+              </span>
             </div>
           </CardContent>
         </Card>

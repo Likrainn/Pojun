@@ -11,6 +11,7 @@ import {
   RefreshCwIcon,
   SaveIcon,
   ShieldAlertIcon,
+  SquareIcon,
   TriangleAlertIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -56,6 +57,7 @@ export default function VulnintelPage() {
   const [error, setError] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [syncing, setSyncing] = React.useState(false);
+  const [cancelling, setCancelling] = React.useState(false);
   const [probing, setProbing] = React.useState(false);
   const [probeRows, setProbeRows] = React.useState<ProbeRow[]>([]);
 
@@ -123,6 +125,19 @@ export default function VulnintelPage() {
     }
   };
 
+  // 中断当前同步轮：取消是协作式的，点下后后端杀 NVD/git 子进程，状态经轮询刷新。
+  const cancelSync = async () => {
+    setCancelling(true);
+    try {
+      await api.vulnintelSyncCancel();
+      toast.success("已发出中断请求，正在收尾");
+    } catch (e) {
+      toast.error("中断失败: " + e);
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   const probe = async () => {
     setProbing(true);
     try {
@@ -162,9 +177,11 @@ export default function VulnintelPage() {
             </Badge>
           )}
           {status?.sync_running && (
-            <Badge variant="outline">
-              <Loader2Icon className="mr-1 size-3 animate-spin" />
-              同步进行中
+            <Badge variant="outline" className="max-w-md">
+              <Loader2Icon className="mr-1 size-3 shrink-0 animate-spin" />
+              <span className="truncate">
+                同步进行中{status.sync_phase ? ` · ${status.sync_phase}` : ""}
+              </span>
             </Badge>
           )}
         </div>
@@ -173,6 +190,18 @@ export default function VulnintelPage() {
             <PlugZapIcon className={"mr-1 size-4" + (probing ? " animate-pulse" : "")} />
             测试连通性
           </Button>
+          {status?.sync_running && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-destructive"
+              onClick={cancelSync}
+              disabled={cancelling}
+            >
+              <SquareIcon className="mr-1 size-4" />
+              {cancelling ? "中断中…" : "中断同步"}
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={syncNow} disabled={syncing}>
             <RefreshCwIcon className={"mr-1 size-4" + (syncing ? " animate-spin" : "")} />
             立即同步
