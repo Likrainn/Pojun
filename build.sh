@@ -177,6 +177,9 @@ package_binary() {
   if [ -f "$(dirname "$binary")/artex-hostd" ]; then
     cp "$(dirname "$binary")/artex-hostd" "$package_root/"
   fi
+  if [ -f "$(dirname "$binary")/artex-maint" ]; then
+    cp "$(dirname "$binary")/artex-maint" "$package_root/"
+  fi
   # 守护启动脚本是正式入口：页面上的一键更新要靠它在进程退出后重新拉起，
   # 直接跑 artex 本体的话更新完就再也起不来了。按目标系统只带对应的那一份。
   if [ "$goos" = "windows" ]; then
@@ -245,6 +248,20 @@ build_target() {
       -o "$hostd_output" \
       ./cmd/artex-hostd
     compress_binary "$hostd_output" "$goos"
+    # 离线维护工具（历史数据修补：附件补登记 / 内置提示词更新）。仅在
+    # Linux 包内分发；install.sh 装到 /opt/artex/artex-maint。
+    maint_output="$(dirname "$output")/artex-maint"
+    info "编译 ${goos}/${goarch} 维护工具"
+    GOSUMDB="$ARTEX_GOSUMDB" \
+    CGO_ENABLED=0 \
+    GOOS="$goos" \
+    GOARCH="$goarch" \
+    go build \
+      -trimpath \
+      -ldflags "-s -w -buildid= -X main.version=${ARTEX_BUILD_VERSION}" \
+      -o "$maint_output" \
+      ./cmd/artex-maint
+    compress_binary "$maint_output" "$goos"
   fi
   if [ "$ARTEX_PACKAGE" = "1" ]; then package_binary "$output" "$goos" "$goarch"; fi
   ok "编译完成：$output"

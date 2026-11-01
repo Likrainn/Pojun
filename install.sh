@@ -400,7 +400,7 @@ deploy_binary(){
   # 二进制不能直接 cp 覆盖正在运行的进程（Linux 报 ETXTBSY "Text file busy"），
   # 先落到同目录临时名再 rename——rename 对运行中的可执行文件是合法的。
   # 这一步之前漏了，导致「重跑 install.sh 即升级」在服务运行状态下必然失败。
-  for b in artex artex-hostd; do
+  for b in artex artex-hostd artex-maint; do
     [ -f "$src/$b" ] || continue
     cp "$src/$b" "$INSTALL_DIR/.$b.new"
     chmod +x "$INSTALL_DIR/.$b.new"
@@ -409,7 +409,7 @@ deploy_binary(){
   # 其余文件（skills / README / start.sh / config.example.json）直接覆盖
   for f in "$src"/*; do
     base="$(basename "$f")"
-    case "$base" in artex|artex-hostd) continue ;; esac
+    case "$base" in artex|artex-hostd|artex-maint) continue ;; esac
     cp -r "$f" "$INSTALL_DIR/"
   done
   chmod +x "$INSTALL_DIR/start.sh"
