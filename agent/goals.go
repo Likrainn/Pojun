@@ -11,7 +11,7 @@ import (
 	acperm "github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 	"github.com/Autumn-27/norma/transcript"
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // goalsDefaultTmpl is the built-in EDITABLE body (段 [A]) of the goals-decomposer

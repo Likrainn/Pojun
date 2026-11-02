@@ -766,7 +766,7 @@ done 18 / exhausted 99 / blocked 82——**exhausted 是 done 的 5.5 倍**，�
 
 ### 修复的问题
 
-- **凭据脱敏把裸 `-p` 一律当口令，误伤了正常命令的路径**：0.3.53 的脱敏规则里 `-p` 的值只要不是纯端口就打码，但 `-p` 在不同命令里含义完全不同——`sshpass`/`mysql`/`psql` 的 `-p` 是口令，`mkdir`/`tar`/`cp` 的 `-p` 是 parents/preserve。实测 `mkdir -p /opt/artex/data/tasks/3/i661 && pwd` 的整条路径被打成 `***`，日志里根本看不出 agent 在操作哪个目录。
+- **凭据脱敏把裸 `-p` 一律当口令，误伤了正常命令的路径**：0.3.53 的脱敏规则里 `-p` 的值只要不是纯端口就打码，但 `-p` 在不同命令里含义完全不同——`sshpass`/`mysql`/`psql` 的 `-p` 是口令，`mkdir`/`tar`/`cp` 的 `-p` 是 parents/preserve。实测 `mkdir -p /opt/pojun/data/tasks/3/i661 && pwd` 的整条路径被打成 `***`，日志里根本看不出 agent 在操作哪个目录。
   - 规则改为**按命令限定**：只有 `mysql`/`mysqldump`/`psql`/`pg_dump`/`mariadb` 这几条命令的 `-p` 才当口令，其余命令的 `-p` 一律放行。
   - 补回归用例：`mkdir -p`、`tar -p`、`cp -p` 三条必须原样保留；`mysql -h... -uroot -pTr0ub4dor`、`psql -h ... -p hunter2` 两条必须打码。
 
@@ -950,7 +950,7 @@ done 18 / exhausted 99 / blocked 82——**exhausted 是 done 的 5.5 倍**，�
 - **SOCKS5 代理在「一键安装」里根本不工作**：`hostd` 的下载器用 `http.ProxyURL` 设置代理，而 `net/http` 的 ProxyURL 只懂 HTTP CONNECT 代理——喂它 `socks5://` 会得到 `unsupported protocol scheme`。表现是「填了 socks 代理但下载照样失败」，而报错完全指不到「协议不匹配」这个真因。改为按协议分流：`socks5://`/`socks5h://` 走 `golang.org/x/net/proxy` 的 SOCKS5 dialer，其余照旧。
 - **install.sh 装 PostGIS/PostgreSQL 那处 apt 没走代理**：`apt-get install -y postgresql` 是硬依赖，apt 源在国内机器上常常要代理才拉得到，代理不通时整条装机流程断在这一步。改为与其他 apt 调用一样带 Acquire 代理选项（dnf 同理，且只在确实有代理时才加 `--setopt=proxy=`，避免把空串当成无效代理）。
 - **install.sh 里的 curl 不认 `socks5://` URL**：curl 的 `-x` 接受不了这种 URL 形式（同样是 `unsupported protocol scheme`），它要的是 `--socks5-hostname host:port`。现在按协议构造 curl 参数，并在填了认证时补 `--socks5-basic -U`。
-- **代理只在装机期生效，运行期各走各的**：装机时代理只作用于脚本自身，Web「宿主环境」页的「一键安装」和后台情报同步读的是数据库里的 `install_proxy` 设置，两者不联动——用户装完机器还得再手填一遍代理。现在 install.sh 会把代理写进数据库 setting（Docker 形态写 `.env` 并通过 `ARTEX_INSTALL_PROXY` 透传），并在主服务与 hostd 两个 systemd 单元里都带上代理环境。
+- **代理只在装机期生效，运行期各走各的**：装机时代理只作用于脚本自身，Web「宿主环境」页的「一键安装」和后台情报同步读的是数据库里的 `install_proxy` 设置，两者不联动——用户装完机器还得再手填一遍代理。现在 install.sh 会把代理写进数据库 setting（Docker 形态写 `.env` 并通过 `POJUN_INSTALL_PROXY` 透传），并在主服务与 hostd 两个 systemd 单元里都带上代理环境。
 
 ### 新增
 
@@ -1129,7 +1129,7 @@ done 18 / exhausted 99 / blocked 82——**exhausted 是 done 的 5.5 倍**，�
 
 ### 新增的功能
 
-- **特权安装助手随主程序自动换装**：`artex-hostd` 装在 root 拥有的 `/usr/local/bin`，主服务受 `ProtectSystem=strict` 限制写不进去，升级只能由助手自己完成——它从官方 Release 下载、按 `SHA256SUMS` 校验、冒烟测试后原子替换（旧版留 `.prev`），再由 systemd 拉起。主服务只负责发现版本不一致并通知，能影响的只有「装哪个已发布版本」，影响不到「装什么内容」。
+- **特权安装助手随主程序自动换装**：`pojun-hostd` 装在 root 拥有的 `/usr/local/bin`，主服务受 `ProtectSystem=strict` 限制写不进去，升级只能由助手自己完成——它从官方 Release 下载、按 `SHA256SUMS` 校验、冒烟测试后原子替换（旧版留 `.prev`），再由 systemd 拉起。主服务只负责发现版本不一致并通知，能影响的只有「装哪个已发布版本」，影响不到「装什么内容」。
 - 抽出 `FetchVerifiedZip` / `ExtractMember` / `ReplaceBinary` / `SmokeTestBinary`，主程序与助手共用同一套校验逻辑。
 
 ### 修复的问题
@@ -1161,7 +1161,7 @@ done 18 / exhausted 99 / blocked 82——**exhausted 是 done 的 5.5 倍**，�
 
 ### 新增的功能
 
-- **宿主工具体检 + 一键安装**：缺失工具可在宿主环境页直接安装，执行者是随包发布的特权助手 `artex-hostd`（root 常驻、只监听一个 Unix socket、只认内置白名单工具 id）；体检清单与安装配方共用同一份 catalog，不存在「列了装不上」。
+- **宿主工具体检 + 一键安装**：缺失工具可在宿主环境页直接安装，执行者是随包发布的特权助手 `pojun-hostd`（root 常驻、只监听一个 Unix socket、只认内置白名单工具 id）；体检清单与安装配方共用同一份 catalog，不存在「列了装不上」。
 - **装机代理**：只作用于 apt 与 GitHub 下载，与目标流量代理、搜索代理、LLM 代理彼此独立。
 
 ### 变更
@@ -1263,7 +1263,7 @@ done 18 / exhausted 99 / blocked 82——**exhausted 是 done 的 5.5 倍**，�
 
 - **修复掩码可被「改目标地址、保留凭据」绕过（严重）**：配置合并对「未提及的键」一律保留库中原值，于是只改地址、对凭据避而不谈，就能让服务端把库里的真凭据发到任意地址，且完全静默。现规定目标地址一旦变化，每个凭据字段都必须显式表态——给新值，或显式留空表示不再需要。
 - **修复 markdown 系渠道对不可信内容零转义**：漏洞标题与摘要来自模型输出、资产 URL 来自扫描结果，构造的标题会在钉钉 / 企业微信 / 飞书里渲染成可点击外链，图片语法则会在渲染时被客户端拉取并泄露阅读者 IP。现统一做单行化 + markdown 元字符转义，且转义发生在各渠道的渲染出口而非共用的标题函数。
-- **修复投递地址的 SSRF 面**：此前环回、内网与云元数据地址一律可投递，而失败响应体前 200 字节会进 `last_error` 并被投递历史回显，构成一条半盲读原语。现改在**拨号阶段**设防，覆盖 DNS 重绑定，并拒绝跨主机重定向；环回与链路本地地址需显式设置 `ARTEX_NOTIFY_ALLOW_LOCAL=1`，RFC1918 私网仍放行（内网自建 SMTP 中继很常见）。
+- **修复投递地址的 SSRF 面**：此前环回、内网与云元数据地址一律可投递，而失败响应体前 200 字节会进 `last_error` 并被投递历史回显，构成一条半盲读原语。现改在**拨号阶段**设防，覆盖 DNS 重绑定，并拒绝跨主机重定向；环回与链路本地地址需显式设置 `POJUN_NOTIFY_ALLOW_LOCAL=1`，RFC1918 私网仍放行（内网自建 SMTP 中继很常见）。
 - **修复推送凭据经错误信息外泄**：钉钉的 `access_token`、企业微信的 `key`、Telegram 的 bot token 都在 URL 里，而投递失败时完整 URL 会流入 `last_error`、投递历史、服务端日志与前端提示四处。现统一脱敏，只保留 `scheme://host` 与底层原因。
 - **修复汇总消息被截断后整批标记已送达导致的静默丢失**：被截掉的漏洞既不在消息里、也不在失败列表里，投递历史却显示成功。现改为按**整条**打包，只标记装进本条的那些，其余回队列等下一条续发且不消耗重试次数，消息头部也写明还有多少条将在下一条继续。
 - **修复最低级别门槛打错字会让过滤器静默失效**：`min_severity` 写成 `hgih` 这类笔误时未知级别序数为 0，判定退化成恒真，用户以为只收高危、实际全部漏洞都被灌进群里。现于写入路径校验取值并列出可选值。
@@ -1874,7 +1874,7 @@ done 18 / exhausted 99 / blocked 82——**exhausted 是 done 的 5.5 倍**，�
 
 #### 新增的功能
 
-- 新增 `reset-password.sh` 重置管理员（用户名固定 `ARTEX`）密码：支持 local / docker 两种部署，连接信息可显式指定或自动从 `--dsn`/`$ARTEX_PG_DSN`/`config.json` 读取；在库内用 `pgcrypto` 生成与后端登录兼容的 bcrypt 哈希并写回 `settings.auth.password_hash`，重置后无需重启服务。密码经环境变量传入、不进入进程 argv，并做转义防注入。
+- 新增 `reset-password.sh` 重置管理员（用户名固定 `ARTEX`）密码：支持 local / docker 两种部署，连接信息可显式指定或自动从 `--dsn`/`$POJUN_PG_DSN`/`config.json` 读取；在库内用 `pgcrypto` 生成与后端登录兼容的 bcrypt 哈希并写回 `settings.auth.password_hash`，重置后无需重启服务。密码经环境变量传入、不进入进程 argv，并做转义防注入。
 
 ### 贡献者
 
@@ -1969,7 +1969,7 @@ done 18 / exhausted 99 / blocked 82——**exhausted 是 done 的 5.5 倍**，�
 - LLM 配置页改为配置卡片列表和右侧抽屉编辑，并提供 Pool 轮询顺序、优先级、排除项、健康状态和恢复操作。
 - 配置链耗尽信息支持窄屏换行；当前模型由会话列表图标改为当前会话标题旁的文字标签和完整 Tooltip。
 - 任务内各角色解析 LLM 的顺序调整为「Agent 绑定 → 任务配置链 → 全局」：显式绑定模型的角色始终跑在该模型上，未绑定角色才落到任务链，任务链为空时再落到全局。
-- 出站代理留空即直连，不再回退 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量（显式 `ARTEX_LLM_PROXY` 不受影响）；代理输入支持带账号密码的 `socks5://user:pass@host:port`。
+- 出站代理留空即直连，不再回退 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量（显式 `POJUN_LLM_PROXY` 不受影响）；代理输入支持带账号密码的 `socks5://user:pass@host:port`。
 
 #### 修复的问题
 
@@ -2120,13 +2120,13 @@ done 18 / exhausted 99 / blocked 82——**exhausted 是 done 的 5.5 倍**，�
 - [@Autumn-27](https://github.com/Autumn-27)
 - [@neouks](https://github.com/neouks)
 
-[Unreleased]: https://github.com/chu0119/ARTEX/compare/v0.3.10...HEAD
-[0.3.10]: https://github.com/chu0119/ARTEX/compare/v0.3.9...v0.3.10
-[0.3.9]: https://github.com/chu0119/ARTEX/compare/v0.3.8...v0.3.9
-[0.3.8]: https://github.com/chu0119/ARTEX/compare/v0.3.7...v0.3.8
-[0.3.7]: https://github.com/chu0119/ARTEX/compare/v0.3.6...v0.3.7
-[0.3.6]: https://github.com/chu0119/ARTEX/compare/v0.3.5...v0.3.6
-[0.3.5]: https://github.com/chu0119/ARTEX/compare/v0.3.4...v0.3.5
-[0.3.4]: https://github.com/chu0119/ARTEX/compare/v0.3.3...v0.3.4
-[0.3.3]: https://github.com/chu0119/ARTEX/compare/v0.3.2...v0.3.3
-[0.3.2]: https://github.com/chu0119/ARTEX/compare/v0.3.1...v0.3.2
+[Unreleased]: https://github.com/chu0119/Pojun/compare/v0.3.10...HEAD
+[0.3.10]: https://github.com/chu0119/Pojun/compare/v0.3.9...v0.3.10
+[0.3.9]: https://github.com/chu0119/Pojun/compare/v0.3.8...v0.3.9
+[0.3.8]: https://github.com/chu0119/Pojun/compare/v0.3.7...v0.3.8
+[0.3.7]: https://github.com/chu0119/Pojun/compare/v0.3.6...v0.3.7
+[0.3.6]: https://github.com/chu0119/Pojun/compare/v0.3.5...v0.3.6
+[0.3.5]: https://github.com/chu0119/Pojun/compare/v0.3.4...v0.3.5
+[0.3.4]: https://github.com/chu0119/Pojun/compare/v0.3.3...v0.3.4
+[0.3.3]: https://github.com/chu0119/Pojun/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/chu0119/Pojun/compare/v0.3.1...v0.3.2

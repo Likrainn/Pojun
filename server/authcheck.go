@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // totpCode 按 RFC 6238 生成当前时间窗的 6 位动态码（HMAC-SHA1，30s）。

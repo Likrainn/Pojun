@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // Store 提供漏洞情报的写入（同步器）与检索（agent 工具）。

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 type taskLLMResolution struct {

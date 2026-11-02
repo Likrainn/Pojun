@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ARTEX 安装 / 部署脚本（唯一入口）
+# POJUN 安装 / 部署脚本（唯一入口）
 #
 # 运行后选择部署形态，再走对应流程；也可用 --mode 直接指定。
 #
@@ -12,14 +12,14 @@
 #
 # 幂等：重复执行 = 升级程序，保留数据（config.json / jwt.key / data / 数据库 / .env）。
 #
-# 卸载：二进制 systemctl disable --now artex && rm -rf /opt/artex
-#       Docker   cd /opt/artex && docker compose down -v && rm -rf /opt/artex
+# 卸载：二进制 systemctl disable --now pojun && rm -rf /opt/pojun
+#       Docker   cd /opt/pojun && docker compose down -v && rm -rf /opt/pojun
 set -euo pipefail
 
-REPO="chu0119/ARTEX"
-INSTALL_DIR="/opt/artex"
-SERVICE="artex"
-RUN_USER="artex"
+REPO="chu0119/Pojun"
+INSTALL_DIR="/opt/pojun"
+SERVICE="pojun"
+RUN_USER="pojun"
 VERSION="latest"
 MODE="${MODE:-}"
 WITH_TOOLS=0
@@ -31,7 +31,7 @@ PG_SUPER="${PG_SUPER:-postgres}"
 INSTALL_PROXY="${INSTALL_PROXY:-${HTTPS_PROXY:-}}"
 IMAGE="ghcr.io/${REPO,,}"
 ASSUME_YES=0
-# 是否安装特权助手 artex-hostd(提供「系统 → 宿主环境」页的一键安装)。
+# 是否安装特权助手 pojun-hostd(提供「系统 → 宿主环境」页的一键安装)。
 # 默认装;不想让 Web 端具备装包能力时用 --no-installer 关掉。
 WITH_INSTALLER=1
 
@@ -42,7 +42,7 @@ die(){  printf '\033[31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 
 usage(){
   cat <<EOF
-ARTEX 安装脚本
+POJUN 安装脚本
 
 用法: $0 [选项]
 
@@ -52,7 +52,7 @@ ARTEX 安装脚本
 
 通用:
   --version=VER          版本，默认 latest（如 v0.3.20）
-  --dir=PATH             安装目录（默认 /opt/artex）
+  --dir=PATH             安装目录（默认 /opt/pojun）
   --listen=ADDR          监听地址（默认 :8787）
   --proxy=ADDR           流量记录代理地址（默认 127.0.0.1:8788）
   --install-proxy=URL    安装期出网代理，如 http://10.0.0.14:7897（默认取 \$HTTPS_PROXY）
@@ -60,9 +60,9 @@ ARTEX 安装脚本
   -h, --help             显示帮助
 
 二进制形态专用:
-  --user=NAME            运行用户（默认 artex）
+  --user=NAME            运行用户（默认 pojun）
   --pg-super=NAME        PostgreSQL 超级用户（默认 postgres）
-  --no-installer         不安装特权助手 artex-hostd（关掉 Web 端的一键安装能力）
+  --no-installer         不安装特权助手 pojun-hostd（关掉 Web 端的一键安装能力）
 
 Docker 形态专用:
   --image=REF            镜像名（默认 $IMAGE）
@@ -362,7 +362,7 @@ trap 'rm -rf "$TMP"' EXIT
 fetch_release(){
   resolve_version
   ok "目标版本: $VERSION"
-  local zip="artex-${VERSION#v}-${PKG_ARCH}.zip"
+  local zip="pojun-${VERSION#v}-${PKG_ARCH}.zip"
   info "下载 $zip"
   # 用原名落盘：SHA256SUMS 里写的就是这个名字，改名保存会让 sha256sum -c 找不到文件。
   #
@@ -392,7 +392,7 @@ deploy_binary(){
   command -v unzip   >/dev/null 2>&1 || { apt-get install -y unzip >/dev/null 2>&1 || dnf install -y unzip >/dev/null 2>&1 || die "需要 unzip"; }
 
   fetch_release
-  local src="$TMP/unpack/artex-${VERSION#v}-${PKG_ARCH}"
+  local src="$TMP/unpack/pojun-${VERSION#v}-${PKG_ARCH}"
   [ -d "$src" ] || die "发行包结构异常: 找不到 $src"
 
   mkdir -p "$INSTALL_DIR"
@@ -400,7 +400,7 @@ deploy_binary(){
   # 二进制不能直接 cp 覆盖正在运行的进程（Linux 报 ETXTBSY "Text file busy"），
   # 先落到同目录临时名再 rename——rename 对运行中的可执行文件是合法的。
   # 这一步之前漏了，导致「重跑 install.sh 即升级」在服务运行状态下必然失败。
-  for b in artex artex-hostd artex-maint; do
+  for b in pojun pojun-hostd pojun-maint; do
     [ -f "$src/$b" ] || continue
     cp "$src/$b" "$INSTALL_DIR/.$b.new"
     chmod +x "$INSTALL_DIR/.$b.new"
@@ -409,11 +409,11 @@ deploy_binary(){
   # 其余文件（skills / README / start.sh / config.example.json）直接覆盖
   for f in "$src"/*; do
     base="$(basename "$f")"
-    case "$base" in artex|artex-hostd|artex-maint) continue ;; esac
+    case "$base" in pojun|pojun-hostd|pojun-maint) continue ;; esac
     cp -r "$f" "$INSTALL_DIR/"
   done
   chmod +x "$INSTALL_DIR/start.sh"
-  ok "程序就绪: $INSTALL_DIR/artex"
+  ok "程序就绪: $INSTALL_DIR/pojun"
 
   # 运行用户
   if ! id "$RUN_USER" >/dev/null 2>&1; then
@@ -448,7 +448,7 @@ deploy_binary(){
     DB_PASS="$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
     # 角色已存在时**必须同步密码**，不能只跳过。
     #
-    # 踩过的坑（2026-10-22 真实安装）：机器上残留了旧的 artex 角色（重装 /
+    # 踩过的坑（2026-10-22 真实安装）：机器上残留了旧的 pojun 角色（重装 /
     # 换端口 / 忘了删角色），脚本走「角色已存在 → 跳过创建」这条分支，
     # 于是 config.json 里写的是**新生成**的密码，而库里的角色还是**旧密码**
     # → 服务起来就反复 SASL 认证失败退出，而报错完全指不到真因。
@@ -456,29 +456,29 @@ deploy_binary(){
     # 同步密码是安全的：config.json 由本脚本独占写入（不覆盖已有安装），
     # 密码以它为准。角色已存在但 config.json 也在时，install.sh 根本不会
     # 走到这里（见上面的「仅首次」判断），所以不会误改既有安装的密码。
-    if sudo -u "$PG_SUPER" psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='artex'" | grep -q 1; then
-      info "数据库角色 artex 已存在，同步密码"
-      sudo -u "$PG_SUPER" psql -c "ALTER ROLE artex LOGIN PASSWORD '$DB_PASS'" >/dev/null
+    if sudo -u "$PG_SUPER" psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='pojun'" | grep -q 1; then
+      info "数据库角色 pojun 已存在，同步密码"
+      sudo -u "$PG_SUPER" psql -c "ALTER ROLE pojun LOGIN PASSWORD '$DB_PASS'" >/dev/null
     else
-      sudo -u "$PG_SUPER" psql -c "CREATE ROLE artex LOGIN PASSWORD '$DB_PASS'"
+      sudo -u "$PG_SUPER" psql -c "CREATE ROLE pojun LOGIN PASSWORD '$DB_PASS'"
     fi
-    sudo -u "$PG_SUPER" psql -tAc "SELECT 1 FROM pg_database WHERE datname='artex'" | grep -q 1 \
-      || sudo -u "$PG_SUPER" createdb -O artex artex
+    sudo -u "$PG_SUPER" psql -tAc "SELECT 1 FROM pg_database WHERE datname='pojun'" | grep -q 1 \
+      || sudo -u "$PG_SUPER" createdb -O pojun pojun
     cat > "$INSTALL_DIR/config.json" <<JSON
 {
   "database": {
     "host": "127.0.0.1",
     "port": 5432,
-    "user": "artex",
+    "user": "pojun",
     "password": "$DB_PASS",
-    "dbname": "artex",
+    "dbname": "pojun",
     "sslmode": "disable"
   }
 }
 JSON
     chown "$RUN_USER:$RUN_USER" "$INSTALL_DIR/config.json"
     chmod 600 "$INSTALL_DIR/config.json"
-    ok "数据库 artex 就绪（密码已写入 config.json，权限 600）"
+    ok "数据库 pojun 就绪（密码已写入 config.json，权限 600）"
   else
     ok "沿用既有 config.json（升级不覆盖）"
   fi
@@ -503,7 +503,7 @@ JSON
   # 注：--dir 若指向 /home 或 /root 底下，ProtectHome=true 会把它整个藏起来，需自行去掉该项。
   cat > "/etc/systemd/system/${SERVICE}.service" <<UNIT
 [Unit]
-Description=ARTEX - AI Autonomous Penetration Testing System
+Description=POJUN - AI Autonomous Penetration Testing System
 Documentation=https://github.com/${REPO}
 After=network-online.target postgresql.service
 Wants=network-online.target postgresql.service
@@ -512,7 +512,7 @@ Wants=network-online.target postgresql.service
 # start.sh 自己也有崩溃次数上限（连续 5 次异常退出就放弃自拉起并非 0 退出），
 # 但那只是第一道防线：systemd 的 Restart=always 会立刻再拉起 start.sh，
 # 于是又变成「status 显示 active (running)、实际全挂」的状态（start.sh 活着，
-# artex 本体在崩）。这里的 StartLimit 是第二道：达到上限后单元真正进入
+# pojun 本体在崩）。这里的 StartLimit 是第二道：达到上限后单元真正进入
 # failed，运维一眼能看出服务是坏的，而不是被「running」骗过去。
 StartLimitIntervalSec=300
 StartLimitBurst=5
@@ -596,8 +596,8 @@ except Exception:
     d = {}
 host = str(d.get("host") or "127.0.0.1")
 port = str(d.get("port") or 5432)
-user = str(d.get("user") or "artex")
-dbname = str(d.get("dbname") or "artex")
+user = str(d.get("user") or "pojun")
+dbname = str(d.get("dbname") or "pojun")
 password = str(d.get("password") or "")
 
 # SQL 字符串字面量转义:单引号翻倍。代理地址已过 URL 校验(仅 http/https/socks5
@@ -623,21 +623,21 @@ PYEOF
   fi
 }
 
-# ── 特权安装助手 artex-hostd ─────────────────────
+# ── 特权安装助手 pojun-hostd ─────────────────────
 # 主服务单元带 NoNewPrivileges + ProtectSystem=strict,进程无法提权、/usr 只读,
 # 所以「一键安装」做不了——必须在外面用一个 root 助手。它只监听一个 Unix socket,
 # 且只认 hosttools 里的白名单工具 id,不接受自由命令。
 install_hostd(){
-  if [ ! -f "$INSTALL_DIR/artex-hostd" ]; then
-    warn "发行包里没有 artex-hostd（旧版本包），跳过；体检仍可用，一键安装不可用"
+  if [ ! -f "$INSTALL_DIR/pojun-hostd" ]; then
+    warn "发行包里没有 pojun-hostd（旧版本包），跳过；体检仍可用，一键安装不可用"
     return 0
   fi
   # 同上：目标可能是正在运行的助手，先落临时名再 rename 避免 ETXTBSY。
-  install -m 0755 "$INSTALL_DIR/artex-hostd" /usr/local/bin/.artex-hostd.new
-  mv -f /usr/local/bin/.artex-hostd.new /usr/local/bin/artex-hostd
+  install -m 0755 "$INSTALL_DIR/pojun-hostd" /usr/local/bin/.pojun-hostd.new
+  mv -f /usr/local/bin/.pojun-hostd.new /usr/local/bin/pojun-hostd
   cat > "/etc/systemd/system/${SERVICE}-hostd.service" <<UNIT
 [Unit]
-Description=ARTEX host tool installer (privileged helper)
+Description=POJUN host tool installer (privileged helper)
 Documentation=https://github.com/${REPO}
 After=network-online.target
 Wants=network-online.target
@@ -645,12 +645,12 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/artex-hostd -socket /run/artex/hostd.sock -socket-group ${RUN_USER}
+ExecStart=/usr/local/bin/pojun-hostd -socket /run/pojun/hostd.sock -socket-group ${RUN_USER}
 ${INSTALL_PROXY_ENV}
 Restart=always
 RestartSec=5
-# /run/artex 由 systemd 建好并随停止清理;socket 本身被助手下调成 0660 root:${RUN_USER}
-RuntimeDirectory=artex
+# /run/pojun 由 systemd 建好并随停止清理;socket 本身被助手下调成 0660 root:${RUN_USER}
+RuntimeDirectory=pojun
 RuntimeDirectoryMode=0755
 # 助手要调 apt/dnf、写 /usr/local/bin,所以不能像主服务那样把根挂成只读。
 #
@@ -686,7 +686,7 @@ UNIT
   systemctl enable "${SERVICE}-hostd" 2>/dev/null || true
   # 同主服务：已在跑时要显式 restart 才会换成新装的二进制。
   systemctl restart "${SERVICE}-hostd"
-  ok "安装助手已启动（${SERVICE}-hostd）→ socket /run/artex/hostd.sock"
+  ok "安装助手已启动（${SERVICE}-hostd）→ socket /run/pojun/hostd.sock"
 }
 
 # ══════════════════════════════════════════════════
@@ -700,7 +700,7 @@ deploy_docker(){
 
   # skills 要挂进容器：空目录挂载会覆盖镜像内置的 /app/skills，所以先从发行包取一份
   fetch_release
-  local src="$TMP/unpack/artex-${VERSION#v}-${PKG_ARCH}"
+  local src="$TMP/unpack/pojun-${VERSION#v}-${PKG_ARCH}"
   mkdir -p "$INSTALL_DIR/data" "$INSTALL_DIR/skills"
   if [ ! -f "$INSTALL_DIR/skills/.keep" ] && [ -z "$(ls -A "$INSTALL_DIR/skills" 2>/dev/null)" ]; then
     [ -d "$src/skills" ] && cp -r "$src/skills/." "$INSTALL_DIR/skills/"
@@ -712,12 +712,12 @@ deploy_docker(){
     local PG_PASS
     PG_PASS="$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
     cat > "$INSTALL_DIR/.env" <<ENV
-POSTGRES_USER=artex
+POSTGRES_USER=pojun
 POSTGRES_PASSWORD=$PG_PASS
-POSTGRES_DB=artex
-ARTEX_IMAGE=$IMAGE
-ARTEX_TAG=$VERSION
-ARTEX_INSTALL_PROXY=$INSTALL_PROXY
+POSTGRES_DB=pojun
+POJUN_IMAGE=$IMAGE
+POJUN_TAG=$VERSION
+POJUN_INSTALL_PROXY=$INSTALL_PROXY
 ENV
     chmod 600 "$INSTALL_DIR/.env"
     ok "已生成 $INSTALL_DIR/.env（含随机数据库密码，权限 600）"
@@ -726,10 +726,10 @@ ENV
     # 但代理要跟着本次安装走：它不是"首次生成"的密钥，升级时也该同步，
     # 否则用户改了代理后重跑安装，旧 .env 里的旧代理还在生效。
     if [ -n "$INSTALL_PROXY" ]; then
-      if grep -q '^ARTEX_INSTALL_PROXY=' "$INSTALL_DIR/.env"; then
-        sed -i "s|^ARTEX_INSTALL_PROXY=.*|ARTEX_INSTALL_PROXY=$INSTALL_PROXY|" "$INSTALL_DIR/.env"
+      if grep -q '^POJUN_INSTALL_PROXY=' "$INSTALL_DIR/.env"; then
+        sed -i "s|^POJUN_INSTALL_PROXY=.*|POJUN_INSTALL_PROXY=$INSTALL_PROXY|" "$INSTALL_DIR/.env"
       else
-        printf 'ARTEX_INSTALL_PROXY=%s\n' "$INSTALL_PROXY" >> "$INSTALL_DIR/.env"
+        printf 'POJUN_INSTALL_PROXY=%s\n' "$INSTALL_PROXY" >> "$INSTALL_DIR/.env"
       fi
       ok "已同步 .env 里的装机代理"
     fi
@@ -742,34 +742,34 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: \${POSTGRES_USER:-artex}
+      POSTGRES_USER: \${POSTGRES_USER:-pojun}
       POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}
-      POSTGRES_DB: \${POSTGRES_DB:-artex}
+      POSTGRES_DB: \${POSTGRES_DB:-pojun}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER:-artex} -d \${POSTGRES_DB:-artex}"]
+      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER:-pojun} -d \${POSTGRES_DB:-pojun}"]
       interval: 5s
       timeout: 3s
       retries: 10
     restart: unless-stopped
 
-  artex:
-    image: \${ARTEX_IMAGE}:\${ARTEX_TAG}
+  pojun:
+    image: \${POJUN_IMAGE}:\${POJUN_TAG}
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      ARTEX_PG_DSN: postgres://\${POSTGRES_USER:-artex}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-artex}?sslmode=disable
+      POJUN_PG_DSN: postgres://\${POSTGRES_USER:-pojun}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-pojun}?sslmode=disable
       ANTHROPIC_API_KEY: \${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: \${OPENAI_API_KEY:-}
-      ARTEX_LLM_PROVIDER: \${ARTEX_LLM_PROVIDER:-}
-      ARTEX_LLM_MODEL: \${ARTEX_LLM_MODEL:-}
-      ARTEX_LLM_BASE_URL: \${ARTEX_LLM_BASE_URL:-}
-      ARTEX_LLM_PROXY: \${ARTEX_LLM_PROXY:-}
+      POJUN_LLM_PROVIDER: \${POJUN_LLM_PROVIDER:-}
+      POJUN_LLM_MODEL: \${POJUN_LLM_MODEL:-}
+      POJUN_LLM_BASE_URL: \${POJUN_LLM_BASE_URL:-}
+      POJUN_LLM_PROXY: \${POJUN_LLM_PROXY:-}
       # 装机代理：宿主环境页的「一键安装」和后台情报同步用。Docker 形态没有
       # config.json，只能走环境变量；服务端读它作为数据库 setting 的兜底。
-      ARTEX_INSTALL_PROXY: \${ARTEX_INSTALL_PROXY:-}
+      POJUN_INSTALL_PROXY: \${POJUN_INSTALL_PROXY:-}
     ports:
       - "${PORT}:8787"
       - "127.0.0.1:${PROXY_PORT}:8788"
@@ -1004,7 +1004,7 @@ pwntools|pwntools"
 # 再预置 chromium 浏览器，否则首次启动还要联网下载。
 #
 # 浏览器装到 /opt/ms-playwright 而不是 ~/.cache/ms-playwright：
-# 服务以 artex 用户跑，root 家目录里的缓存它看不见。
+# 服务以 pojun 用户跑，root 家目录里的缓存它看不见。
 install_browser_mcp(){
   command -v node >/dev/null 2>&1 || { warn "  没有 node，browser MCP 跳过"; return 0; }
   command -v npm >/dev/null 2>&1 || { warn "  没有 npm，browser MCP 跳过"; return 0; }

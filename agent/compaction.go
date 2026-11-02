@@ -28,7 +28,7 @@ import (
 
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/transcript"
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // Compactor performs background cold-node compaction for many explorations.

@@ -1,11 +1,11 @@
-// artex-maint 是离线维护工具（v0.4.13）：对已有部署做一次性数据修补，
+// pojun-maint 是离线维护工具（v0.4.13）：对已有部署做一次性数据修补，
 // 不经过 Web 登录。两类操作：
 //
-//	artex-maint scan-artifacts  --config /opt/artex/config.json
+//	pojun-maint scan-artifacts  --config /opt/pojun/config.json
 //	 扫描所有任务工作目录里的历史图片，补登记为证据附件（与 v0.4.10 的
 //	 POST /api/tasks/{id}/artifacts/scan 同逻辑，用于批量补齐老任务）。
 //
-//	artex-maint reset-prompts --config /opt/artex/config.json [--force]
+//	pojun-maint reset-prompts --config /opt/pojun/config.json [--force]
 //	 把内置 agent 提示词更新到当前二进制内置版本（老库的 prompt 是首次安装
 //	 时的旧版，新版本不会自动覆盖）。默认只报告差异；--force 才写回（会覆盖
 //	 该 agent 的自定义编辑，慎用）。
@@ -27,8 +27,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chu0119/artex/agent"
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/agent"
+	"github.com/chu0119/pojun/db"
 )
 
 const (
@@ -40,12 +40,12 @@ const (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: artex-maint <scan-artifacts|reset-prompts|fix-permissions> --config <config.json> [--force]")
+		fmt.Fprintln(os.Stderr, "usage: pojun-maint <scan-artifacts|reset-prompts|fix-permissions> --config <config.json> [--force]")
 		os.Exit(2)
 	}
 	cmd := os.Args[1]
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
-	cfgPath := fs.String("config", "/opt/artex/config.json", "ARTEX config.json 路径")
+	cfgPath := fs.String("config", "/opt/pojun/config.json", "POJUN config.json 路径")
 	dataDir := fs.String("data", "", "数据目录（默认取 config 目录下的 data）")
 	force := fs.Bool("force", false, "reset-prompts: 覆盖自定义编辑，直接写回内置默认")
 	_ = fs.Parse(os.Args[2:])
@@ -222,9 +222,9 @@ func register(pg *db.DB, dataDir, taskID, path, taskRoot, sha string, size int64
 	if err != nil {
 		return err
 	}
-	// 0644：artex-maint 以 root 运行时，0600 会让服务进程（artex 用户）
+	// 0644：pojun-maint 以 root 运行时，0600 会让服务进程（pojun 用户）
 	// 读不了，http.ServeFile 直接 403「图片打不开」——v0.4.18 修复。
-	// 目录本身 700 属 artex，文件 0644 不会向其他用户暴露。
+	// 目录本身 700 属 pojun，文件 0644 不会向其他用户暴露。
 	if err := os.WriteFile(dst, data, 0o644); err != nil {
 		return err
 	}
@@ -303,8 +303,8 @@ func resetPrompts(pg *db.DB, force bool) {
 	fmt.Printf("\n完成：%d 个 agent 有差异\n", changed)
 }
 
-// fixArtifactPermissions 修复历史附件权限（v0.4.18）：早期 artex-maint 以 root
-// 写 0600 的附件，服务进程（artex 用户）读不了 → 图片 403。统一改为
+// fixArtifactPermissions 修复历史附件权限（v0.4.18）：早期 pojun-maint 以 root
+// 写 0600 的附件，服务进程（pojun 用户）读不了 → 图片 403。统一改为
 // 目录 0750 / 文件 0644（artifacts 目录本身在任务目录下，不对外）。
 func fixArtifactPermissions(dataDir string) {
 	root := filepath.Join(dataDir, "tasks")

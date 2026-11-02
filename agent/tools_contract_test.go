@@ -13,7 +13,7 @@ import (
 
 	actool "github.com/Autumn-27/norma/tool"
 
-	"github.com/chu0119/artex/intercept"
+	"github.com/chu0119/pojun/intercept"
 )
 
 // 真实 OpenAPI 3 契约样本（结构照 Swagger/OpenAPI 3 规范写）。

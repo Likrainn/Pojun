@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chu0119/artex/agent"
+	"github.com/chu0119/pojun/agent"
 )
 
 // 线上实测的错误原文（三个路径都被它咬过）。

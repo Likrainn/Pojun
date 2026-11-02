@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // 发现页「导出」用的渲染:把一批 findings 表行渲染成汇总 Markdown、单条 Markdown、

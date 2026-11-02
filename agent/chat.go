@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/chu0119/artex/db"
-	"github.com/chu0119/artex/guard"
-	"github.com/chu0119/artex/intercept"
+	"github.com/chu0119/pojun/db"
+	"github.com/chu0119/pojun/guard"
+	"github.com/chu0119/pojun/intercept"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/permission"

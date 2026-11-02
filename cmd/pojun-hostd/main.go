@@ -1,13 +1,13 @@
-// Command artex-hostd 是 ARTEX 的特权安装助手。
+// Command pojun-hostd 是 POJUN 的特权安装助手。
 //
 // 它由 systemd 以 root 常驻,只监听一个 Unix socket,按 hosttools 白名单执行
-// 「一键安装」。主服务(artex)受 NoNewPrivileges + ProtectSystem=strict 限制无法
+// 「一键安装」。主服务(pojun)受 NoNewPrivileges + ProtectSystem=strict 限制无法
 // 提权,因此安装动作必须落在这里。
 //
 // 用法:
 //
-//	artex-hostd -socket /run/artex/hostd.sock -socket-group artex
-//	artex-hostd -check          # 自检:包管理器/目录权限/白名单,不启动服务
+//	pojun-hostd -socket /run/pojun/hostd.sock -socket-group pojun
+//	pojun-hostd -check          # 自检:包管理器/目录权限/白名单,不启动服务
 package main
 
 import (
@@ -25,8 +25,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chu0119/artex/hostd"
-	"github.com/chu0119/artex/hosttools"
+	"github.com/chu0119/pojun/hostd"
+	"github.com/chu0119/pojun/hosttools"
 )
 
 // version 由构建时 -ldflags "-X main.version=..." 注入。
@@ -34,7 +34,7 @@ var version = "dev"
 
 func main() {
 	var (
-		socketPath  = flag.String("socket", "/run/artex/hostd.sock", "Unix socket 路径")
+		socketPath  = flag.String("socket", "/run/pojun/hostd.sock", "Unix socket 路径")
 		socketMode  = flag.String("socket-mode", "0660", "socket 权限(八进制)")
 		socketGroup = flag.String("socket-group", "", "socket 属组(留空=不改,通常填主服务的运行用户)")
 		check       = flag.Bool("check", false, "自检后退出(不启动服务)")
@@ -43,7 +43,7 @@ func main() {
 	flag.Parse()
 
 	if *showVer {
-		fmt.Println("artex-hostd", version)
+		fmt.Println("pojun-hostd", version)
 		return
 	}
 
@@ -103,7 +103,7 @@ func main() {
 
 // runCheck 不启动服务,只报告环境是否满足安装条件——供部署脚本与排障用。
 func runCheck(socketPath, group string, mgr hostd.PkgMgr) {
-	fmt.Printf("artex-hostd %s\n", version)
+	fmt.Printf("pojun-hostd %s\n", version)
 	fmt.Printf("euid        : %d (需要 0)\n", os.Geteuid())
 	fmt.Printf("pkg_mgr     : %q (apt/dnf 用于系统源工具)\n", string(mgr))
 	fmt.Printf("socket      : %s\n", socketPath)

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // TestCoreTaskLifecyclePG exercises the migrated core (tasks/exploration on PG)

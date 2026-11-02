@@ -35,7 +35,7 @@ function detailOf(error: Error & { digest?: string }): string {
 export default function AppError({ error, reset }: ErrorProps) {
   React.useEffect(() => {
     // 同时打到 console，方便手机连着调试或用户反馈时附带。
-    console.error("[artex] 页面渲染出错:", error);
+    console.error("[pojun] 页面渲染出错:", error);
   }, [error]);
 
   return (

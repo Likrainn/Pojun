@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chu0119/artex/llmpool"
+	"github.com/chu0119/pojun/llmpool"
 	"github.com/Autumn-27/norma/harness"
 	"github.com/Autumn-27/norma/llm"
 )

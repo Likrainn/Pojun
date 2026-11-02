@@ -15,9 +15,9 @@ import (
 //
 // 刻意做成构建期变量而不是**运行时配置项**：更新源可配，等于给任何能改配置的人
 // 一条远程代码执行通道，对一个渗透测试平台来说这个口子开不得。二开/镜像要在构建时
-// 用 `-ldflags "-X github.com/chu0119/artex/selfupdate.Repo=owner/name"` 覆盖，
+// 用 `-ldflags "-X github.com/chu0119/pojun/selfupdate.Repo=owner/name"` 覆盖，
 // 这样改的是产物本身，不是运行期可篡改的开关。
-var Repo = "chu0119/artex"
+var Repo = "chu0119/pojun"
 
 func latestURL() string { return "https://api.github.com/repos/" + Repo + "/releases/latest" }
 
@@ -98,7 +98,7 @@ func FetchLatest(ctx context.Context, c *http.Client) (*Release, error) {
 // FetchByTag 查询指定 tag 的 Release（伴随二进制自我换装时按主程序版本对齐用）。
 //
 // 版本号有两种写法：Release tag 带 v 前缀（v0.3.23），而二进制里注入的版本号不带
-// （build.sh 会 `${ARTEX_BUILD_VERSION#v}` 剥掉）。两种都试，避免因写法差异
+// （build.sh 会 `${POJUN_BUILD_VERSION#v}` 剥掉）。两种都试，避免因写法差异
 // 报"版本不存在"——实测 hostd 拿 0.3.23 去查就撞上了这个。
 func FetchByTag(ctx context.Context, c *http.Client, tag string) (*Release, error) {
 	tag = strings.TrimSpace(tag)
@@ -132,7 +132,7 @@ func fetchRelease(ctx context.Context, c *http.Client, apiURL, what string) (*Re
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "artex-selfupdate")
+	req.Header.Set("User-Agent", "pojun-selfupdate")
 
 	resp, err := c.Do(req)
 	if err != nil {
@@ -161,9 +161,9 @@ func fetchRelease(ctx context.Context, c *http.Client, apiURL, what string) (*Re
 }
 
 // AssetName 返回当前平台对应的发布包名，与 build.sh 的 package_binary 保持一致：
-// artex-<版本>-<os>-<arch>.zip（版本号不带 v 前缀）。
+// pojun-<版本>-<os>-<arch>.zip（版本号不带 v 前缀）。
 func AssetName(tag, goos, goarch string) string {
-	return fmt.Sprintf("artex-%s-%s-%s.zip", strings.TrimPrefix(tag, "v"), goos, goarch)
+	return fmt.Sprintf("pojun-%s-%s-%s.zip", strings.TrimPrefix(tag, "v"), goos, goarch)
 }
 
 // FindAsset 在 Release 里按名字找资产。

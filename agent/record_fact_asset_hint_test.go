@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	actool "github.com/Autumn-27/norma/tool"
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // record_fact 传了不存在的 asset id 时：事实必须写进去，且模型必须被告知

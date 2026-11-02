@@ -51,21 +51,21 @@ jobs:
           path: server/webui/dist
       - name: Build and package with build.sh
         env:
-          ARTEX_TARGET_OS: ${{ matrix.goos }}
-          ARTEX_TARGET_ARCH: ${{ matrix.goarch }}
-          ARTEX_BUILD_VERSION: ${{ github.ref_name }}
-          ARTEX_SKIP_FRONTEND: "1"
-          ARTEX_SKIP_NPM_CI: "1"
+          POJUN_TARGET_OS: ${{ matrix.goos }}
+          POJUN_TARGET_ARCH: ${{ matrix.goarch }}
+          POJUN_BUILD_VERSION: ${{ github.ref_name }}
+          POJUN_SKIP_FRONTEND: "1"
+          POJUN_SKIP_NPM_CI: "1"
           # UPX 自解压 ELF 在部分 Linux 内核、虚拟化和安全策略下会崩溃。
           # Release 使用 Go linker 裁剪和 zip 压缩，优先保证可移植性。
-          ARTEX_COMPRESS: "0"
-          ARTEX_PACKAGE: "1"
-          ARTEX_PACKAGE_DIR: dist
+          POJUN_COMPRESS: "0"
+          POJUN_PACKAGE: "1"
+          POJUN_PACKAGE_DIR: dist
         run: |
-          ./build.sh --target "${ARTEX_TARGET_OS}/${ARTEX_TARGET_ARCH}"
+          ./build.sh --target "${POJUN_TARGET_OS}/${POJUN_TARGET_ARCH}"
       - name: Smoke test Linux amd64 binary
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
-        run: dist/artex-linux-amd64/artex -h
+        run: dist/pojun-linux-amd64/pojun -h
       - uses: actions/upload-artifact@v4
         with:
           name: pkg-${{ matrix.goos }}-${{ matrix.goarch }}
@@ -75,7 +75,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bin-linux-${{ matrix.goarch }}
-          path: dist/artex-linux-${{ matrix.goarch }}/artex
+          path: dist/pojun-linux-${{ matrix.goarch }}/pojun
 
   # ③ 汇总所有 zip → 创建 GitHub Release
   release:
@@ -106,9 +106,9 @@ jobs:
 
   # ④ 多架构镜像（复用 binaries 编好的 Linux 二进制，镜像里只装工具 + 放二进制；
   #    arm64 仅需模拟 apt 层，构建快很多）。
-  #    始终发布到 GHCR（ghcr.io/chu0119/artex）——用 Actions 内置 GITHUB_TOKEN，
+  #    始终发布到 GHCR（ghcr.io/chu0119/pojun）——用 Actions 内置 GITHUB_TOKEN，
   #    无需配置任何 secrets；若另外配置了 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN
-  #    secrets，则同时推送到 <DockerHub用户名>/artex，方便习惯 Docker Hub 的用户。
+  #    secrets，则同时推送到 <DockerHub用户名>/pojun，方便习惯 Docker Hub 的用户。
   docker-cred-check:
     runs-on: ubuntu-latest
     outputs:
@@ -159,9 +159,9 @@ jobs:
           DOCKERHUB_OK: ${{ needs.docker-cred-check.outputs.ok }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          imgs="ghcr.io/chu0119/artex"
+          imgs="ghcr.io/chu0119/pojun"
           if [ "$DOCKERHUB_OK" = "true" ] && [ -n "$DOCKERHUB_USERNAME" ]; then
-            imgs="$imgs,${DOCKERHUB_USERNAME}/artex"
+            imgs="$imgs,${DOCKERHUB_USERNAME}/pojun"
           fi
           echo "images=$imgs" >> "$GITHUB_OUTPUT"
       - uses: docker/metadata-action@v5

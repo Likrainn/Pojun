@@ -329,7 +329,7 @@ export default function NotifyPage() {
             <Label htmlFor="n-base">回链地址</Label>
             <Input
               id="n-base"
-              placeholder="https://artex.example.com"
+              placeholder="https://pojun.example.com"
               value={baseURL}
               onChange={(e) => setBaseURL(e.target.value)}
             />

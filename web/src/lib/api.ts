@@ -124,7 +124,7 @@ import type {
 
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem("artex_token");
+  return localStorage.getItem("pojun_token");
 }
 
 export async function http<T>(path: string, init?: RequestInit): Promise<T> {
@@ -146,8 +146,8 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (r.status === 401) {
     if (typeof window !== "undefined") {
-      localStorage.removeItem("artex_token");
-      document.cookie = "artex_token=; path=/; max-age=0";
+      localStorage.removeItem("pojun_token");
+      document.cookie = "pojun_token=; path=/; max-age=0";
       window.location.href = "/login";
     }
     throw new Error("未授权");
@@ -190,7 +190,7 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
 // Token is appended as ?token= because SSE can't carry cookies cross-origin.
 // mockReport returns a canned Markdown report for the demo.
 function mockReport(_task?: string): string {
-  return `# ARTEX 渗透测试报告 — Acme Corp
+  return `# POJUN 渗透测试报告 — Acme Corp
 
 ## 概览
 - 范围：acme.com（含 www / admin / api / shop / vpn 子域）
@@ -903,7 +903,7 @@ export const api = {
       summary: { available: string[]; missing: { name: string; install: string }[]; hint: string };
       deploy_mode: "docker" | "host";
     }>(`/tools/inventory`),
-  // 宿主环境:体检(含一键安装可用性)+ 一键安装(由特权助手 artex-hostd 执行)
+  // 宿主环境:体检(含一键安装可用性)+ 一键安装(由特权助手 pojun-hostd 执行)
   hostenvStatus: () => get<HostenvStatus>(`/hostenv/status`),
   hostenvInstall: (id: string) => post<InstallJob>(`/hostenv/install`, { id }),
   hostenvInstallBatch: (ids: string[]) => post<InstallBatchResult>(`/hostenv/install-batch`, { ids }),
@@ -972,7 +972,7 @@ export const api = {
     const blob = await r.blob();
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `artex-report-${task || "active"}-${new Date().toISOString().slice(0, 10)}.docx`;
+    a.download = `pojun-report-${task || "active"}-${new Date().toISOString().slice(0, 10)}.docx`;
     a.click();
     URL.revokeObjectURL(a.href);
   },
@@ -986,7 +986,7 @@ export const api = {
     const blob = await r.blob();
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `artex-finding-${id}-${new Date().toISOString().slice(0, 10)}.docx`;
+    a.download = `pojun-finding-${id}-${new Date().toISOString().slice(0, 10)}.docx`;
     a.click();
     URL.revokeObjectURL(a.href);
   },

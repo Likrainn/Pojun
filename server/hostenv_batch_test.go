@@ -53,7 +53,7 @@ func startFakeHostd(t *testing.T) string {
 // 进 skipped 带原因；重复项去重。
 func TestHostenvInstallBatch(t *testing.T) {
 	sock := startFakeHostd(t)
-	t.Setenv("ARTEX_HOSTD_SOCKET", sock)
+	t.Setenv("POJUN_HOSTD_SOCKET", sock)
 	s := &Server{}
 
 	body, _ := json.Marshal(map[string]any{

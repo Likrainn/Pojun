@@ -14,15 +14,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chu0119/artex/db"
-	"github.com/chu0119/artex/traffic"
+	"github.com/chu0119/pojun/db"
+	"github.com/chu0119/pojun/traffic"
 )
 
 func evidenceFixture(t *testing.T) (*Store, db.RecordFindingInput, string) {
 	t.Helper()
-	dsn := os.Getenv("ARTEX_PG_DSN")
+	dsn := os.Getenv("POJUN_PG_DSN")
 	if dsn == "" {
-		t.Skip("ARTEX_PG_DSN is required for evidence integration tests")
+		t.Skip("POJUN_PG_DSN is required for evidence integration tests")
 	}
 	pg, err := db.Open(dsn)
 	if err != nil {

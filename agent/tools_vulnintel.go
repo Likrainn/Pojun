@@ -16,8 +16,8 @@ import (
 
 	actool "github.com/Autumn-27/norma/tool"
 
-	"github.com/chu0119/artex/selfupdate"
-	"github.com/chu0119/artex/vulnintel"
+	"github.com/chu0119/pojun/selfupdate"
+	"github.com/chu0119/pojun/vulnintel"
 )
 
 // vulnintelStore is process-wide (set once at server startup); safe for

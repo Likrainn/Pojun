@@ -1,4 +1,4 @@
-// Package db is the PostgreSQL data source for ARTEX (取代旧 graph 单文件 SQLite)。
+// Package db is the PostgreSQL data source for POJUN (取代旧 graph 单文件 SQLite)。
 // 它打开连接、应用 schema、并 seed 内置 agent 与变量目录。
 package db
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chu0119/artex/config"
+	"github.com/chu0119/pojun/config"
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx database/sql driver ("pgx")
 )
@@ -88,7 +88,7 @@ func coordinateWithSchemaMigration(tx *sql.Tx) error {
 }
 
 // DSN resolves the PostgreSQL connection string and reports where it came from.
-// Precedence: env ARTEX_PG_DSN > config file (config.json). There is no
+// Precedence: env POJUN_PG_DSN > config file (config.json). There is no
 // built-in default — it errors if neither source is configured.
 func DSN() (dsn, source string, err error) {
 	return config.PostgresDSN()
@@ -596,7 +596,7 @@ func (d *DB) migrateContextWindowK() error {
 // 当时的判断是「给太紧」——实测生产环境里 89 个意图 exhausted vs 8 个 done。
 //
 // 那个归因是错的。exhausted 不是失败信号，是「这一小步没做完」的信号：上游
-// (ARTEX-upstream) 的种子默认就是 1200s，靠「短 run → exhausted → 规划者看
+// (POJUN-upstream) 的种子默认就是 1200s，靠「短 run → exhausted → 规划者看
 // trace 判进度 → 续派或换打法」形成小步快跑的闭环，从来不需要长 run。
 //
 // 拉长到 3600s 反而把这个闭环拆了：run 拖到 1 小时，撞的几乎都是硬上限，

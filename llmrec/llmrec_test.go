@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/transcript"
 	"github.com/google/uuid"
@@ -93,9 +93,9 @@ func (meteredStreamProvider) Stream(context.Context, llm.CompletionRequest) iter
 }
 
 func TestSideUsageRecordedOnceOnConsumerCancellation(t *testing.T) {
-	dsn := os.Getenv("ARTEX_PG_DSN")
+	dsn := os.Getenv("POJUN_PG_DSN")
 	if dsn == "" {
-		t.Skip("requires isolated ARTEX_PG_DSN")
+		t.Skip("requires isolated POJUN_PG_DSN")
 	}
 	pg, err := db.Open(dsn)
 	if err != nil {

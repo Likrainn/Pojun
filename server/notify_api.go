@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chu0119/artex/db"
-	"github.com/chu0119/artex/notify"
+	"github.com/chu0119/pojun/db"
+	"github.com/chu0119/pojun/notify"
 )
 
 // 本文件是推送功能的 HTTP 接口。全部路由挂在 requireAuth 之后（见 Handler()），
@@ -448,8 +448,8 @@ func notifyTestMessage(baseURL string) notify.Message {
 			Name:      "测试消息 · 渠道配置正常",
 			VulnClass: "连通性测试",
 			Severity:  "low",
-			Summary:   "这是 ARTEX 推送渠道的测试消息，收到即表示该渠道配置可用。",
-			Assets:    []string{"artex.example.com"},
+			Summary:   "这是 POJUN 推送渠道的测试消息，收到即表示该渠道配置可用。",
+			Assets:    []string{"pojun.example.com"},
 			DetailURL: baseURL,
 		}},
 		HomeURL: baseURL,

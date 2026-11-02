@@ -10,7 +10,7 @@ import (
 
 	actool "github.com/Autumn-27/norma/tool"
 
-	"github.com/chu0119/artex/intercept"
+	"github.com/chu0119/pojun/intercept"
 )
 
 // API 契约枚举工具：从目标暴露的 OpenAPI/Swagger/Postman 契约文件里读出
@@ -192,7 +192,7 @@ func WriteContractScript(dir string) (string, error) {
 // 为什么把「需要鉴权的接口」单列：越权/未授权挖掘的入口就是这批接口。
 // 混在几百个接口里，模型大概率只看前几个。
 const contractScriptSource = `#!/usr/bin/env python3
-"""API 契约解析（ARTEX agent 工具 api_contract 的执行端）。
+"""API 契约解析（POJUN agent 工具 api_contract 的执行端）。
 
 用法: api_contract.py <契约文件>
 支持 OpenAPI 3 / Swagger 2.0（JSON）；YAML 不解析（需要额外依赖），

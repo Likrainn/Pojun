@@ -6,12 +6,12 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/chu0119/artex/db"
-	"github.com/chu0119/artex/traffic"
+	"github.com/chu0119/pojun/db"
+	"github.com/chu0119/pojun/traffic"
 )
 
 // DTO/serialization layer: each handler emits EXACTLY the frontend's spec shapes
-// (artex/web/src/lib/types.ts). These reshape db package structs so the
+// (pojun/web/src/lib/types.ts). These reshape db package structs so the
 // internal DB model never leaks over the API. The db structs and the frontend are
 // the canonical contracts; this file maps one onto the other.
 

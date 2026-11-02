@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // companyScopeInputs accepts both the new [{kind,value}] contract and the

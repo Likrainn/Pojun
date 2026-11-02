@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	actool "github.com/Autumn-27/norma/tool"
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // ArtifactRecorder 由 host（server）实现：校验路径边界与限额、复制到任务附件

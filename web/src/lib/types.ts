@@ -1,4 +1,4 @@
-// ARTEX domain model — types used across the UI.
+// POJUN domain model — types used across the UI.
 // Derived from the functional spec (section 7: 关键数据形状).
 
 export type TaskStatus = "created" | "queued" | "running" | "paused" | "done" | "failed" | "timeout";
@@ -1669,7 +1669,7 @@ export interface UpdateCheck {
   os: string;
   arch: string;
   repo: string;
-  /** 是否存在可回滚的上一版本（artex.old）。 */
+  /** 是否存在可回滚的上一版本（pojun.old）。 */
   has_backup: boolean;
   /** 本次启动时自更新自举的结论（换装失败 / 已回滚等），无事发生时为空。 */
   boot_notice?: string;
@@ -1726,7 +1726,7 @@ export interface HostTool {
   category: "network" | "dns" | "web" | "cred" | "code" | "pivot" | "oob" | "exploit" | "material" | "runtime" | "middleware" | "";
 }
 
-/** 一键安装是否可用，取决于特权助手 artex-hostd 是否在线（Docker 部署下不在线）。 */
+/** 一键安装是否可用，取决于特权助手 pojun-hostd 是否在线（Docker 部署下不在线）。 */
 export interface HostenvInstaller {
   available: boolean;
   reason: string;

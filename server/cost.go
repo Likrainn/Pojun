@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // modelPrice 是内置参考价（USD / 1M tokens）。定价表只能近似：各家价格随

@@ -3,7 +3,7 @@ package server
 import (
 	"testing"
 
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // A stored catalog entry that collides with a global runtime var (e.g. a legacy

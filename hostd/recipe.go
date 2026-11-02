@@ -1,4 +1,4 @@
-// Package hostd:ARTEX 的特权安装助手(artex-hostd)。
+// Package hostd:POJUN 的特权安装助手(pojun-hostd)。
 //
 // 为什么需要它:主服务 systemd 单元带 NoNewPrivileges=true + ProtectSystem=strict
 // + CapabilityBoundingSet=CAP_NET_BIND_SERVICE,进程无法提权、/usr 只读——所以
@@ -15,7 +15,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/chu0119/artex/hosttools"
+	"github.com/chu0119/pojun/hosttools"
 )
 
 // PkgMgr 系统包管理器。

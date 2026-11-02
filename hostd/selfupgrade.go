@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/chu0119/artex/selfupdate"
+	"github.com/chu0119/pojun/selfupdate"
 )
 
 // ValidVersionTag 报告 tag 是否是允许的版本号形态。校验实现放在 selfupdate，
@@ -49,10 +49,10 @@ func (s *Server) UpgradeSelf(ctx context.Context, tag, proxy string) error {
 	}
 	defer func() { _ = os.Remove(zipPath) }()
 
-	tmp := filepath.Join(dir, ".artex-hostd.new")
+	tmp := filepath.Join(dir, ".pojun-hostd.new")
 	defer func() { _ = os.Remove(tmp) }()
-	if err := selfupdate.ExtractMember(zipPath, "artex-hostd", tmp); err != nil {
-		return fmt.Errorf("发布包里没有 artex-hostd：%w", err)
+	if err := selfupdate.ExtractMember(zipPath, "pojun-hostd", tmp); err != nil {
+		return fmt.Errorf("发布包里没有 pojun-hostd：%w", err)
 	}
 	if err := selfupdate.SmokeTestBinary(tmp, "-version"); err != nil {
 		return fmt.Errorf("新版本无法在当前系统运行：%w", err)

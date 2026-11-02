@@ -23,23 +23,23 @@ import (
 	"github.com/Autumn-27/norma/llm"
 	actool "github.com/Autumn-27/norma/tool"
 	"github.com/Autumn-27/norma/transcript"
-	"github.com/chu0119/artex/agent"
-	"github.com/chu0119/artex/db"
-	"github.com/chu0119/artex/hostd"
-	"github.com/chu0119/artex/intercept"
-	"github.com/chu0119/artex/listener"
-	"github.com/chu0119/artex/llmpool"
-	"github.com/chu0119/artex/llmrec"
-	"github.com/chu0119/artex/report"
-	"github.com/chu0119/artex/traffic"
+	"github.com/chu0119/pojun/agent"
+	"github.com/chu0119/pojun/db"
+	"github.com/chu0119/pojun/hostd"
+	"github.com/chu0119/pojun/intercept"
+	"github.com/chu0119/pojun/listener"
+	"github.com/chu0119/pojun/llmpool"
+	"github.com/chu0119/pojun/llmrec"
+	"github.com/chu0119/pojun/report"
+	"github.com/chu0119/pojun/traffic"
 )
 
-// BuildVersion is the backend application version, injected from cmd/artex at
+// BuildVersion is the backend application version, injected from cmd/pojun at
 // startup (which in turn gets it from -ldflags "-X main.version=<tag>").
 // Defaults to "dev" for local builds. Exposed to the frontend via GET /api/health.
 var BuildVersion = "dev"
 
-// Server exposes the ARTEX backend over a JSON HTTP API for the shadcn/ui
+// Server exposes the POJUN backend over a JSON HTTP API for the shadcn/ui
 // frontend.
 type Server struct {
 	m      *Manager
@@ -339,7 +339,7 @@ func (s *Server) agentMaxTurns(key string) int {
 
 // agentRunSeconds returns the configured wall-clock run budget (seconds) for an
 // agent key (0 = unlimited; 1200 fallback when no DB or no row, matching the
-// seed default and upstream ARTEX-upstream).
+// seed default and upstream POJUN-upstream).
 //
 // 兜底值跟着种子默认走（1200），不是 3600：DB 读不出来时回落到一个**长** run
 // 会让所有意图一起变慢（2026-10-21 实测 3600s 时 4 个意图跑满一小时、
@@ -867,7 +867,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/report/export", s.exportTaskDocx)
 	mux.HandleFunc("GET /api/findings/{id}/export", s.exportFindingDocx)
 	mux.HandleFunc("GET /api/tools/inventory", s.toolsInventory)
-	// 宿主环境:体检(含一键安装可用性)+ 一键安装(经特权助手 artex-hostd)
+	// 宿主环境:体检(含一键安装可用性)+ 一键安装(经特权助手 pojun-hostd)
 	mux.HandleFunc("GET /api/hostenv/status", s.hostenvStatus)
 	mux.HandleFunc("GET /api/c2/config", s.c2ConfigGet)
 	mux.HandleFunc("PUT /api/c2/config", s.c2ConfigPut)
@@ -1022,7 +1022,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 
 // version 是鉴权的版本查询（更新卡轮询换装完成用）。
 func (s *Server) version(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"service": "artex", "version": BuildVersion})
+	writeJSON(w, 200, map[string]any{"service": "pojun", "version": BuildVersion})
 }
 
 func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
@@ -2225,7 +2225,7 @@ func (s *Server) findingsExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stage, err := os.MkdirTemp("", "artex-finding-export-")
+	stage, err := os.MkdirTemp("", "pojun-finding-export-")
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return

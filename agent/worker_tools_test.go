@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chu0119/artex/hosttools"
+	"github.com/chu0119/pojun/hosttools"
 )
 
 // worker 的 system prompt 里必须带宿主工具清单。
@@ -13,7 +13,7 @@ import (
 // 而真正动手的 worker 看不到它——实测新装的一批工具（dalfox/feroxbuster/
 // chisel/gitleaks…）一次都没被用起来，agent 只会 python3 + curl + ssh。
 func TestWorkerSystemIncludesHostTools(t *testing.T) {
-	sys := workerSystem("127.0.0.1:8788", "", "/opt/artex/data", "/tmp/run")
+	sys := workerSystem("127.0.0.1:8788", "", "/opt/pojun/data", "/tmp/run")
 	if !strings.Contains(sys, "本机可用工具") {
 		t.Fatal("worker 的 system prompt 里应注入宿主工具清单")
 	}
@@ -41,7 +41,7 @@ func TestWorkerToolListStaysCompact(t *testing.T) {
 
 // mainagent 也有 Bash 工具、会自己动手查证，所以同样需要工具清单。
 func TestMainAgentSystemIncludesHostTools(t *testing.T) {
-	sys := mainAgentSystem("拿下目标", "/opt/artex/data", "/tmp/run")
+	sys := mainAgentSystem("拿下目标", "/opt/pojun/data", "/tmp/run")
 	if !strings.Contains(sys, "本机可用工具") {
 		t.Fatal("mainagent 的 system prompt 里应注入宿主工具清单")
 	}

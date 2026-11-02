@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/norma/llm"
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // fakeProvider 是一个可控的假 provider：记录每次调用的 MaxTokens 与输入长度，

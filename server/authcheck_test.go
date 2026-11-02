@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // TestTOTPCode 用 RFC 6238 SHA1 测试向量钉住实现（密钥 "12345678901234567890"

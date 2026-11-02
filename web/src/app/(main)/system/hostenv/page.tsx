@@ -66,7 +66,7 @@ const CATEGORY_LABEL: Record<HostTool["category"], string> = {
 };
 
 // 宿主环境:工具体检。二进制部署形态下系统里装了什么,agent 就能经 Bash
-// 直接调什么;此页把家底显式化,缺失项可一键安装(由特权助手 artex-hostd 执行)。
+// 直接调什么;此页把家底显式化,缺失项可一键安装(由特权助手 pojun-hostd 执行)。
 export default function HostEnvPage() {
   const [inv, setInv] = React.useState<HostenvStatus | null>(null);
   const [loaded, setLoaded] = React.useState(false);

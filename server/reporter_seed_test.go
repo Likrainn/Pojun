@@ -3,7 +3,7 @@ package server
 import (
 	"testing"
 
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // reporter 的 seed 走 settings flag 守卫「一次性」。flag=true 时直接 return，

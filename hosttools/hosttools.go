@@ -1,12 +1,12 @@
 // Package hosttools:宿主工具体检 + 安装配方。
 //
-// 二进制部署形态下,ARTEX 直接跑在操作系统里——宿主装了什么渗透工具,
+// 二进制部署形态下,POJUN 直接跑在操作系统里——宿主装了什么渗透工具,
 // worker 就能通过 Bash 工具直接调用什么。这里用 exec.LookPath 探测一份
 // 常用工具清单(可用/缺失+安装提示),注入 graph_overview 让模型派意图时
 // 知道家底,并通过 /api/tools/inventory 暴露给前端展示。
 //
 // 同一份清单同时驱动「一键安装」:每条工具带一个 Kind + 配方(apt 包名 /
-// GitHub Release 资产模板 / pip 包 / 仅手工),由特权助手 artex-hostd 按
+// GitHub Release 资产模板 / pip 包 / 仅手工),由特权助手 pojun-hostd 按
 // 配方执行。**体检清单和安装器共用这一个 catalog**,不存在"页面上列了、
 // 安装器却不会装"的漂移。
 //

@@ -1,4 +1,4 @@
-module github.com/chu0119/artex
+module github.com/chu0119/pojun
 
 go 1.26.3
 

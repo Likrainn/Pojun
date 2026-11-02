@@ -6,16 +6,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
-// testStore mirrors the other packages' testmain pattern: without ARTEX_PG_DSN
+// testStore mirrors the other packages' testmain pattern: without POJUN_PG_DSN
 // the suite skips (tables live in the shared idempotent schema).
 func testStore(t *testing.T) *Store {
 	t.Helper()
-	dsn := os.Getenv("ARTEX_PG_DSN")
+	dsn := os.Getenv("POJUN_PG_DSN")
 	if dsn == "" {
-		t.Skip("requires ARTEX_PG_DSN")
+		t.Skip("requires POJUN_PG_DSN")
 	}
 	pg, err := db.Open(dsn)
 	if err != nil {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // 任务级资产拦截/允许规则的 CRUD。规则按 task_id 归属，仅对该任务生效：

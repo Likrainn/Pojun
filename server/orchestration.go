@@ -11,8 +11,8 @@ import (
 
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
-	"github.com/chu0119/artex/agent"
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/agent"
+	"github.com/chu0119/pojun/db"
 )
 
 // jsonResult marshals v to a JSON tool result.

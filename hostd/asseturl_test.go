@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chu0119/artex/hosttools"
+	"github.com/chu0119/pojun/hosttools"
 )
 
 // 各项目的 release 资产命名规范极不统一（架构在前/后、版本带不带 v、

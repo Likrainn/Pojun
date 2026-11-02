@@ -45,10 +45,10 @@ func TestRedactSecretsKeepsBenignArgs(t *testing.T) {
 		"nmap -sV -p 80,443,8080 10.0.0.1",
 		"curl -s http://example.com/path?a=1&b=2",
 		"grep -r 'password' /opt/app/config.yaml",
-		"cd /opt/artex/data/tasks/3/i653 && ls -la",
+		"cd /opt/pojun/data/tasks/3/i653 && ls -la",
 		// 裸 -p 在不同命令里含义不同：mkdir/tar 的 -p 是 parents/preserve，
 		// 不是口令。通用化会误伤——实测 `mkdir -p /some/dir` 的路径被打成 ***。
-		"mkdir -p /opt/artex/data/tasks/3/i661 && pwd",
+		"mkdir -p /opt/pojun/data/tasks/3/i661 && pwd",
 		"tar -p -czf backup.tgz /opt/data",
 		"cp -p /etc/hosts /tmp/hosts.bak",
 	}

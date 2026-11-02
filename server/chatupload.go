@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // maxChatUpload caps a single chat-attachment upload request (memory + spill).

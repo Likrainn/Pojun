@@ -9,7 +9,7 @@ import (
 
 	actool "github.com/Autumn-27/norma/tool"
 
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // 凭据复用工具：把「资产上已经登记的凭据」变成「可直接执行的带认证请求」。

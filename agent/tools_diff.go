@@ -15,7 +15,7 @@ import (
 
 	actool "github.com/Autumn-27/norma/tool"
 
-	"github.com/chu0119/artex/intercept"
+	"github.com/chu0119/pojun/intercept"
 )
 
 // 响应差分工具：把两个 HTTP 响应的**结构性差异**算出来。
@@ -619,7 +619,7 @@ func WriteDiffScript(dir string) (string, error) {
 
 // diffScriptSource 是差分脚本的源码（与 Go 侧逻辑等价）。
 const diffScriptSource = `#!/usr/bin/env python3
-"""响应结构化差分（ARTEX agent 工具 diff_responses 的执行端）。
+"""响应结构化差分（POJUN agent 工具 diff_responses 的执行端）。
 
 用法: resp_diff.py <文件A> <文件B> [状态码A] [状态码B]
 文件内容是响应体（或 curl -i 的完整响应，会自动剥头）；状态码可选。

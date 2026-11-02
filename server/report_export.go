@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chu0119/artex/db"
-	"github.com/chu0119/artex/report"
+	"github.com/chu0119/pojun/db"
+	"github.com/chu0119/pojun/report"
 )
 
 // exportExcludeStatuses 交付件默认剔除的分拣状态。
@@ -141,7 +141,7 @@ func (s *Server) exportTaskDocx(w http.ResponseWriter, r *http.Request) {
 		PageHeader:     fmt.Sprintf("渗透测试报告 — %s", t.Description),
 		ArtifactImage:  s.artifactImageResolver(t.ID, 0),
 	})
-	name := fmt.Sprintf("artex-report-task%s-%s.docx", t.ID, time.Now().Format("20060102"))
+	name := fmt.Sprintf("pojun-report-task%s-%s.docx", t.ID, time.Now().Format("20060102"))
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	w.WriteHeader(200)
@@ -261,7 +261,7 @@ func (s *Server) exportFindingDocx(w http.ResponseWriter, r *http.Request) {
 			return s.artifactImageResolver(taskKey, only)
 		}(),
 	})
-	name := fmt.Sprintf("artex-finding-%d-%s.docx", f.ID, time.Now().Format("20060102"))
+	name := fmt.Sprintf("pojun-finding-%d-%s.docx", f.ID, time.Now().Format("20060102"))
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	w.WriteHeader(200)

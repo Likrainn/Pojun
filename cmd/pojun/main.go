@@ -1,4 +1,4 @@
-// Command artex runs the ARTEX backend: the dual SQLite graph stores,
+// Command pojun runs the POJUN backend: the dual SQLite graph stores,
 // the event-driven exploration engine, and the JSON HTTP API consumed by the
 // shadcn/ui frontend.
 package main
@@ -16,10 +16,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chu0119/artex/agent"
-	"github.com/chu0119/artex/config"
-	"github.com/chu0119/artex/selfupdate"
-	"github.com/chu0119/artex/server"
+	"github.com/chu0119/pojun/agent"
+	"github.com/chu0119/pojun/config"
+	"github.com/chu0119/pojun/selfupdate"
+	"github.com/chu0119/pojun/server"
 )
 
 // version is the build version, injected at release time via
@@ -87,7 +87,7 @@ func run() int {
 	if _, e := os.Stat(cfgPath); e == nil {
 		log.Printf("[config] 配置文件: %s", cfgPath)
 	} else {
-		log.Printf("[config] 配置文件: %s (不存在 — 将仅尝试环境变量 ARTEX_PG_DSN)", cfgPath)
+		log.Printf("[config] 配置文件: %s (不存在 — 将仅尝试环境变量 POJUN_PG_DSN)", cfgPath)
 	}
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -121,7 +121,7 @@ func run() int {
 	}
 
 	go func() {
-		log.Printf("ARTEX %s backend listening on %s (data=%s, workers=%d)", version, *addr, *dataDir, mgr.Workers())
+		log.Printf("POJUN %s backend listening on %s (data=%s, workers=%d)", version, *addr, *dataDir, mgr.Workers())
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("serve: %v", err)
 		}

@@ -11,7 +11,7 @@ import (
 func TestSeedPromptVersioned(t *testing.T) {
 	dsn, _, err := DSN()
 	if err != nil || dsn == "" {
-		t.Skip("requires ARTEX_PG_DSN")
+		t.Skip("requires POJUN_PG_DSN")
 	}
 	d, err := Open(dsn)
 	if err != nil {

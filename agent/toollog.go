@@ -249,13 +249,13 @@ func shortID(s string) string {
 var reToolBlocked = regexp.MustCompile(`(?i)\b(403|forbidden|waf|blocked|rate.?limit|429|captcha|denied|too many requests)\b`)
 
 // platformBlockMarker 是平台拦截消息的固定前缀（见 guard.systemBlockMessage）。
-// 出现它 = 这次调用被 ARTEX 自己拦了，与目标侧的 WAF 是两回事。
-const platformBlockMarker = "【ARTEX 平台管控·非目标防御】"
+// 出现它 = 这次调用被 POJUN 自己拦了，与目标侧的 WAF 是两回事。
+const platformBlockMarker = "【POJUN 平台管控·非目标防御】"
 
 // classifyToolResult 把工具结果压成一个分类标签。
 //
 // 语义分层，别混：
-//   - blocked：平台**自己**拦了这次调用。判据是 ARTEX 的固定前缀，精确可靠。
+//   - blocked：平台**自己**拦了这次调用。判据是 POJUN 的固定前缀，精确可靠。
 //     （PreToolUse 行会标 BLOCKED，这里是兜底——理论上被拦的调用不会有 post 行。）
 //   - waf：输出里出现 WAF/403/denied 措辞，**只对 Bash 生效**。Bash 是打目标的，
 //     命令输出里的 403 说明被目标挡了——这是给 planner 做归因的有用信号。

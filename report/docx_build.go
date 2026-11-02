@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // TaskDocxInput 是总报告的输入。
@@ -163,7 +163,7 @@ func BuildTaskDocx(in TaskDocxInput) *Docx {
 		d.Bullet(strings.Join(parts, "；"))
 	}
 	d.H2("方法论")
-	d.P("本次评估由 AI 多 Agent 自主渗透平台 ARTEX 执行:规划 Agent 依据目标与资产态势派发探" +
+	d.P("本次评估由 AI 多 Agent 自主渗透平台 POJUN 执行:规划 Agent 依据目标与资产态势派发探" +
 		"测意图,执行 Agent 以真实工具(nmap/httpx/nuclei/ffuf/sqlmap 等)完成侦察、漏洞验证" +
 		"与利用,全程流量经记录代理留痕;漏洞结论均要求可复现证据(PoC 命令/请求响应)支撑," +
 		"critical/high 级发现建议按复测记录进行独立复验。")

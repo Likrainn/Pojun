@@ -25,8 +25,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/chu0119/artex/hosttools"
-	"github.com/chu0119/artex/proxyprobe"
+	"github.com/chu0119/pojun/hosttools"
+	"github.com/chu0119/pojun/proxyprobe"
 )
 
 // State 任务状态。
@@ -527,7 +527,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{
-			"ok": true, "service": "artex-hostd",
+			"ok": true, "service": "pojun-hostd",
 			"version": s.Version,
 			"pkg_mgr": string(s.pkgMgr),
 			"tools":   len(hosttools.Inventory()),
@@ -537,7 +537,7 @@ func (s *Server) Handler() http.Handler {
 	// /version 供主服务做版本对齐：主程序自我升级后会拿自己的版本号来敲门，
 	// 助手发现自己落后就自我换装（见 UpgradeSelf 的注释：只能由它自己来做）。
 	mux.HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"service": "artex-hostd", "version": s.Version})
+		writeJSON(w, 200, map[string]any{"service": "pojun-hostd", "version": s.Version})
 	})
 
 	mux.HandleFunc("POST /self-upgrade", func(w http.ResponseWriter, r *http.Request) {

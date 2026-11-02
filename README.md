@@ -6,13 +6,13 @@
 
 Go 单体后端（内嵌 Next.js 前端）· PostgreSQL · 多 Agent 自主推进 · 全程证据留痕
 
-[![Release](https://img.shields.io/github/v/release/chu0119/ARTEX?include_prereleases&label=release)](https://github.com/chu0119/ARTEX/releases)
-[![CI](https://github.com/chu0119/ARTEX/actions/workflows/ci.yml/badge.svg)](https://github.com/chu0119/ARTEX/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/chu0119/Pojun?include_prereleases&label=release)](https://github.com/chu0119/Pojun/releases)
+[![CI](https://github.com/chu0119/Pojun/actions/workflows/ci.yml/badge.svg)](https://github.com/chu0119/Pojun/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey)
 
-📦 **Docker**：`ghcr.io/chu0119/artex` · `xingchuan1314/artex`
-🧠 **单技能版**：[artex-skill](https://github.com/chu0119/artex-skill)——ARTEX 方法论的单 skill 版，任意 AI Agent 即装即用
+📦 **Docker**：`ghcr.io/chu0119/pojun` · `xingchuan1314/artex`
+🧠 **单技能版**：[artex-skill](https://github.com/chu0119/pojun-skill)——ARTEX 方法论的单 skill 版，任意 AI Agent 即装即用
 
 </div>
 
@@ -159,7 +159,7 @@ flowchart LR
   获取→横向移动→数据获取回传→收尾）+ 证据纪律。
 - **后渗透工具（含 9 件红队补齐）**：impacket/netexec/evil-winrm/chisel/ligolo-ng/proxychains/
   socat/linpeas/pspy/responder/sqlmap/hydra/hashcat/nuclei/ffuf…全部可在
-  「宿主环境」页**一键装齐**（特权助手 artex-hostd 串行排队执行）。
+  「宿主环境」页**一键装齐**（特权助手 pojun-hostd 串行排队执行）。
 
 ### 审批与拦截：三层闸门
 
@@ -193,7 +193,7 @@ flowchart LR
 ### 方式一：一键部署脚本（推荐）
 
 ```bash
-git clone https://github.com/chu0119/ARTEX.git && cd ARTEX
+git clone https://github.com/chu0119/Pojun.git && cd ARTEX
 sudo ./install.sh                    # 交互选择（默认二进制）
 sudo ./install.sh --mode=binary      # 二进制 + systemd（生产推荐）
 sudo ./install.sh --mode=binary --with-tools   # 顺装常用渗透工具
@@ -201,11 +201,11 @@ sudo ./install.sh --mode=docker      # Docker Compose
 ```
 
 幂等：重复执行 = 原地升级；`config.json` / `jwt.key` / 数据 / 数据库不动。
-卸载：`systemctl disable --now artex artex-hostd && rm -rf /opt/artex`。
+卸载：`systemctl disable --now artex pojun-hostd && rm -rf /opt/pojun`。
 
 ### 方式二：下载预编译二进制
 
-到 [Releases](https://github.com/chu0119/ARTEX/releases) 下载对应平台 zip
+到 [Releases](https://github.com/chu0119/Pojun/releases) 下载对应平台 zip
 （5 平台 + SHA256SUMS），解压后：
 
 ```bash
@@ -220,8 +220,8 @@ cp config.example.json config.json   # 填好 database 连接
 ```bash
 cd web && npm ci && npm run build:static && cd ..
 cp -r web/out server/webui/dist
-CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
-CGO_ENABLED=0 go build -o artex-hostd ./cmd/artex-hostd   # 可选：特权安装助手
+CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/pojun
+CGO_ENABLED=0 go build -o pojun-hostd ./cmd/pojun-hostd   # 可选：特权安装助手
 ./start.sh
 ```
 
@@ -247,7 +247,7 @@ v0.3.85 起内置公网部署安全基线（登录防爆破、探活去指纹、
 
 ## 配置速查
 
-**数据库**（`config.json` 或 `ARTEX_PG_DSN`）：
+**数据库**（`config.json` 或 `POJUN_PG_DSN`）：
 
 ```json
 { "database": { "host": "127.0.0.1", "port": 5432, "user": "artex",
@@ -291,7 +291,7 @@ go test ./...   # 连 PG 跑全量（CI 用 -p 1 串行防跨包死锁）
 cd web && npx tsc --noEmit && NEXT_EXPORT=1 npx next build
 ```
 
-- 后端：`go run ./cmd/artex`（`-tags embedui` 内嵌前端）
+- 后端：`go run ./cmd/pojun`（`-tags embedui` 内嵌前端）
 - 前端：`cd web && npm run dev`（`/api` 反代热更新）
 - Mock 预览：`cd web && NEXT_PUBLIC_MOCK=1 npm run dev`
 
@@ -300,7 +300,7 @@ cd web && npx tsc --noEmit && NEXT_EXPORT=1 npx next build
 ## 项目结构
 
 ```
-cmd/            程序入口（artex 主服务 / artex-hostd 特权助手）
+cmd/            程序入口（artex 主服务 / pojun-hostd 特权助手）
 agent/          多 Agent 层：planner / worker / mainagent / 领域工具（tools_*.go）
 db/             PostgreSQL 唯一存储：schema.sql（幂等迁移）+ 全部表 Store
 server/         HTTP 服务：路由 / 引擎调度 / Manager / 会话 / 报告 / 更新

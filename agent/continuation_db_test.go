@@ -6,7 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/chu0119/artex/db"
+	"github.com/chu0119/pojun/db"
 )
 
 // 接续代数上限必须真的在**写入路径**上生效——单测覆盖代数计算还不够，

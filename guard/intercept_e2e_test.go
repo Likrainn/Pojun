@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chu0119/artex/db"
-	"github.com/chu0119/artex/intercept"
+	"github.com/chu0119/pojun/db"
+	"github.com/chu0119/pojun/intercept"
 )
 
 // 端到端验证「明令禁止」与「交给 Agent 研判」在**真实调用路径**上分流。

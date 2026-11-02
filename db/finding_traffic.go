@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chu0119/artex/notify"
+	"github.com/chu0119/pojun/notify"
 )
 
 var (
