@@ -209,7 +209,7 @@ function TaskDetailInner() {
   const [task, setTask] = React.useState<Task | null>(null);
   const [paused, setPaused] = React.useState(false);
   const [loaded, setLoaded] = React.useState(false);
-  const [tab, setTab] = React.useState("sessions");
+  const [tab, setTab] = React.useState(searchParams.get("tab") || "sessions");
   const [interceptPendingCount, setInterceptPendingCount] = React.useState(0);
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
   const [archiving, setArchiving] = React.useState(false);

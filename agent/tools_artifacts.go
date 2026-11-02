@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	actool "github.com/Autumn-27/norma/tool"
 	"github.com/chu0119/pojun/db"
@@ -17,6 +18,10 @@ type ArtifactRecorder interface {
 
 // ListTaskArtifacts 是 host 注入的附件列表读取（agent 工具用）。nil = 不可用。
 var ListTaskArtifacts func(taskID string) ([]db.TaskArtifact, error)
+
+// FindingTaskID 由 host 注入：按漏洞 ID 反查所属任务（v0.4.20）。
+// reporter 的 chat 工具集没有任务上下文，靠模型传 finding_id 定位任务。
+var FindingTaskID func(findingID int64) (string, error)
 
 // artifactGuidance 注入 worker system prompt：截图与证据存档的时机纪律
 // （v0.5.0）。报告要"有照片"，前提是 worker 在正确时刻截图并登记。
@@ -95,14 +100,29 @@ func (t *ToolSet) saveEvidence() actool.CoreTool {
 }
 
 // listArtifacts 列出本任务已登记的证据附件（worker 核对、reporter 引用用）。
+// reporter 没有任务上下文，可传 finding_id 让工具反查所属任务（v0.4.20）。
 func (t *ToolSet) listArtifacts() actool.CoreTool {
-	return writeTool("list_artifacts",
-		"列出本任务已登记的证据附件（id/名称/类型/大小/说明/来源）。撰写报告时用 ![图注](artifact:<id>) 把图片插进报告。",
-		obj(map[string]any{}), func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
-			if ListTaskArtifacts == nil || t.taskID <= 0 {
+	return readTool("list_artifacts",
+		"列出本任务已登记的证据附件（id/名称/类型/大小/说明/来源）。撰写报告时用 ![图注](artifact:<id>) 把图片插进报告。reporter 可传 finding_id 以定位该漏洞所属任务的附件。",
+		obj(map[string]any{
+			"finding_id": map[string]any{"type": "integer", "description": "可选：当前漏洞 ID；reporter 用它定位所属任务的附件清单"},
+		}), func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+			var a struct {
+				FindingID int64 `json:"finding_id"`
+			}
+			_ = json.Unmarshal(in, &a)
+			taskID := t.taskID
+			if taskID <= 0 && a.FindingID > 0 && FindingTaskID != nil {
+				if tid, err := FindingTaskID(a.FindingID); err == nil && tid != "" {
+					if n, err := strconv.ParseInt(tid, 10, 64); err == nil {
+						taskID = n
+					}
+				}
+			}
+			if ListTaskArtifacts == nil || taskID <= 0 {
 				return actool.Text("[]"), nil
 			}
-			list, err := ListTaskArtifacts(fmt.Sprint(t.taskID))
+			list, err := ListTaskArtifacts(fmt.Sprint(taskID))
 			if err != nil {
 				return actool.Errorf(err.Error()), nil
 			}

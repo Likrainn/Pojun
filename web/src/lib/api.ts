@@ -732,6 +732,9 @@ export const api = {
   artifactsExportUrl: (taskId: string) => `/api/tasks/${taskId}/artifacts/export`,
   scanTaskArtifacts: (taskId: string) =>
     post<{ added: number; skipped: number; truncated: number }>(`/tasks/${taskId}/artifacts/scan`, {}),
+  // 修改附件归属（v0.4.20）：finding_id=0 表示任务级。
+  updateTaskArtifact: (taskId: string, artifactId: number, findingId: number) =>
+    patch<{ artifact: TaskArtifact }>(`/tasks/${taskId}/artifacts/${artifactId}`, { finding_id: findingId }),
   tokenDaily: (days = 30) => get<DailyTokenBucket[]>(`/tokens/daily?days=${days}`).then(arr),
   conversationTokens: () =>
     get<ConvTokenSummary[]>("/tokens/conversations")

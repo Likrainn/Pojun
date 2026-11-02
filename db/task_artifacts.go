@@ -101,3 +101,38 @@ func (d *DB) CountTaskArtifacts(taskID string) (count int, bytes int64, err erro
 		Scan(&count, &bytes)
 	return
 }
+
+// UpdateTaskArtifactFinding 修改附件归属（v0.4.20）：findingID=0 表示任务级。
+// 返回更新后的完整元数据，供 PATCH 接口与去重补绑复用。
+func (d *DB) UpdateTaskArtifactFinding(id int64, findingID int64) (*TaskArtifact, error) {
+	var a TaskArtifact
+	err := d.QueryRow(`
+UPDATE task_artifacts SET finding_id=NULLIF($2,0) WHERE id=$1
+RETURNING id,task_id,COALESCE(finding_id,0),name,kind,COALESCE(mime,''),size_bytes,COALESCE(sha256,''),
+          COALESCE(source_url,''),COALESCE(note,''),storage_path,created_at`, id, findingID).
+		Scan(&a.ID, &a.TaskID, &a.FindingID, &a.Name, &a.Kind, &a.Mime, &a.SizeBytes,
+			&a.SHA256, &a.SourceURL, &a.Note, &a.Storage, &a.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// UpdateTaskArtifactBinding 补绑归属并补空字段（v0.4.20 去重路径用）：
+// 只有旧值为空时才写入 note/source_url，避免覆盖首次登记时的说明。
+func (d *DB) UpdateTaskArtifactBinding(id int64, findingID int64, note, sourceURL string) (*TaskArtifact, error) {
+	var a TaskArtifact
+	err := d.QueryRow(`
+UPDATE task_artifacts SET finding_id=NULLIF($2,0),
+       note=COALESCE(NULLIF(note,''),NULLIF($3,'')),
+       source_url=COALESCE(NULLIF(source_url,''),NULLIF($4,''))
+WHERE id=$1
+RETURNING id,task_id,COALESCE(finding_id,0),name,kind,COALESCE(mime,''),size_bytes,COALESCE(sha256,''),
+          COALESCE(source_url,''),COALESCE(note,''),storage_path,created_at`, id, findingID, note, sourceURL).
+		Scan(&a.ID, &a.TaskID, &a.FindingID, &a.Name, &a.Kind, &a.Mime, &a.SizeBytes,
+			&a.SHA256, &a.SourceURL, &a.Note, &a.Storage, &a.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}

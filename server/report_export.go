@@ -245,20 +245,9 @@ func (s *Server) exportFindingDocx(w http.ResponseWriter, r *http.Request) {
 			if f.TaskID == nil || *f.TaskID <= 0 {
 				return nil
 			}
-			taskKey := strconv.FormatInt(*f.TaskID, 10)
-			// 优先只嵌「归属本漏洞」的图；老数据没有 finding_id（附件功能上线前
-			// 抓的照片），回退到任务级图片，避免单漏洞报告里没有照片。回退时可能
-			// 混入同任务其它材料的图——图注会照实显示附件说明，需人工复核。
-			only := int64(0)
-			if list, err := s.m.pg.ListTaskArtifacts(taskKey); err == nil {
-				for _, a := range list {
-					if a.Kind == "image" && a.FindingID == f.ID {
-						only = f.ID
-						break
-					}
-				}
-			}
-			return s.artifactImageResolver(taskKey, only)
+			// 单漏洞报告严格只嵌归属本漏洞的图（v0.4.20）：不再回退任务级图；
+			// 历史照片可在任务「证据附件」里批量改归属。
+			return s.artifactImageResolver(strconv.FormatInt(*f.TaskID, 10), f.ID)
 		}(),
 	})
 	name := fmt.Sprintf("pojun-finding-%d-%s.docx", f.ID, time.Now().Format("20060102"))

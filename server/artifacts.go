@@ -161,6 +161,51 @@ func (s *Server) listTaskArtifacts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"artifacts": list})
 }
 
+// patchTaskArtifact 修改附件归属（v0.4.20）。body {finding_id}：
+// 0 = 改回任务级；非 0 必须是本任务下的漏洞。
+func (s *Server) patchTaskArtifact(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("id")
+	aid, err := strconv.ParseInt(r.PathValue("aid"), 10, 64)
+	if err != nil || aid <= 0 {
+		writeErr(w, 400, "bad artifact id")
+		return
+	}
+	pg := s.m.PG()
+	if pg == nil {
+		writeErr(w, 500, "PG 不可用")
+		return
+	}
+	a, err := pg.GetTaskArtifact(aid)
+	if err != nil || a == nil || a.TaskID != taskID {
+		writeErr(w, 404, "artifact not found")
+		return
+	}
+	var req struct {
+		FindingID int64 `json:"finding_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, "bad json")
+		return
+	}
+	if req.FindingID < 0 {
+		writeErr(w, 400, "finding_id 不能为负")
+		return
+	}
+	if req.FindingID > 0 {
+		f, err := pg.GetFinding(req.FindingID)
+		if err != nil || f == nil || f.TaskID == nil || strconv.FormatInt(*f.TaskID, 10) != taskID {
+			writeErr(w, 400, "finding 不属于该任务")
+			return
+		}
+	}
+	updated, err := pg.UpdateTaskArtifactFinding(aid, req.FindingID)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"artifact": updated})
+}
+
 // serveTaskArtifact 提供单个附件：
 //   - 图片默认 inline（前端 <img> 可直接预览），?download=1 强制下载；
 //   - ?thumb=1 返回长边 480 的 JPEG 缩略图（磁盘缓存 .thumb.jpg）——列表页
@@ -433,10 +478,19 @@ func (s *Server) recordArtifactAbs(abs, taskKey string, findingID int64, name, k
 	sha := hex.EncodeToString(sum[:])
 
 	// 去重：同任务同内容直接返回已有登记，不重复落盘。
+	// v0.4.20：截图常发生在 report_finding 之前（拿不到 finding_id），事后补登记
+	// 同一文件时不能因为去重把归属丢掉——旧记录还是任务级就补绑；已归属其他
+	// 漏洞的不抢占（避免把 A 漏洞的证据挪给 B）。
 	if list, err := pg.ListTaskArtifacts(taskKey); err == nil {
 		for i := range list {
 			if list[i].SHA256 == sha && list[i].SizeBytes == size {
-				return &list[i], nil
+				existing := &list[i]
+				if findingID > 0 && existing.FindingID == 0 {
+					if updated, uerr := pg.UpdateTaskArtifactBinding(existing.ID, findingID, note, sourceURL); uerr == nil {
+						return updated, nil
+					}
+				}
+				return existing, nil
 			}
 		}
 	}

@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -229,6 +231,18 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 	agent.FindingTrafficBindingEnabled = func() bool { return pg.GetBool(settingAgentTrafficBinding, false) }
 	// 证据附件列表（v0.4.9）：agent 的 list_artifacts 工具读取本任务已登记附件。
 	agent.ListTaskArtifacts = func(taskID string) ([]db.TaskArtifact, error) { return pg.ListTaskArtifacts(taskID) }
+	// reporter 的 chat 会话没有任务上下文（v0.4.20）：允许工具按 finding_id
+	// 反查所属任务，避免 list_artifacts 永远返回空。
+	agent.FindingTaskID = func(findingID int64) (string, error) {
+		f, err := pg.GetFinding(findingID)
+		if err != nil {
+			return "", err
+		}
+		if f == nil || f.TaskID == nil {
+			return "", fmt.Errorf("finding %d 无所属任务", findingID)
+		}
+		return strconv.FormatInt(*f.TaskID, 10), nil
+	}
 	// reporter 需要看附件清单来引用截图（worker 由 builtinToolsByAgent 自动绑定）。
 	if err := pg.AddAgentToToolBinding("reporter", []string{"list_artifacts"}); err != nil {
 		log.Printf("[tools] reporter 绑定 list_artifacts 失败: %v", err)

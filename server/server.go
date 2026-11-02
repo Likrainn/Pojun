@@ -821,6 +821,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/tasks/{id}/auth-check", s.taskAuthCheck) // 登录凭据自检（真实发一次登录请求）
 	// 证据附件（v0.5.0）：列表 / 单文件下载 / 证据包 zip。
 	mux.HandleFunc("GET /api/tasks/{id}/artifacts", s.listTaskArtifacts)
+	mux.HandleFunc("PATCH /api/tasks/{id}/artifacts/{aid}", s.patchTaskArtifact) // 改归属（任务级 ↔ 漏洞）
 	mux.HandleFunc("POST /api/tasks/{id}/artifacts/scan", s.scanTaskArtifacts) // 历史目录补登记
 	mux.HandleFunc("GET /api/tasks/{id}/artifacts/export", s.exportTaskArtifacts)
 	mux.HandleFunc("GET /api/tasks/{id}/artifacts/{aid}", s.serveTaskArtifact)

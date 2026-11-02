@@ -1403,6 +1403,11 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
   const [expanded, setExpanded] = React.useState(false);
   const [preview, setPreview] = React.useState<TaskArtifact | null>(null);
   const [broken, setBroken] = React.useState<Record<number, boolean>>({});
+  // v0.4.20：历史/任务级图片批量归属到漏洞。
+  const [selected, setSelected] = React.useState<number[]>([]);
+  const [findings, setFindings] = React.useState<Finding[]>([]);
+  const [assignTo, setAssignTo] = React.useState("0");
+  const [assigning, setAssigning] = React.useState(false);
   const load = React.useCallback(
     (alive: { v: boolean }) =>
       api
@@ -1420,6 +1425,40 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
       alive.v = false;
     };
   }, [load]);
+  React.useEffect(() => {
+    if (!expanded) return;
+    let alive = true;
+    api
+      .findings(taskId)
+      .then((fs) => {
+        if (alive) setFindings(fs);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [expanded, taskId]);
+  const findingOptions = findings
+    .filter((f) => f.finding_id && /^\d+$/.test(String(f.finding_id)))
+    .map((f) => ({ id: String(f.finding_id), label: `#${f.finding_id} ${f.name || f.vulnclass}` }));
+  const toggleSelected = (id: number) =>
+    setSelected((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+  const applyAssignment = async () => {
+    if (selected.length === 0) return;
+    setAssigning(true);
+    try {
+      for (const id of selected) {
+        await api.updateTaskArtifact(taskId, id, Number(assignTo));
+      }
+      toast.success(`已更新 ${selected.length} 项归属`);
+      setSelected([]);
+      await load({ v: true });
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setAssigning(false);
+    }
+  };
   const scan = async () => {
     setScanning(true);
     try {
@@ -1462,7 +1501,7 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
             </div>
           </CardTitle>
           <CardDescription>
-            截图与数据样本来自任务执行过程；数据按样本策略保存（证明性样本，非全量）。点击缩略图看大图，下载走证据包或图片的单独下载。
+            截图与数据样本来自任务执行过程；数据按样本策略保存（证明性样本，非全量）。勾选图片/文件可批量归属到漏洞，归属后只在该漏洞详情与单漏洞报告中出现；任务级证据统一在这里查看。
           </CardDescription>
         </CardHeader>
         {expanded && (
@@ -1472,36 +1511,71 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
                 暂无证据附件。可点右上「扫描补登记」把历史任务已抓到的图片纳入证据库；新任务会由 worker 在取证时自动登记。
               </p>
             )}
+            {selected.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+                <span className="font-medium">已选 {selected.length} 项</span>
+                <NativeSelect
+                  size="sm"
+                  value={assignTo}
+                  onChange={(e) => setAssignTo(e.target.value)}
+                  className="max-w-[22rem]"
+                >
+                  <NativeSelectOption value="0">任务级（不归属漏洞）</NativeSelectOption>
+                  {findingOptions.map((f) => (
+                    <NativeSelectOption key={f.id} value={f.id}>
+                      {f.label}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+                <Button size="sm" disabled={assigning} onClick={() => void applyAssignment()}>
+                  {assigning ? "保存中…" : "应用归属"}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setSelected([])}>
+                  清空
+                </Button>
+              </div>
+            )}
             {images.length > 0 && (
               <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
                 {images.map((a) => (
-                  <button
-                    key={a.id}
-                    type="button"
-                    onClick={() => setPreview(a)}
-                    className="group relative aspect-square overflow-hidden rounded-md border bg-muted/40 text-left"
-                    title={a.note || a.name}
-                  >
-                    {broken[a.id] ? (
-                      <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-2 text-center text-[11px] text-muted-foreground">
-                        <ImageOffIcon className="size-5" />
-                        无法预览
-                        <span className="line-clamp-2 break-all">{a.name}</span>
+                  <div key={a.id} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setPreview(a)}
+                      className="group relative aspect-square w-full overflow-hidden rounded-md border bg-muted/40 text-left"
+                      title={a.note || a.name}
+                    >
+                      {broken[a.id] ? (
+                        <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-2 text-center text-[11px] text-muted-foreground">
+                          <ImageOffIcon className="size-5" />
+                          无法预览
+                          <span className="line-clamp-2 break-all">{a.name}</span>
+                        </span>
+                      ) : (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={thumbUrl(a.id)}
+                          alt={a.note || a.name}
+                          loading="lazy"
+                          onError={() => setBroken((b) => ({ ...b, [a.id]: true }))}
+                          className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+                        />
+                      )}
+                      <span className="pointer-events-none absolute inset-x-0 bottom-0 line-clamp-1 bg-black/55 px-1.5 py-0.5 text-[10px] text-white">
+                        {a.finding_id ? `#${a.finding_id} · ` : ""}
+                        {a.note || a.name}
                       </span>
-                    ) : (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={thumbUrl(a.id)}
-                        alt={a.note || a.name}
-                        loading="lazy"
-                        onError={() => setBroken((b) => ({ ...b, [a.id]: true }))}
-                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+                    </button>
+                    <label className="absolute top-1.5 left-1.5 z-10 flex size-5 cursor-pointer items-center justify-center rounded bg-black/55">
+                      <input
+                        type="checkbox"
+                        aria-label={`选择 ${a.name}`}
+                        className="size-3.5 accent-primary"
+                        checked={selected.includes(a.id)}
+                        onChange={() => toggleSelected(a.id)}
                       />
-                    )}
-                    <span className="pointer-events-none absolute inset-x-0 bottom-0 line-clamp-1 bg-black/55 px-1.5 py-0.5 text-[10px] text-white">
-                      {a.note || a.name}
-                    </span>
-                  </button>
+                    </label>
+                  </div>
                 ))}
               </div>
             )}
@@ -1509,8 +1583,18 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
               <div className="flex flex-col divide-y rounded border">
                 {files.map((a) => (
                   <div key={a.id} className="flex min-w-0 items-center gap-2 px-3 py-2 text-sm">
+                    <input
+                      type="checkbox"
+                      aria-label={`选择 ${a.name}`}
+                      className="size-3.5 shrink-0 accent-primary"
+                      checked={selected.includes(a.id)}
+                      onChange={() => toggleSelected(a.id)}
+                    />
                     <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">{a.kind}</span>
                     <span className="min-w-0 flex-1 truncate">{a.name}</span>
+                    {a.finding_id ? (
+                      <span className="shrink-0 text-muted-foreground text-xs">#{a.finding_id}</span>
+                    ) : null}
                     <span className="shrink-0 text-muted-foreground text-xs">{fmtSize(a.size_bytes)}</span>
                     <Button size="sm" variant="ghost" asChild>
                       <a href={downloadUrl(a.id)}>下载</a>

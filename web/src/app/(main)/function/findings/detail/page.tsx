@@ -377,11 +377,24 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
       alive = false;
     };
   }, [taskId]);
-  // 优先显示归属本漏洞的图片；老数据（附件功能上线前抓的照片）没有
-  // finding_id，回退展示任务级图片并明确标注。
-  const own = all.filter((a) => String(a.finding_id ?? "") === findingId);
-  const shots = own.length > 0 ? own : all.filter((a) => !a.finding_id);
-  if (!taskId || shots.length === 0) return null;
+  // 只显示归属本漏洞的图片（v0.4.20）：任务级证据统一在任务总览的「证据附件」
+  // 里看，不再回退到任务图片——否则每个漏洞都会重复同一批照片。
+  const shots = all.filter((a) => String(a.finding_id ?? "") === findingId);
+  if (!taskId) return null;
+  if (shots.length === 0) {
+    return (
+      <Card>
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4 text-sm text-muted-foreground">
+          <span>本漏洞暂无专属截图。任务级证据（目标首页、批次照片等）请到任务总览的「证据附件」查看，可在那里把图片归属到本漏洞。</span>
+          <Button size="sm" variant="outline" asChild>
+            <Link href={`/function/tasks/detail?id=${taskId}&tab=overview`}>
+              查看任务总览 <ArrowUpRightIcon className="size-3.5" />
+            </Link>
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
   const thumbUrl = (id: number) => `${api.artifactUrl(taskId, id)}?thumb=1`;
   const fullUrl = (id: number) => api.artifactUrl(taskId, id);
   return (
@@ -390,7 +403,7 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm">
             现场截图（{shots.length}）
-            {own.length === 0 && <span className="font-normal text-muted-foreground text-xs"> · 任务级证据（未关联到具体漏洞）</span>}
+            <span className="font-normal text-muted-foreground text-xs"> · 仅显示归属本漏洞的图片</span>
             <Button size="sm" variant="outline" className="ml-auto" onClick={() => setExpanded((v) => !v)}>
               {expanded ? "收起" : "展开查看"}
             </Button>
