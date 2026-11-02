@@ -409,14 +409,6 @@ docs/           设计文档 / 部署手册 / 评估报告 / 能力对照
 
 ---
 
-## 交流
-
-扫码关注微信公众号 **SecSentry**，后台私信入群。
-
-<div align="center">
-<img src="screenshots/wx.png" alt="微信公众号 SecSentry" width="360" />
-</div>
-
 ## 参考
 
 - [norma](https://github.com/Autumn-27/norma) — agent harness SDK（本平台多 Agent 引擎）
