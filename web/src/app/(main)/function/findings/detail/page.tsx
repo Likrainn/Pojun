@@ -5,7 +5,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 
-import { ArrowLeftIcon, ArrowUpRightIcon, FileDownIcon, ShieldAlertIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowUpRightIcon, ChevronLeftIcon, ChevronRightIcon, FileDownIcon, ShieldAlertIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { CopyButton } from "@/components/copy-button";
@@ -363,29 +363,59 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
   const [all, setAll] = React.useState<TaskArtifact[]>([]);
   const [expanded, setExpanded] = React.useState(false);
   const [preview, setPreview] = React.useState<TaskArtifact | null>(null);
+  const [docPreview, setDocPreview] = React.useState<{ artifact: TaskArtifact; page: number } | null>(null);
   const [broken, setBroken] = React.useState<Record<number, boolean>>({});
-  React.useEffect(() => {
+  const load = React.useCallback(() => {
     if (!taskId) return;
-    let alive = true;
     api
       .taskArtifacts(taskId)
-      .then((list) => {
-        if (alive) setAll(list.filter((a) => a.kind === "image"));
-      })
+      .then(setAll)
       .catch(() => {});
-    return () => {
-      alive = false;
-    };
   }, [taskId]);
-  // 只显示归属本漏洞的图片（v0.4.20）：任务级证据统一在任务总览的「证据附件」
-  // 里看，不再回退到任务图片——否则每个漏洞都会重复同一批照片。
-  const shots = all.filter((a) => String(a.finding_id ?? "") === findingId);
+  React.useEffect(() => {
+    load();
+  }, [load]);
+  // 归属本漏洞的图片与文档（v0.4.24）：任务级证据仍只在任务总览里看。
+  const isDoc = (a: TaskArtifact) =>
+    ["document", "spreadsheet", "presentation", "pdf"].includes(a.kind) ||
+    /\.(docx?|xlsx?|pptx?|pdf|odt|ods|odp|csv|rtf)$/i.test(a.name);
+  const own = all.filter(
+    (a) => String(a.finding_id ?? "") === findingId && (a.kind === "image" || isDoc(a)),
+  );
+  const images = own.filter((a) => a.kind === "image");
+  const docs = own.filter((a) => a.kind !== "image" && isDoc(a));
+  const thumbUrl = (id: number) => `${api.artifactUrl(taskId!, id)}?thumb=1`;
+  const fullUrl = (id: number) => api.artifactUrl(taskId!, id);
+  const downloadUrl = (id: number) => `${api.artifactUrl(taskId!, id)}?download=1`;
+  const previewUrl = (id: number, page: number) => api.artifactPreviewUrl(taskId!, id, page);
+  const docLabel = (a: TaskArtifact) => {
+    const ext = (a.name.split(".").pop() || "").toLowerCase();
+    if (["doc", "docx", "odt", "rtf"].includes(ext) || a.kind === "document") return "Word";
+    if (["xls", "xlsx", "ods", "csv"].includes(ext) || a.kind === "spreadsheet") return "Excel/CSV";
+    if (["ppt", "pptx", "odp"].includes(ext) || a.kind === "presentation") return "PPT";
+    if (ext === "pdf" || a.kind === "pdf") return "PDF";
+    return a.kind;
+  };
+  const regeneratePreview = async (a: TaskArtifact) => {
+    if (!taskId) return;
+    try {
+      await api.regenerateArtifactPreview(taskId, a.id);
+      window.setTimeout(load, 1500);
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+  React.useEffect(() => {
+    if (!expanded || !own.some((a) => a.preview_state === "pending")) return;
+    const t = window.setInterval(load, 4000);
+    return () => window.clearInterval(t);
+  }, [expanded, own, load]);
   if (!taskId) return null;
-  if (shots.length === 0) {
+  if (own.length === 0) {
     return (
       <Card>
         <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4 text-sm text-muted-foreground">
-          <span>本漏洞暂无专属截图。任务级证据（目标首页、批次照片等）请到任务总览的「证据附件」查看，可在那里把图片归属到本漏洞。</span>
+          <span>本漏洞暂无专属截图或文档。任务级证据（目标首页、批次照片等）请到任务总览的「证据附件」查看，可在那里把图片/文档归属到本漏洞。</span>
           <Button size="sm" variant="outline" asChild>
             <Link href={`/function/tasks/detail?id=${taskId}&tab=overview`}>
               查看任务总览 <ArrowUpRightIcon className="size-3.5" />
@@ -395,50 +425,99 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
       </Card>
     );
   }
-  const thumbUrl = (id: number) => `${api.artifactUrl(taskId, id)}?thumb=1`;
-  const fullUrl = (id: number) => api.artifactUrl(taskId, id);
   return (
     <>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm">
-            现场截图（{shots.length}）
-            <span className="font-normal text-muted-foreground text-xs"> · 仅显示归属本漏洞的图片</span>
+            现场证据（{own.length}）
+            <span className="font-normal text-muted-foreground text-xs">
+              {" "}
+              · 仅显示归属本漏洞的图片与文档（图片 {images.length} / 文档 {docs.length}）
+            </span>
             <Button size="sm" variant="outline" className="ml-auto" onClick={() => setExpanded((v) => !v)}>
               {expanded ? "收起" : "展开查看"}
             </Button>
           </CardTitle>
         </CardHeader>
         {expanded && (
-          <CardContent className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
-            {shots.map((a) => (
-              <button
-                key={a.id}
-                type="button"
-                onClick={() => setPreview(a)}
-                className="group relative aspect-square overflow-hidden rounded-md border bg-muted/40 text-left"
-                title={a.note || a.name}
-              >
-                {broken[a.id] ? (
-                  <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-2 text-center text-[11px] text-muted-foreground">
-                    无法预览
-                    <span className="line-clamp-2 break-all">{a.name}</span>
-                  </span>
-                ) : (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={thumbUrl(a.id)}
-                    alt={a.note || a.name}
-                    loading="lazy"
-                    onError={() => setBroken((b) => ({ ...b, [a.id]: true }))}
-                    className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
-                  />
-                )}
-                <span className="pointer-events-none absolute inset-x-0 bottom-0 line-clamp-1 bg-black/55 px-1.5 py-0.5 text-[10px] text-white">
-                  {a.note || a.name}
-                </span>
-              </button>
-            ))}
+          <CardContent className="flex flex-col gap-3">
+            {images.length > 0 && (
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+                {images.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => setPreview(a)}
+                    className="group relative aspect-square overflow-hidden rounded-md border bg-muted/40 text-left"
+                    title={a.note || a.name}
+                  >
+                    {broken[a.id] ? (
+                      <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-2 text-center text-[11px] text-muted-foreground">
+                        无法预览
+                        <span className="line-clamp-2 break-all">{a.name}</span>
+                      </span>
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={thumbUrl(a.id)}
+                        alt={a.note || a.name}
+                        loading="lazy"
+                        onError={() => setBroken((b) => ({ ...b, [a.id]: true }))}
+                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+                      />
+                    )}
+                    <span className="pointer-events-none absolute inset-x-0 bottom-0 line-clamp-1 bg-black/55 px-1.5 py-0.5 text-[10px] text-white">
+                      {a.note || a.name}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {docs.length > 0 && (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                {docs.map((a) => {
+                  const ready = a.preview_state === "ready" && (a.preview_pages ?? 0) > 0;
+                  const stateText =
+                    a.preview_state === "pending"
+                      ? "预览生成中…"
+                      : a.preview_state === "failed"
+                        ? "预览失败"
+                        : a.preview_state === "skipped"
+                          ? "未生成预览"
+                          : "点击生成预览";
+                  return (
+                    <button
+                      key={a.id}
+                      type="button"
+                      onClick={() => (ready ? setDocPreview({ artifact: a, page: 1 }) : void regeneratePreview(a))}
+                      className="group relative flex aspect-[4/3] w-full flex-col overflow-hidden rounded-md border bg-muted/40 text-left"
+                      title={a.preview_error || a.note || a.name}
+                    >
+                      {ready ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={previewUrl(a.id, 1)}
+                          alt={a.note || a.name}
+                          loading="lazy"
+                          className="h-full w-full object-cover object-top transition-transform duration-200 group-hover:scale-105"
+                        />
+                      ) : (
+                        <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-3 text-center text-[11px] text-muted-foreground">
+                          <FileDownIcon className="size-5" />
+                          {stateText}
+                          {a.preview_error ? <span className="line-clamp-2 break-all">{a.preview_error}</span> : null}
+                        </span>
+                      )}
+                      <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+                        {docLabel(a)}
+                        {ready ? ` · ${a.preview_pages} 页` : ""} · {a.name}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </CardContent>
         )}
       </Card>
@@ -465,6 +544,56 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
                 <Button size="sm" variant="outline" asChild>
                   <a href={`${fullUrl(preview.id)}?download=1`}>下载原件</a>
                 </Button>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={!!docPreview}
+        onOpenChange={(o) => {
+          if (!o) setDocPreview(null);
+        }}
+      >
+        <DialogContent className="max-w-6xl">
+          <DialogHeader>
+            <DialogTitle className="break-all text-base">
+              {docPreview?.artifact.note || docPreview?.artifact.name}
+            </DialogTitle>
+          </DialogHeader>
+          {docPreview && (
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={previewUrl(docPreview.artifact.id, docPreview.page)}
+                alt={`${docPreview.artifact.name} 第 ${docPreview.page} 页`}
+                className="mx-auto max-h-[70vh] w-auto max-w-full rounded border object-contain"
+              />
+              <div className="flex flex-wrap items-center justify-between gap-2 text-muted-foreground text-xs">
+                <span className="break-all">
+                  {docPreview.artifact.name} · 第 {docPreview.page} / {docPreview.artifact.preview_pages ?? 0} 页
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={docPreview.page <= 1}
+                    onClick={() => setDocPreview((cur) => (cur ? { ...cur, page: cur.page - 1 } : cur))}
+                  >
+                    <ChevronLeftIcon className="size-3.5" /> 上一页
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={docPreview.page >= (docPreview.artifact.preview_pages ?? 1)}
+                    onClick={() => setDocPreview((cur) => (cur ? { ...cur, page: cur.page + 1 } : cur))}
+                  >
+                    下一页 <ChevronRightIcon className="size-3.5" />
+                  </Button>
+                  <Button size="sm" variant="outline" asChild>
+                    <a href={downloadUrl(docPreview.artifact.id)}>下载原件</a>
+                  </Button>
+                </div>
               </div>
             </>
           )}
