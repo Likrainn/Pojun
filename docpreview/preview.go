@@ -73,7 +73,7 @@ func Generate(ctx context.Context, src, outDir string, maxPages int) (int, error
 			return 0, err
 		}
 	}
-	if err := os.MkdirAll(outDir, 0o700); err != nil {
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return 0, fmt.Errorf("创建预览目录：%w", err)
 	}
 	// 清掉上一次的页文件，避免重试后残留多余页。
@@ -82,7 +82,7 @@ func Generate(ctx context.Context, src, outDir string, maxPages int) (int, error
 			_ = os.Remove(f)
 		}
 	}
-	return pdfToJPEGs(ctx, pdf, tmp, outDir, maxPages)
+	return pdfToJPEGs(ctx, pdf, outDir, maxPages)
 }
 
 // officeToPDF 用 LibreOffice headless 转 PDF。隔离 UserInstallation，避免并发
@@ -106,6 +106,9 @@ func officeToPDF(ctx context.Context, src, tmp string) (string, error) {
 	}
 	cmd := exec.CommandContext(runCtx, bin, args...)
 	cmd.Env = append(os.Environ(), "HOME="+tmp)
+	// cwd 必须是可访问目录：soffice 包装脚本会 cd 回启动时目录（比如以 root
+	// 从 /root 启动、再 sudo -u pojun 运行时，pojun 无权进入 /root 直接失败）。
+	cmd.Dir = tmp
 	out, runErr := cmd.CombinedOutput()
 	if runErr != nil {
 		msg := strings.TrimSpace(string(out))
@@ -136,12 +139,20 @@ func officeToPDF(ctx context.Context, src, tmp string) (string, error) {
 
 // pdfToJPEGs 渲染前 maxPages 页。输出页文件名归一为 page-1.jpg...，避免
 // pdftoppm 按总页数补零（page-01.jpg）导致前端拼 URL 不稳定。
-func pdfToJPEGs(ctx context.Context, pdf, tmp, outDir string, maxPages int) (int, error) {
+//
+// pdftoppm 先写 outDir 内的临时子目录再 rename：/tmp 与数据盘常不在同一
+// 文件系统，跨设备 rename 会 EXDEV 失败（Kali 实测）。
+func pdfToJPEGs(ctx context.Context, pdf, outDir string, maxPages int) (int, error) {
 	bin, err := findPdftoppm()
 	if err != nil {
 		return 0, err
 	}
-	prefix := filepath.Join(tmp, "page")
+	stage, err := os.MkdirTemp(outDir, ".stage-")
+	if err != nil {
+		return 0, fmt.Errorf("创建预览暂存目录：%w", err)
+	}
+	defer os.RemoveAll(stage)
+	prefix := filepath.Join(stage, "page")
 	runCtx, cancel := context.WithTimeout(ctx, convertTimeout)
 	defer cancel()
 	args := []string{
@@ -149,6 +160,7 @@ func pdfToJPEGs(ctx context.Context, pdf, tmp, outDir string, maxPages int) (int
 		"-f", "1", "-l", strconv.Itoa(maxPages), pdf, prefix,
 	}
 	cmd := exec.CommandContext(runCtx, bin, args...)
+	cmd.Dir = stage
 	out, runErr := cmd.CombinedOutput()
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		return 0, fmt.Errorf("PDF 渲染超时（%s）", convertTimeout)
@@ -178,6 +190,7 @@ func pdfToJPEGs(ctx context.Context, pdf, tmp, outDir string, maxPages int) (int
 		if err := os.Rename(f, dst); err != nil {
 			return 0, fmt.Errorf("写入预览页：%w", err)
 		}
+		_ = os.Chmod(dst, 0o644) // maint 以 root 跑时也要让服务用户可读
 	}
 	return len(files), nil
 }

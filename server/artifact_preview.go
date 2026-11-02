@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/chu0119/pojun/db"
@@ -193,19 +192,4 @@ func (s *Server) regenerateArtifactPreview(w http.ResponseWriter, r *http.Reques
 	}
 	s.enqueueArtifactPreview(a, true)
 	writeJSON(w, 202, map[string]any{"state": "pending", "artifact_id": aid})
-}
-
-// previewKindLabel 给前端/日志用的简短类型名。
-func previewKindLabel(name string) string {
-	switch docpreview.KindFor(name) {
-	case "document":
-		return "文档"
-	case "spreadsheet":
-		return "表格"
-	case "presentation":
-		return "演示"
-	case "pdf":
-		return "PDF"
-	}
-	return strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
 }
