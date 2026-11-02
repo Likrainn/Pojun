@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+> 以下 0.4.20 起为逐版详录；0.4.4–0.4.19 期间的发版见文末「0.4.4–0.4.19 发版概要」。
+
 ## [0.4.26] - 2026-11-02
 
 > 任务 5 连续跑了十几小时仍在扫。根因：`goal_met` 只取消在跑 worker、不结束任务；
@@ -2266,3 +2268,25 @@ done 18 / exhausted 99 / blocked 82——**exhausted 是 done 的 5.5 倍**，�
 [0.3.4]: https://github.com/chu0119/Pojun/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/chu0119/Pojun/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/chu0119/Pojun/compare/v0.3.1...v0.3.2
+
+## 0.4.4 – 0.4.19 发版概要（2026-11-01 ~ 11-02）
+
+> 逐版详录欠账，按主题归档；完整明细见各 tag 的 commit 历史（`git log v0.4.3..v0.4.19`）
+> 与 Release Notes。
+
+| 版本 | 主题 |
+|---|---|
+| v0.4.4 | 公文格式全链路：GB/T 9704 对齐 + 字体嵌入（odttf）+ document.xml.rels styles 根因修复 + Word/LibreOffice 双端验收 |
+| v0.4.5 | Shannon 借鉴第一批：证据分级 L1–L4 / 三态判定 / severity 自查 |
+| v0.4.6 | 证据纪律与流量绑定解耦（CI 红修复） |
+| v0.4.7 | 任务成本展示（/api/tokens/cost + 前端 ≈$） |
+| v0.4.8 | 任务级登录凭据 + 真实登录自检（TOTP 支持） |
+| v0.4.9 | 证据附件地基：task_artifacts / save_evidence / Word 插图 / 前端展示 |
+| v0.4.10 | 存储桶照片取证纪律 + 历史补登记 |
+| v0.4.11 | 拼图配方重做（2 张并排 / 2×2）+ 流量卡折叠 + 版本小步走 |
+| v0.4.12 | SQL 注入必须带实测 sqlmap 复测命令 |
+| v0.4.13 | pojun-maint 维护工具 + hostd 随包分发 + 安装脚本补全 |
+| v0.4.14 | Kali 部署修复（含 artex-maint，任务 5 自动恢复） |
+| v0.4.15–0.4.16 | 证据卡交互重做 / 任务详情设置页 |
+| v0.4.17–0.4.18 | 数据盘扩容迁移 / 附件 403 权限修复（0644 + fix-permissions） |
+| v0.4.19 | 项目改名 Pojun：全局代码标识 / 二进制 / 目录 / 环境变量 / 镜像 / 仓库 |
