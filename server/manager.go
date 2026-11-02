@@ -74,6 +74,49 @@ type Task struct {
 	// a burst into one round, so several may pile up before drainTriggers() clears them.
 	trigMu          sync.Mutex
 	pendingTriggers []agent.TriggerEvent
+
+	// 自动收尾（v0.5.0）：runRound 只登记原因，plannerLoop 在本轮 inflight
+	// 释放后再执行 settle，避免 settle 的 drain 等自己。goal_met 在有在跑
+	// 意图时也会先挂起，等 frontier 抽干后的下一次唤醒直接收尾。
+	settleMu            sync.Mutex
+	pendingSettleReason string
+	pendingSettleDetail string
+}
+
+// requestSettle 登记自动收尾原因（不在此处执行 settle）。重复登记以最后一条为准。
+func (t *Task) requestSettle(reason, detail string) {
+	if reason == "" {
+		return
+	}
+	t.settleMu.Lock()
+	t.pendingSettleReason, t.pendingSettleDetail = reason, detail
+	t.settleMu.Unlock()
+}
+
+func (t *Task) peekSettle() (string, string) {
+	t.settleMu.Lock()
+	defer t.settleMu.Unlock()
+	return t.pendingSettleReason, t.pendingSettleDetail
+}
+
+func (t *Task) clearSettle() {
+	t.settleMu.Lock()
+	t.pendingSettleReason, t.pendingSettleDetail = "", ""
+	t.settleMu.Unlock()
+}
+
+// hasPendingFreshDirection 检查尚未消费的 trigger 里是否有用户新增目标/提示。
+// 用于挂起收尾的瞬间：用户刚加目标时不能先 settle 再丢目标。
+func (t *Task) hasPendingFreshDirection() bool {
+	t.trigMu.Lock()
+	defer t.trigMu.Unlock()
+	for _, ev := range t.pendingTriggers {
+		switch ev.Kind {
+		case "goal", "goal_edited", "goal_deleted", "hint":
+			return true
+		}
+	}
+	return false
 }
 
 // taskLifecycleState is an internally consistent view of the mutable task

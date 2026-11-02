@@ -202,6 +202,10 @@ func (s *Server) admitTaskWhen(t *Task, mode string, requirePaused bool) (queued
 	status := lifecycle.Status
 	if wasTerminal {
 		status = "running"
+		// 终态复活是一次新的探索：清掉旧收尾计数，避免第一轮就被 idle 判据收掉。
+		if err := s.m.pg.ResetTaskProgress(t.ID); err != nil {
+			log.Printf("[auto-finish] task %s 复活时重置进度失败: %v", t.ID, err)
+		}
 	}
 	if err := s.m.ApplyTaskAdmission(t.ID, lifecycle.Status, status, shouldQueue, mode, wasQueued); err != nil {
 		if !engineWasPaused && !wasPaused && !wasQueued {

@@ -1498,3 +1498,16 @@ CREATE TABLE IF NOT EXISTS vuln_sync_state (
     enabled       BOOLEAN NOT NULL DEFAULT true
 );
 ALTER TABLE vuln_sync_state ADD COLUMN IF NOT EXISTS page_cursor TEXT NOT NULL DEFAULT '';
+
+-- 任务自动收尾的进度快照（v0.5.0）：每个常规规划轮记录一次 fact/finding/
+-- tested asset 计数；连续零增长轮数达到阈值且无在跑意图时，引擎自动收尾。
+-- 以 round_no 做 fencing，迟到/重复轮次不会重复累计。
+CREATE TABLE IF NOT EXISTS task_progress (
+    task_id       TEXT PRIMARY KEY,
+    round_no      BIGINT NOT NULL DEFAULT 0,
+    idle_rounds   INTEGER NOT NULL DEFAULT 0,
+    fact_count    BIGINT NOT NULL DEFAULT 0,
+    finding_count BIGINT NOT NULL DEFAULT 0,
+    tested_count  BIGINT NOT NULL DEFAULT 0,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);

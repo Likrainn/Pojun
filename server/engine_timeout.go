@@ -36,15 +36,23 @@ const (
 // ---------- settling 状态 ----------
 
 func (e *Engine) isSettling(taskID string) bool {
-	v, _ := e.settling.Load(taskID)
-	b, _ := v.(bool)
-	return b
+	_, ok := e.settling.Load(taskID)
+	return ok
 }
 
-// markSettling flips settling on; returns true only for the first caller.
-func (e *Engine) markSettling(taskID string) bool {
-	_, loaded := e.settling.LoadOrStore(taskID, true)
+// markSettling records the settle reason; returns true only for the first caller.
+func (e *Engine) markSettling(taskID, reason string) bool {
+	if reason == "" {
+		reason = "timeout"
+	}
+	_, loaded := e.settling.LoadOrStore(taskID, reason)
 	return !loaded
+}
+
+func (e *Engine) settleReason(taskID string) string {
+	v, _ := e.settling.Load(taskID)
+	s, _ := v.(string)
+	return s
 }
 
 // ---------- 在跑计数(worker.Execute + planner.Plan),用于 drain ----------
@@ -125,12 +133,12 @@ func (e *Engine) stampFirstRun(t *Task) {
 // clockCtx layers the task's TaskClock (absolute deadline) onto a run's context so
 // worker/planner can clamp their wall-clock budget and pick per-run vs task-timeout
 // wrap-up words. final marks the coordinator-driven terminal planner round.
-func (e *Engine) clockCtx(base context.Context, t *Task, final bool) context.Context {
+func (e *Engine) clockCtx(base context.Context, t *Task, final bool, reason string) context.Context {
 	dl := e.taskDeadline(t)
 	if dl <= 0 && !final {
 		return base // no timeout → unchanged behavior
 	}
-	return agent.WithTaskClock(base, agent.TaskClock{DeadlineUnix: dl, Final: final})
+	return agent.WithTaskClock(base, agent.TaskClock{DeadlineUnix: dl, Final: final, FinalReason: reason})
 }
 
 // ---------- 协调器 ----------
@@ -192,17 +200,39 @@ func (e *Engine) deadlineCoordinator(ctx context.Context, t *Task) {
 
 // settleTask runs the ordered settle sequence once (§4 steps ①–⑥).
 func (e *Engine) settleTask(ctx context.Context, t *Task) {
-	if !e.markSettling(t.ID) {
+	e.settleTaskWithReason(ctx, t, "timeout", "到达任务超时上限")
+}
+
+// settleTaskWithReason 是统一收尾入口。reason:
+//   - timeout      任务绝对 deadline（终态 met?done:timeout）
+//   - goal_met     planner 明确判定目标达成且无在跑意图（不再跑终局轮，直接 done）
+//   - auto_idle / auto_coverage / auto_rounds 程序化自动收尾（终态 done）
+func (e *Engine) settleTaskWithReason(ctx context.Context, t *Task, reason, detail string) {
+	if !e.markSettling(t.ID, reason) {
 		return
 	}
-	log.Printf("[deadline] task %s 到达超时上限,进入收尾时序", t.ID)
+	t.clearSettle()
+	label := reason
+	switch reason {
+	case "timeout":
+		label = "到达超时上限"
+	case "goal_met":
+		label = "planner 判定目标达成且无在跑意图"
+	case "auto_idle", "auto_coverage", "auto_rounds":
+		label = "自动收尾：" + detail
+	}
+	log.Printf("[settle] task %s 进入收尾（%s）", t.ID, label)
+	if reason != "timeout" {
+		e.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
+			Summary: fmt.Sprintf("自动收尾：%s", detail)})
+	}
 
 	// ④ 等在跑 worker/planner drain(在跑 run 因夹逼的 MaxDuration 自行进收尾);
 	// 超过 grace 仍未清空 → 硬 cancel 该任务 exec ctx(settling-aware 分支正确归类)。
 	hardStop := time.Now().Add(settleDrainGrace)
 	for e.inflightCount(t.ID) > 0 {
 		if time.Now().After(hardStop) {
-			log.Printf("[deadline] task %s drain 超时(%s),硬取消在跑 run", t.ID, settleDrainGrace)
+			log.Printf("[settle] task %s drain 超时(%s),硬取消在跑 run", t.ID, settleDrainGrace)
 			e.cancelExec(t.ID, agent.AbortSettleDrainTimeout)
 			_ = sleepCtx(ctx, 3*time.Second) // 给 worker 分支一点时间落库/归类
 			break
@@ -212,34 +242,39 @@ func (e *Engine) settleTask(ctx context.Context, t *Task) {
 		}
 	}
 
-	// ⑤ 终局一轮 planner(任务超时词,最后目标判定,不产新意图)。
-	met := e.runFinalPlannerRound(ctx, t)
+	// ⑤ 终局一轮 planner。goal_met 已经是 planner 的最终判定，不再多跑一轮；
+	// timeout 用超时收尾词，自动收尾用“按策略收尾”词。
+	met := reason == "goal_met"
+	if reason != "goal_met" {
+		met = e.runFinalPlannerRound(ctx, t, reason)
+	}
 	if !e.beginTaskOperation(t.ID) {
 		return
 	}
 	defer e.decInflight(t.ID)
 
-	// ⑥ 定终态(带守卫):met → done(completed);否则 timeout。若常规路径已先落 done,
-	// 守卫(SetTaskStatusGuarded)会拒绝覆盖,保留 completed 语义。
-	status := "timeout"
-	if met {
-		status = "done"
+	// ⑥ 定终态(带守卫)：timeout 保持 met?done:timeout；自动收尾统一 done。
+	status := "done"
+	if reason == "timeout" && !met {
+		status = "timeout"
 	}
 	won, err := e.m.SetTaskStatusGuarded(t.ID, status)
 	switch {
 	case err != nil:
-		log.Printf("[deadline] task %s 落终态失败: %v", t.ID, err)
+		log.Printf("[settle] task %s 落终态失败: %v", t.ID, err)
 	case won:
-		log.Printf("[deadline] task %s 收尾完成,终态=%s", t.ID, status)
+		log.Printf("[settle] task %s 收尾完成,终态=%s（%s）", t.ID, status, label)
+		e.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
+			Summary: fmt.Sprintf("任务收尾完成：%s；终态 %s", label, status)})
 	default:
-		log.Printf("[deadline] task %s 收尾时已是终态,保留原状态", t.ID)
+		log.Printf("[settle] task %s 收尾时已是终态,保留原状态", t.ID)
 	}
 }
 
 // runFinalPlannerRound drives exactly ONE terminal planner round with the
 // task-timeout planner words (final goal judgment; no new intents). Waits for the
 // LLM to be ready (bounded by ctx) so a completable task isn't mis-judged timeout.
-func (e *Engine) runFinalPlannerRound(ctx context.Context, t *Task) (met bool) {
+func (e *Engine) runFinalPlannerRound(ctx context.Context, t *Task, reason string) (met bool) {
 	if e.IsDeleting(t.ID) {
 		return false
 	}
@@ -256,15 +291,19 @@ func (e *Engine) runFinalPlannerRound(ctx context.Context, t *Task) (met bool) {
 		}
 		planner, _ = e.snapshotFor(t)
 	}
-	// 独立 ctx(不挂 execCancel,避免 pause/硬 cancel 打断这最后一轮),带 Final 注入任务超时词。
-	fctx := e.clockCtx(ctx, t, true)
+	// 独立 ctx(不挂 execCancel,避免 pause/硬 cancel 打断这最后一轮),带 Final 注入
+	// 收尾词：timeout 用任务超时词，自动收尾用“按策略结束”词。
+	fctx := e.clockCtx(ctx, t, true, reason)
 	if !e.beginTaskOperation(t.ID) {
 		return false
 	}
 	defer e.decInflight(t.ID)
 	emit := func(r db.Activity) { e.emitActivity(t, r) }
-	e.emitActivity(t, db.Activity{Worker: "planner", Kind: "round",
-		Summary: fmt.Sprintf("任务超时收尾·终局判定(第 %d 轮)", e.nextPlannerRound(t.ID))})
+	summary := fmt.Sprintf("任务超时收尾·终局判定(第 %d 轮)", e.nextPlannerRound(t.ID))
+	if reason != "timeout" {
+		summary = fmt.Sprintf("自动收尾·终局判定(第 %d 轮，原因 %s)", e.nextPlannerRound(t.ID), reason)
+	}
+	e.emitActivity(t, db.Activity{Worker: "planner", Kind: "round", Summary: summary})
 	tTaskID, _ := strconv.ParseInt(t.ID, 10, 64)
 	e.BeginLLMCall(t.ID)
 	// 终局轮与普通规划轮同款墙钟护栏：fctx 是无 deadline 的 server 根 ctx，而

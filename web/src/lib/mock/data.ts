@@ -3338,6 +3338,11 @@ export const settings: Settings = {
   llm_pool_enabled: true,
   llm_pool_bind_fallback: false,
   noa_compaction: false,
+  auto_finish_enabled: true,
+  auto_finish_idle_rounds: 3,
+  auto_finish_min_rounds: 5,
+  auto_finish_coverage_pct: 0,
+  auto_finish_max_rounds: 80,
 };
 
 // ── LLM 轮询（故障转移）──────────────────────────────────────────────────────

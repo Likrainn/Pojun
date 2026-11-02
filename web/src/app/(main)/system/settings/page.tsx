@@ -2,7 +2,7 @@
 
 import * as React from "react";
 
-import { CpuIcon, FlaskConicalIcon, KeyboardIcon, RadioTowerIcon, SearchIcon, ShieldAlertIcon } from "lucide-react";
+import { CpuIcon, FlaskConicalIcon, KeyboardIcon, RadioTowerIcon, SearchIcon, ShieldAlertIcon, TimerResetIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,13 @@ export default function SystemSettingsPage() {
   const [pyInterp, setPyInterp] = React.useState("");
   const [workers, setWorkers] = React.useState("3");
   const [savingWorkers, setSavingWorkers] = React.useState(false);
+  // 任务自动收尾（v0.5.0）。
+  const [autoFinishEnabled, setAutoFinishEnabled] = React.useState(true);
+  const [autoFinishIdle, setAutoFinishIdle] = React.useState("3");
+  const [autoFinishMin, setAutoFinishMin] = React.useState("5");
+  const [autoFinishCoverage, setAutoFinishCoverage] = React.useState("0");
+  const [autoFinishMax, setAutoFinishMax] = React.useState("80");
+  const [savingAutoFinish, setSavingAutoFinish] = React.useState(false);
   // 冷节点压缩的输出预算与墙钟上限。0=用默认值(65536 token / 20 分钟)。
   const [compactionTokens, setCompactionTokens] = React.useState("0");
   const [compactionTimeout, setCompactionTimeout] = React.useState("0");
@@ -74,6 +81,11 @@ export default function SystemSettingsPage() {
     setInjectPlanner(s.constraints_inject_planner !== false);
     setInjectWorker(s.constraints_inject_worker !== false);
     setNoaCompaction(!!s.noa_compaction);
+    setAutoFinishEnabled(s.auto_finish_enabled !== false);
+    setAutoFinishIdle(String(s.auto_finish_idle_rounds ?? 3));
+    setAutoFinishMin(String(s.auto_finish_min_rounds ?? 5));
+    setAutoFinishCoverage(String(s.auto_finish_coverage_pct ?? 0));
+    setAutoFinishMax(String(s.auto_finish_max_rounds ?? 80));
   }, []);
 
   const saveWorkers = () => {
@@ -91,6 +103,44 @@ export default function SystemSettingsPage() {
       })
       .catch((e) => toast.error(`保存失败：${(e as Error).message}`))
       .finally(() => setSavingWorkers(false));
+  };
+
+  const saveAutoFinish = () => {
+    const idle = Number(autoFinishIdle);
+    const min = Number(autoFinishMin);
+    const cov = Number(autoFinishCoverage);
+    const max = Number(autoFinishMax);
+    if (!Number.isInteger(idle) || idle < 2 || idle > 20) {
+      toast.error("连续无新增轮数必须在 2–20 之间");
+      return;
+    }
+    if (!Number.isInteger(min) || min < 1 || min > 50) {
+      toast.error("最少规划轮数必须在 1–50 之间");
+      return;
+    }
+    if (!Number.isInteger(cov) || cov < 0 || cov > 100) {
+      toast.error("覆盖率阈值必须在 0–100 之间（0 = 关闭）");
+      return;
+    }
+    if (!Number.isInteger(max) || max < 0 || max > 500) {
+      toast.error("最大规划轮数必须在 0–500 之间（0 = 不限）");
+      return;
+    }
+    setSavingAutoFinish(true);
+    api
+      .setSettings({
+        auto_finish_enabled: autoFinishEnabled,
+        auto_finish_idle_rounds: idle,
+        auto_finish_min_rounds: min,
+        auto_finish_coverage_pct: cov,
+        auto_finish_max_rounds: max,
+      })
+      .then((s) => {
+        apply(s);
+        toast.success("已保存自动收尾设置（下一轮规划生效）");
+      })
+      .catch((e) => toast.error(`保存失败：${(e as Error).message}`))
+      .finally(() => setSavingAutoFinish(false));
   };
 
   const saveCompaction = () => {
@@ -739,6 +789,89 @@ export default function SystemSettingsPage() {
               />
               <Button onClick={saveWorkers} disabled={!loaded || savingWorkers}>
                 保存
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="mb-4 break-inside-avoid md:mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <TimerResetIcon className="size-4" />
+              任务自动收尾
+            </CardTitle>
+            <CardDescription>
+              跑到该结束就结束：<b>连续 N 轮无新增</b>（facts/findings/已测资产都无增长，且没有在跑意图）、
+              <b>覆盖率达标</b>（可关闭）、或达到<b>最大规划轮数</b>时自动收尾。planner 判定目标达成
+              （goal_met）且无在跑意图也会直接结束。收尾统一落 <code>done</code>，原因写入活动流；
+              暂停/排队中的任务不判定。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <div className="flex items-center justify-between gap-4 rounded-lg border px-3 py-2">
+              <div className="flex flex-col">
+                <span className="text-sm font-medium">启用自动收尾</span>
+                <span className="text-muted-foreground text-xs">关闭后只能靠任务超时或目标闭环结束</span>
+              </div>
+              <Switch
+                checked={autoFinishEnabled}
+                disabled={!loaded || savingAutoFinish}
+                onCheckedChange={setAutoFinishEnabled}
+              />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="flex flex-col gap-1 text-sm">
+                <span>连续无新增轮数（2–20）</span>
+                <Input
+                  type="number"
+                  min={2}
+                  max={20}
+                  className="w-40 font-mono text-sm"
+                  value={autoFinishIdle}
+                  disabled={!loaded || savingAutoFinish}
+                  onChange={(e) => setAutoFinishIdle(e.target.value)}
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span>最少规划轮数（1–50）</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={50}
+                  className="w-40 font-mono text-sm"
+                  value={autoFinishMin}
+                  disabled={!loaded || savingAutoFinish}
+                  onChange={(e) => setAutoFinishMin(e.target.value)}
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span>覆盖率阈值 %（0 = 关闭）</span>
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  className="w-40 font-mono text-sm"
+                  value={autoFinishCoverage}
+                  disabled={!loaded || savingAutoFinish}
+                  onChange={(e) => setAutoFinishCoverage(e.target.value)}
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span>最大规划轮数（0 = 不限）</span>
+                <Input
+                  type="number"
+                  min={0}
+                  max={500}
+                  className="w-40 font-mono text-sm"
+                  value={autoFinishMax}
+                  disabled={!loaded || savingAutoFinish}
+                  onChange={(e) => setAutoFinishMax(e.target.value)}
+                />
+              </label>
+            </div>
+            <div>
+              <Button onClick={saveAutoFinish} disabled={!loaded || savingAutoFinish}>
+                {savingAutoFinish ? "保存中…" : "保存"}
               </Button>
             </div>
           </CardContent>

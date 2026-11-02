@@ -3387,6 +3387,7 @@ func (s *Server) settingsPayload() map[string]any {
 	if concLimit == 0 {
 		concLimit = defaultConcurrencyLimit // 关闭时也回显一个合理默认值给 UI
 	}
+	af := autoFinishConfigFromPG(s.m.pg)
 	return map[string]any{
 		"traffic_capture":       s.m.TrafficEnabled(),
 		"agent_traffic_binding": s.m.pg.GetBool(settingAgentTrafficBinding, false),
@@ -3409,6 +3410,12 @@ func (s *Server) settingsPayload() map[string]any {
 		"compactor_profile_id":     s.m.CompactorProfileID(),
 		"task_concurrency_enabled": concOn,    // 任务并发上限开关(默认关)
 		"task_concurrency_limit":   concLimit, // 同时运行任务上限(开启后默认5)
+		// 任务自动收尾（v0.5.0）：连续无新增 / 覆盖率达标 / 最大规划轮数。
+		"auto_finish_enabled":      af.Enabled,
+		"auto_finish_idle_rounds":  af.IdleRounds,
+		"auto_finish_min_rounds":   af.MinRounds,
+		"auto_finish_coverage_pct": af.CoveragePct,
+		"auto_finish_max_rounds":   af.MaxRounds,
 		// LLM 轮询(故障转移)。默认关；开启后走全局激活配置的 agent 在当前配置不可用时
 		// 自动切到下一个配置。bind_fallback 仅在轮询开启时有意义(默认关)。
 		"llm_pool_enabled":       s.m.LLMPoolEnabled(),
@@ -3495,6 +3502,12 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		// 任务并发上限:同时「运行中」的任务数上限。关闭=不限;开启后新建任务超限则排队,有空位自动启动。
 		ConcurrencyEnabled *bool `json:"task_concurrency_enabled"`
 		ConcurrencyLimit   *int  `json:"task_concurrency_limit"`
+		// 任务自动收尾（v0.5.0）：连续 N 轮零新增 / 覆盖率阈值 / 最大规划轮数。
+		AutoFinishEnabled    *bool `json:"auto_finish_enabled"`
+		AutoFinishIdleRounds *int  `json:"auto_finish_idle_rounds"`
+		AutoFinishMinRounds  *int  `json:"auto_finish_min_rounds"`
+		AutoFinishCoverage   *int  `json:"auto_finish_coverage_pct"`
+		AutoFinishMaxRounds  *int  `json:"auto_finish_max_rounds"`
 		// LLM 轮询(故障转移)开关 + 「绑定配置失败也兜底回轮询链」开关。两者都需要
 		// 重建 provider 链才生效，走下面的 changed → applyLLM 路径。
 		LLMPoolEnabled      *bool `json:"llm_pool_enabled"`
@@ -3633,6 +3646,53 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		// 立即协调一次:关闭时放行全部排队,调高上限时补位启动,不必等下一个 tick。
 		go s.reconcileConcurrency()
+	}
+	// 任务自动收尾（v0.5.0）：即时生效，下一轮 planner 读取。
+	if req.AutoFinishEnabled != nil {
+		if err := s.m.pg.SetBool(settingAutoFinishEnabled, *req.AutoFinishEnabled); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.AutoFinishIdleRounds != nil {
+		if *req.AutoFinishIdleRounds < 2 || *req.AutoFinishIdleRounds > 20 {
+			writeErr(w, 400, "auto_finish_idle_rounds 必须在 2–20 之间")
+			return
+		}
+		if err := s.m.pg.SetSetting(settingAutoFinishIdleRounds, strconv.Itoa(*req.AutoFinishIdleRounds)); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.AutoFinishMinRounds != nil {
+		if *req.AutoFinishMinRounds < 1 || *req.AutoFinishMinRounds > 50 {
+			writeErr(w, 400, "auto_finish_min_rounds 必须在 1–50 之间")
+			return
+		}
+		if err := s.m.pg.SetSetting(settingAutoFinishMinRounds, strconv.Itoa(*req.AutoFinishMinRounds)); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.AutoFinishCoverage != nil {
+		if *req.AutoFinishCoverage < 0 || *req.AutoFinishCoverage > 100 {
+			writeErr(w, 400, "auto_finish_coverage_pct 必须在 0–100 之间（0=关闭）")
+			return
+		}
+		if err := s.m.pg.SetSetting(settingAutoFinishCoverage, strconv.Itoa(*req.AutoFinishCoverage)); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.AutoFinishMaxRounds != nil {
+		if *req.AutoFinishMaxRounds < 0 || *req.AutoFinishMaxRounds > 500 {
+			writeErr(w, 400, "auto_finish_max_rounds 必须在 0–500 之间（0=不限）")
+			return
+		}
+		if err := s.m.pg.SetSetting(settingAutoFinishMaxRounds, strconv.Itoa(*req.AutoFinishMaxRounds)); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
 	}
 	if req.PythonInterp != nil {
 		if err := s.m.pg.SetSetting(settingPythonInterp, strings.TrimSpace(*req.PythonInterp)); err != nil {

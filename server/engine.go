@@ -11,11 +11,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Autumn-27/norma/harness"
+	"github.com/Autumn-27/norma/llm"
 	"github.com/chu0119/pojun/agent"
 	"github.com/chu0119/pojun/db"
 	"github.com/chu0119/pojun/intercept"
-	"github.com/Autumn-27/norma/harness"
-	"github.com/Autumn-27/norma/llm"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -892,6 +892,20 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 
 	// runRound 跑一轮规划(含 debounce 合并 + 各 guard)。src 仅用于日志区分触发来源。
 	runRound := func(src string) {
+		// 有挂起收尾：先尝试收尾；未满足（goal_met 仍在跑意图）就等下一次唤醒，
+		// 不再跑规划——否则 goal_met 之后又派新意图，任务永远停不下来。
+		// 例外：用户刚新增目标/提示 → 撤销非硬上限的收尾并继续规划（max_rounds 是硬上限）。
+		if reason, _ := t.peekSettle(); reason != "" {
+			if reason != "auto_rounds" && t.hasPendingFreshDirection() {
+				t.clearSettle()
+				if err := e.m.pg.ResetTaskProgress(t.ID); err != nil {
+					log.Printf("[auto-finish] task %s 新目标重置进度失败: %v", t.ID, err)
+				}
+			} else {
+				e.maybePendingSettle(ctx, t)
+				return
+			}
+		}
 		// debounce: coalesce a burst of changes into one planning round
 		timer := time.NewTimer(e.debounce)
 	drain:
@@ -948,7 +962,7 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		e.stampFirstRun(t) // 首次真正规划 → 盖 first_run_at + 算 deadline(仅带 timeout 的任务)
 		e.touch(t.ID)
 		emit := func(r db.Activity) { e.emitActivity(t, r) }
-		ectx := e.clockCtx(e.execContextFor(ctx, t.ID), t, false) // cancellable by Pause; 带任务 deadline
+		ectx := e.clockCtx(e.execContextFor(ctx, t.ID), t, false, "") // cancellable by Pause; 带任务 deadline
 		if ectx.Err() != nil || e.IsDeleting(t.ID) {
 			return
 		}
@@ -974,8 +988,9 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		log.Printf("[planner] task %s 规划中…(%s 触发)", t.ID, src)
 		// round marker: each Plan() is one planner round; emit a boundary so the
 		// UI can separate rounds in the transcript (kind='round').
+		round := e.nextPlannerRound(t.ID)
 		e.emitActivity(t, db.Activity{Worker: "planner", Kind: "round",
-			Summary: fmt.Sprintf("第 %d 轮规划", e.nextPlannerRound(t.ID))})
+			Summary: fmt.Sprintf("第 %d 轮规划", round)})
 		// what fired this round (worker done / finding; may be several — debounce
 		// coalesces a burst; empty for time/heartbeat wakes).
 		triggers := t.drainTriggers()
@@ -1020,6 +1035,15 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		default:
 			log.Printf("[planner] task %s 规划完成", t.ID)
 		}
+		// 自动收尾判定（v0.5.0）：只登记原因，真正 settle 由 plannerLoop 在本轮
+		// inflight 释放后执行（避免 drain 等自己）。
+		if res.err == nil && ectx.Err() == nil && !e.isSettling(t.ID) {
+			if res.met {
+				t.requestSettle("goal_met", "planner 判定目标达成")
+			} else {
+				e.recordAndEvaluateAutoFinish(t, int64(round), triggers)
+			}
+		}
 		e.touch(t.ID)
 	}
 
@@ -1029,9 +1053,11 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 			return
 		case <-t.notify:
 			runRound("edge") // worker 结束 / finding / kill / resume / seed 首轮
+			e.maybePendingSettle(ctx, t)
 		case <-heartbeat.C:
 			// 周期兜底:死锁兜底 + 唤醒去监督飞行中的 worker(steer/kill) + 周期复查。
 			runRound("heartbeat")
+			e.maybePendingSettle(ctx, t)
 		}
 		// 每次唤醒(边沿或心跳)后重臂心跳:任意规划触发都重算这段静置计时。
 		resetPlannerTimer(heartbeat, interval)
@@ -1109,7 +1135,7 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	e.stampFirstRun(t) // 首次真正执行 → 盖 first_run_at + 算 deadline(仅带 timeout 的任务)
 	e.touch(t.ID)
 	emit := func(r db.Activity) { e.emitActivity(t, r) }
-	ectx := e.clockCtx(e.execContextFor(ctx, t.ID), t, false) // cancellable by Pause; 带任务 deadline
+	ectx := e.clockCtx(e.execContextFor(ctx, t.ID), t, false, "") // cancellable by Pause; 带任务 deadline
 	if ectx.Err() != nil || e.IsDeleting(t.ID) {
 		if err := transitionIntentState(t.Store, intent.ID, "running", "open"); err != nil {
 			log.Printf("[worker %s] task %s 意图 #%d 领取后回退失败: %v", name, t.ID, intent.ID, err)
