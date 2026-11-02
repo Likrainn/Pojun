@@ -40,7 +40,7 @@ const (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: artex-maint <scan-artifacts|reset-prompts> --config <config.json> [--force]")
+		fmt.Fprintln(os.Stderr, "usage: artex-maint <scan-artifacts|reset-prompts|fix-permissions> --config <config.json> [--force]")
 		os.Exit(2)
 	}
 	cmd := os.Args[1]
@@ -70,6 +70,8 @@ func main() {
 		scanArtifacts(pg, *dataDir)
 	case "reset-prompts":
 		resetPrompts(pg, *force)
+	case "fix-permissions":
+		fixArtifactPermissions(*dataDir)
 	default:
 		fmt.Fprintln(os.Stderr, "unknown command:", cmd)
 		os.Exit(2)
@@ -220,7 +222,10 @@ func register(pg *db.DB, dataDir, taskID, path, taskRoot, sha string, size int64
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(dst, data, 0o600); err != nil {
+	// 0644：artex-maint 以 root 运行时，0600 会让服务进程（artex 用户）
+	// 读不了，http.ServeFile 直接 403「图片打不开」——v0.4.18 修复。
+	// 目录本身 700 属 artex，文件 0644 不会向其他用户暴露。
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
 		return err
 	}
 	kind, mime := kindByExt(name)
@@ -296,4 +301,31 @@ func resetPrompts(pg *db.DB, force bool) {
 		fmt.Printf("[%s] 已更新到内置版本 v%d\n", a.Key, ver)
 	}
 	fmt.Printf("\n完成：%d 个 agent 有差异\n", changed)
+}
+
+// fixArtifactPermissions 修复历史附件权限（v0.4.18）：早期 artex-maint 以 root
+// 写 0600 的附件，服务进程（artex 用户）读不了 → 图片 403。统一改为
+// 目录 0750 / 文件 0644（artifacts 目录本身在任务目录下，不对外）。
+func fixArtifactPermissions(dataDir string) {
+	root := filepath.Join(dataDir, "tasks")
+	fixed := 0
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if d.Name() == artifactsDir {
+				_ = os.Chmod(path, 0o750)
+			}
+			return nil
+		}
+		if filepath.Base(filepath.Dir(path)) != artifactsDir {
+			return nil
+		}
+		if err := os.Chmod(path, 0o644); err == nil {
+			fixed++
+		}
+		return nil
+	})
+	fmt.Printf("完成：已修复 %d 个附件文件权限（目录 0750 / 文件 0644）\n", fixed)
 }
