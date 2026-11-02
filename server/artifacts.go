@@ -241,12 +241,20 @@ func writeThumbnail(src, dst string, maxEdge int) error {
 	return writeThumbnailGo(src, dst, maxEdge)
 }
 
-// findImageMagick 返回可用的 magick/convert 命令路径（空 = 不可用）。
+// findImageMagick 返回可用的 ImageMagick 命令路径（空 = 不可用）。
+// 必须校验 -version 输出：Windows 自带的 convert.exe 是磁盘转换工具，
+// 名字相同但绝不是 ImageMagick（误用有破坏磁盘的风险）。
 func findImageMagick() string {
 	for _, name := range []string{"magick", "convert"} {
-		if p, err := exec.LookPath(name); err == nil {
-			return p
+		p, err := exec.LookPath(name)
+		if err != nil {
+			continue
 		}
+		out, err := exec.Command(p, "-version").Output()
+		if err != nil || !strings.Contains(string(out), "ImageMagick") {
+			continue
+		}
+		return p
 	}
 	return ""
 }
