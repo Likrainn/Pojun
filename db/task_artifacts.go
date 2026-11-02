@@ -146,6 +146,28 @@ RETURNING id,task_id,COALESCE(finding_id,0),name,kind,COALESCE(mime,''),size_byt
 	return &a, nil
 }
 
+// ListPendingPreviewArtifacts 返回所有 pending 的文档预览（服务启动恢复队列用）。
+func (d *DB) ListPendingPreviewArtifacts() ([]TaskArtifact, error) {
+	rows, err := d.Query(`
+SELECT id,task_id,COALESCE(finding_id,0),name,kind,COALESCE(mime,''),size_bytes,COALESCE(sha256,''),
+       COALESCE(source_url,''),COALESCE(note,''),COALESCE(preview_state,''),COALESCE(preview_pages,0),COALESCE(preview_error,''),storage_path,created_at
+FROM task_artifacts WHERE preview_state='pending' ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TaskArtifact
+	for rows.Next() {
+		var a TaskArtifact
+		if err := rows.Scan(&a.ID, &a.TaskID, &a.FindingID, &a.Name, &a.Kind, &a.Mime, &a.SizeBytes,
+			&a.SHA256, &a.SourceURL, &a.Note, &a.PreviewState, &a.PreviewPages, &a.PreviewError, &a.Storage, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // SetTaskArtifactPreview 更新文档预览状态（v0.4.21）。
 func (d *DB) SetTaskArtifactPreview(id int64, state string, pages int, errMsg string) error {
 	_, err := d.Exec(`

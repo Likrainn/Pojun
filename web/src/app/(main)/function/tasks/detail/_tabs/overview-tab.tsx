@@ -1484,10 +1484,11 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
   const documents = list.filter((a) => a.kind !== "image" && isDoc(a));
   const files = list.filter((a) => a.kind !== "image" && !isDoc(a));
   const docLabel = (a: TaskArtifact) => {
-    if (a.kind === "document") return "Word";
-    if (a.kind === "spreadsheet") return "Excel/CSV";
-    if (a.kind === "presentation") return "PPT";
-    if (a.kind === "pdf" || /\.pdf$/i.test(a.name)) return "PDF";
+    const ext = (a.name.split(".").pop() || "").toLowerCase();
+    if (["doc", "docx", "odt", "rtf"].includes(ext) || a.kind === "document") return "Word";
+    if (["xls", "xlsx", "ods", "csv"].includes(ext) || a.kind === "spreadsheet") return "Excel/CSV";
+    if (["ppt", "pptx", "odp"].includes(ext) || a.kind === "presentation") return "PPT";
+    if (ext === "pdf" || a.kind === "pdf") return "PDF";
     return a.kind;
   };
   const fmtSize = (n: number) => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`);

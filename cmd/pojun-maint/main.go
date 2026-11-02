@@ -35,8 +35,9 @@ import (
 
 const (
 	maxFileBytes = 20 << 20
-	maxTaskCount = 60
-	maxTaskBytes = 200 << 20
+	maxTaskCount = 300 // 与服务端限额一致（v0.4.23 起 300 个/500MB）
+	maxTaskBytes = 500 << 20
+	maxPerRun    = 60 // 单次扫描最多新增，避免一次把临时文件全收进来
 	artifactsDir = "artifacts"
 )
 
@@ -158,7 +159,10 @@ func scanArtifacts(pg *db.DB, dataDir string) {
 				return nil
 			}
 			switch strings.ToLower(filepath.Ext(path)) {
-			case ".png", ".jpg", ".jpeg", ".gif", ".webp":
+			case ".png", ".jpg", ".jpeg", ".gif", ".webp",
+				".pdf", ".doc", ".docx", ".odt", ".rtf",
+				".xls", ".xlsx", ".ods", ".csv",
+				".ppt", ".pptx", ".odp":
 			default:
 				return nil
 			}
@@ -166,7 +170,7 @@ func scanArtifacts(pg *db.DB, dataDir string) {
 			if e != nil || info.Size() <= 0 || info.Size() > maxFileBytes {
 				return nil
 			}
-			if added >= maxTaskCount || count+added >= maxTaskCount {
+			if added >= maxPerRun || count+added >= maxTaskCount {
 				return nil
 			}
 			if bytesUsed+info.Size() > maxTaskBytes {

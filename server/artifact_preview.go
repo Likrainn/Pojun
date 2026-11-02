@@ -43,7 +43,10 @@ func (s *Server) enqueueArtifactPreview(a *db.TaskArtifact, force bool) {
 	if a == nil || a.ID <= 0 || !docpreview.Supports(a.Name) {
 		return
 	}
-	if !force && (a.PreviewState == "ready" || a.PreviewState == "pending") {
+	// 只跳过已就绪的；pending 必须继续投递——新附件在 Insert 前就标了 pending，
+	// 若这里把 pending 当“已排队”就会永远卡住（v0.4.22 实测）。真正的重复投递
+	// 由下面的 previewIDs 在途表挡住。
+	if !force && a.PreviewState == "ready" {
 		return
 	}
 	pg := s.m.PG()
@@ -74,6 +77,23 @@ func (s *Server) enqueueArtifactPreview(a *db.TaskArtifact, force bool) {
 			_ = pg.SetTaskArtifactPreview(a.ID, "failed", 0, "预览队列繁忙，请稍后手动重试")
 		}
 	}()
+}
+
+// recoverPendingPreviews 服务启动时把上次进程退出前没做完的预览重新排队
+// （v0.4.23）。否则 pending 记录会一直停在“生成中”。
+func (s *Server) recoverPendingPreviews() {
+	pg := s.m.PG()
+	if pg == nil {
+		return
+	}
+	list, err := pg.ListPendingPreviewArtifacts()
+	if err != nil || len(list) == 0 {
+		return
+	}
+	log.Printf("[artifact-preview] 恢复 %d 个未完成预览", len(list))
+	for i := range list {
+		s.enqueueArtifactPreview(&list[i], false)
+	}
 }
 
 // generateArtifactPreview 执行实际转换（worker 串行调用）。

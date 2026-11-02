@@ -32,8 +32,8 @@ import (
 // 数据留在任务工作目录、不随报告分发。限额防的是误存全量 PII/超大文件。
 const (
 	maxArtifactFileBytes = 20 << 20  // 单文件 20MB
-	maxTaskArtifactCount = 100       // 每任务最多 100 个
-	maxTaskArtifactBytes = 200 << 20 // 每任务总量 200MB
+	maxTaskArtifactCount = 300       // 每任务最多 300 个（实战任务证据量常超 100）
+	maxTaskArtifactBytes = 500 << 20 // 每任务总量 500MB
 )
 
 // artifactKindByExt 按扩展名推断附件类型（报告里分区展示用）。
@@ -156,7 +156,7 @@ func (s *Server) RecordArtifact(taskID, findingID int64, runDir, relPath, name, 
 			return nil, fmt.Errorf("本任务附件已达上限（%d 个），请合并或删除后再存", maxTaskArtifactCount)
 		}
 		if total+info.Size() > maxTaskArtifactBytes {
-			return nil, fmt.Errorf("本任务附件总量将超过上限（200MB）")
+			return nil, fmt.Errorf("本任务附件总量将超过上限（500MB）")
 		}
 	}
 
@@ -645,6 +645,6 @@ func (s *Server) scanTaskArtifacts(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{
 		"added": added, "skipped": skipped, "truncated": truncated,
-		"note": "已把任务工作目录里的图片补登记为证据附件（单次最多 60 张）；建议在任务结束后执行，避免把临时文件也收进来。",
+		"note": "已把任务工作目录里的图片与文档（Word/Excel/PPT/PDF）补登记为证据附件（单次最多 60 个）；建议在任务结束后执行，避免把临时文件也收进来。",
 	})
 }
