@@ -744,6 +744,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/task-archives/{id}", s.queueTaskArchiveDelete)
 	mux.HandleFunc("POST /api/task-archives/delete/batch", s.deleteTaskArchivesBatch)
 	mux.HandleFunc("GET /api/tasks/{id}/coverage", s.taskCoverage)
+	mux.HandleFunc("GET /api/tasks/{id}/retest-candidates", s.taskRetestCandidates) // 批量复测候选+最新复测状态（v0.4.27）
 	mux.HandleFunc("GET /api/tasks/{id}/coverage-graph", s.taskCoverageGraph)
 	mux.HandleFunc("GET /api/tasks/{id}/asset-refs", s.taskAssetRefs)
 	mux.HandleFunc("POST /api/tasks/{id}/assets", s.attachTaskAssets)
@@ -1860,6 +1861,50 @@ func (s *Server) taskCoverage(w http.ResponseWriter, r *http.Request) {
 	}
 	cov.Enabled = true
 	writeJSON(w, 200, cov)
+}
+
+// taskRetestCandidates 批量复测（v0.4.27）：返回本任务 status=pending 且无进行中
+// 复测的漏洞清单（默认 critical/high，可用 severities 收窄/放开）+ 全部漏洞的
+// 最新复测状态（前端据此标「已复测/未复测」）。纯读接口——真正发起复测仍走
+// 单条 POST /findings/{id}/retests（并发由前端串行控制，一次只跑一个复测会话）。
+func (s *Server) taskRetestCandidates(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.m.Task(r.PathValue("id"))
+	if !ok {
+		writeErr(w, 404, "task not found")
+		return
+	}
+	taskID, _ := strconv.ParseInt(t.ID, 10, 64)
+	severities := []string{"critical", "high"}
+	if raw := strings.TrimSpace(r.URL.Query().Get("severities")); raw != "" {
+		severities = nil
+		for _, v := range strings.Split(raw, ",") {
+			if v = strings.TrimSpace(v); db.ValidSeverity(v) {
+				severities = append(severities, v)
+			}
+		}
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	candidates, err := s.m.pg.RetestCandidates(taskID, severities, limit)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	states, err := s.m.pg.RetestStatesByTask(taskID)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	stateList := make([]db.RetestState, 0, len(states))
+	for _, st := range states {
+		stateList = append(stateList, st)
+	}
+	writeJSON(w, 200, map[string]any{"candidates": candidates, "retest_states": stateList})
 }
 
 // taskCoverageGraph returns the force-directed asset coverage graph for a task:

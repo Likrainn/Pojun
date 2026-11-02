@@ -528,6 +528,12 @@ func BuildFindingDocx(in FindingDocxInput) *Docx {
 		if len(in.Retests) > 1 {
 			d.P(fmt.Sprintf("历史复测共 %d 次。", len(in.Retests)))
 		}
+	} else {
+		// 未复测标注（v0.4.27）：pending 且没有任何复测记录的漏洞，报告里明确标出
+		// 「待人工复核」，避免读报告的人把模型结论当成已验证事实。
+		if strings.EqualFold(f.Status, "pending") {
+			d.P("复测记录:未复测（待人工复核）")
+		}
 	}
 	return d
 }

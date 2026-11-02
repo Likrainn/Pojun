@@ -21,6 +21,7 @@ import type {
   FindingTraffic,
   FindingTrafficBinding,
   IntentAsset,
+  RetestState,
   ScopeRow,
   Task,
   TaskArchive,
@@ -216,6 +217,8 @@ const mockTaskArchives: MockTaskArchive[] = [];
 let nextMockTaskArchiveID = 1;
 const mockTaskAssetIDs = new Map(D.tasks.map((task, index) => [task.id, index + 1]));
 const mockTaskScopes = new Map<string, TaskScopeRow[]>();
+// 批量复测 mock（v0.4.27）：finding id → 最新复测状态（演示「已复现/已修复」徽标）。
+const mockRetestStates = new Map<number, RetestState>();
 type MockTaskAssetSource = Pick<Asset, "task_source" | "task_source_summary" | "task_source_node_id">;
 const mockTaskAssetSources = new Map<string, MockTaskAssetSource>();
 let nextMockTaskAssetID = D.tasks.length + 1;
@@ -1518,6 +1521,21 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (seg[0] === "tasks" && seg[2] === "coverage" && seg.length === 3) return D.coverage;
   if (seg[0] === "tasks" && seg[2] === "coverage-graph") return D.coverageGraph;
   if (seg[0] === "tasks" && seg[2] === "asset-refs") return D.assetRefsFor(Number(q.get("asset_id") ?? 0));
+
+  // ── 批量复测候选（v0.4.27 mock）──
+  if (seg[0] === "tasks" && seg[2] === "retest-candidates" && seg.length === 3) {
+    const taskID = mockTaskAssetID(seg[1]) ?? Number(seg[1]);
+    const pool = D.findings.filter((f) => String(f.task_id) === seg[1]);
+    const candidates = pool
+      .filter((f) => f.status === "pending" && (f.severity === "critical" || f.severity === "high"))
+      .slice(0, 12)
+      .map((f) => ({ id: Number(f.id), vulnclass: f.vulnclass, name: f.name ?? "", severity: f.severity, summary: f.summary ?? "" }));
+    const retest_states = pool
+      .filter((f) => mockRetestStates.has(Number(f.id)))
+      .map((f) => mockRetestStates.get(Number(f.id))!);
+    void taskID;
+    return { candidates, retest_states };
+  }
 
   // ── 任务测试范围（增删查）──
   if (seg[0] === "tasks" && seg[2] === "scope" && seg.length === 3 && m === "GET") {

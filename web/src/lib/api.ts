@@ -7,6 +7,8 @@ import type { ChatMention } from "@/lib/chat-mentions";
 import { MOCK } from "@/lib/mock/enabled";
 import type {
   ActiveFindingRetest,
+  RetestCandidate,
+  RetestState,
   Activity,
   Agent,
   AgentDetail,
@@ -710,6 +712,14 @@ export const api = {
     post<{ retest: FindingRetest; created: boolean }>(`/exploration/findings/${encodeURIComponent(id)}/retests`, {
       notes,
     }),
+  // 批量复测（v0.4.27）：候选=本任务 pending 且无进行中复测的漏洞（默认 critical/high）；
+  // retest_states=全部漏洞的最新复测状态（前端标已复测/未复测）。
+  retestCandidates: (taskId: string, severities?: string[]) =>
+    get<{ candidates: RetestCandidate[]; retest_states: RetestState[] }>(
+      `/tasks/${encodeURIComponent(taskId)}/retest-candidates${
+        severities?.length ? `?severities=${severities.join(",")}` : ""
+      }`,
+    ).then((r) => ({ candidates: arr(r.candidates), states: arr(r.retest_states) })),
   deepenFinding: (id: string, description: string) =>
     post<FindingDeepenResponse>(`/exploration/findings/${id}/deepen`, { description }),
   intents: (task?: string) => get<TaskNode[]>(`/exploration/intents${tq(task)}`).then(arr),

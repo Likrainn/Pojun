@@ -689,6 +689,9 @@ func (t *ToolSet) WorkerTools() []actool.CoreTool {
 		t.searchVulns(), t.getVuln(), t.getPoc(), t.scanWithNuclei(), t.netContext(),
 		// listener_*：回连接收器（红队 C2 前置）——start/stop 走 ask 审批，sessions 只读。
 		t.listenerStart(), t.listenerStop(), t.listenerSessions(),
+		// http_probe（v0.4.27）：批量探活领域工具——替代逐条手写 curl（任务 5 实测
+		// Bash 占 tool_use 57%、curl 2750 次），一次往返拿整批紧凑摘要。
+		t.httpProbe(),
 		// auth_request：用资产上已登记的凭据组装带认证的请求（横向/越权验证的前提）。
 		t.authRequest(),
 		// diff_responses：对比两个响应的结构性差异（越权/可枚举/状态机三类的共同基础）。
@@ -728,6 +731,8 @@ func (t *ToolSet) MainAgentTools() []actool.CoreTool {
 		t.listUntestedAssets(),
 		// search_vulns / get_vuln：人在环路上也可直接查公开已知漏洞情报。
 		t.searchVulns(), t.getVuln(), t.getPoc(), t.scanWithNuclei(), t.netContext(),
+		// http_probe（v0.4.27）：批量探活领域工具（mainagent 与 worker 同款）。
+		t.httpProbe(),
 		// listener_*：回连接收器（红队 C2 前置）——start/stop 走 ask 审批，sessions 只读。
 		t.listenerStart(), t.listenerStop(), t.listenerSessions(),
 		// auth_request：用资产上已登记的凭据组装带认证的请求（横向/越权验证的前提）。

@@ -403,9 +403,8 @@ func resumeBrief(ts *db.ExplorationStore, intent *db.Node) string {
 // purpose is letting the worker read context (existing facts/assets/hints)
 // so it avoids redundant work and doesn't re-derive what others already found.
 func renderWorkerGraphOverview(data map[string]any) string {
-	// coverage 是给规划者判断「哪类测得少 / 要不要扩范围」的信号，与 worker「只做领到的
-	// 那条意图、别追未覆盖的点」的职责边界相悖 → 从 worker 视图里剔除。data 是本次 worker
-	// 专属的新 map，删键不影响 planner。
+	// data 来自 workerOverviewData（瘦身版），本就不含 coverage/规划专用字段；
+	// delete 兜底：若有调用方误传 planner 全量快照，也不把覆盖度灌给 worker。
 	delete(data, "coverage")
 	b, err := json.Marshal(data)
 	if err != nil {
@@ -474,7 +473,10 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// The run-wide intent is not the current tool action. Do not forward it or
 	// inherit a parent run's background into the action reviewer.
 	ctx = intercept.WithReviewContext(ctx, runDir, intercept.ReviewBackground{})
-	overview := renderWorkerGraphOverview(tsx.graphOverviewData())
+	// v0.4.27：worker 用瘦身版态势（workerOverviewData）——规划专用字段（冷图折叠、
+	// 血缘、意图 token 台账、coverage、related_tasks 等）不进 worker 视图，省掉每次
+	// 启动的重建计算与注入前缀。worker 只需要「别人发现了什么」做去重与联想。
+	overview := renderWorkerGraphOverview(tsx.workerOverviewData())
 	sysBody := workerSystem(w.proxyAddr, w.proxyCACert, w.workDir, runDir)
 	if w.wantConstraints() {
 		sysBody += constraintBlock(ts) // 操作约束(若有)注入系统提示,worker 执行时严格遵守

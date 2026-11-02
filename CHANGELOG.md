@@ -6,6 +6,54 @@
 
 > 以下 0.4.20 起为逐版详录；0.4.4–0.4.19 期间的发版见文末「0.4.4–0.4.19 发版概要」。
 
+## [0.4.27] - 2026-11-03
+
+> 基于任务 5 的真实运行数据做的一轮「降本 + 补盲」：20.8 小时 / 142 轮烧掉 12.1 亿
+> input tokens（cache 命中 92.9%）、66 个漏洞里 64 个停在 pending、493 个 endpoint
+> 只测到 30%。逐项归因后落地批次一（成本与遥测）与批次二（覆盖与复测闭环）。
+
+### 新增
+
+- **`http_probe` 批量探活工具**（worker + mainagent）：给一批 URL 返回一条可执行
+  Bash 命令，每行一个紧凑 JSON（status/bytes/time_ms/title/server/content_type/
+  redirect）。任务 5 实测 Bash 占全部 tool_use 的 57%（curl 探活 2750 次、响应全文
+  进对话）——批量探活一次往返替代逐条手写 curl，响应从整页 HTML 压成一行摘要。
+  沿用「只组命令不自己发请求」原则，流量录制/审批管控照常生效。
+- **record_fact 自动锚定资产（覆盖归账）**：模型没给 `asset_ids` 时，从事实文本
+  （summary/detail/evidence）里提取 URL/主机反查本任务资产自动锚定（URL 精确/
+  前缀、domain/root_domain 匹配，封顶 6 条）。endpoint 覆盖卡在 30% 的主因不是
+  「没测」而是「测了没归账」——Bash curl 探测后 record_fact 不带 asset_ids，
+  覆盖度对账不出来。
+- **未测资产清单重排序**（`list_untested_assets` / `ListUntestedAssetsWithSources`）：
+  静态资源沉底、同路径前缀簇相邻。任务 5 实测 493 个未测 endpoint 里静态仅 5 个、
+  /prod/prod-api（69）、/HRMS/api（52）等前缀簇高度集中——按 id 排序会把同簇接口
+  摊散到不同轮次，规划者很难一次吃掉一簇。
+- **意图墙钟遥测**：runIntent 结算时把 `wall_ms` + 终态写进 intent payload，
+  planner 态势的每条意图直接携带「这条方向烧了多久」。
+- **LLM 用量按角色聚合**：`UsageByWorkerTask` 返回单任务 worker/planner/main/
+  compactor/judge/goals 各自的调用数与 input/output/cache_read（cache 单列，
+  与计费口径一致）。任务 5 实测 worker 占 76.8%、planner 非意图调用占 23.4%。
+- **批量复测**：`GET /api/tasks/{id}/retest-candidates` 返回本任务 pending 且无
+  进行中复测的漏洞清单（默认 critical/high）+ 全部漏洞最新复测状态；复测 Tab 新增
+  「批量复测」条（串行逐条排队、可随时停止、进度显示），漏洞列表带
+  已修复/已复现/无法确认/复测中 徽标；单漏洞 Word 报告对未复测的 pending 漏洞
+  标注「待人工复核」。任务 5 实测 64/66 停在 pending——复测闭环此前只靠手动逐条。
+
+### 优化
+
+- **worker 态势瘦身**（`workerOverviewData`）：worker 启动只注入「别人发现了什么」
+  （goals/hints/计数/最新 findings/facts/工具家底/根任务），不再全量重建并携带
+  planner 专用的冷图折叠、血缘 edges、意图 token 台账、coverage CTE、cold_digests、
+  related_tasks 等——既省每次 worker 启动的重建计算，也把对话固定前缀压到最短
+  （6928 次 worker 调用、平均 13.4 万 input/次，前缀每省 1K 都按轮次放大）。
+- **瞬时 `context canceled` 自动重试**：worker run 内部流被取消（非用户暂停、非
+  kill）造成的收场与 model_error 同待遇，退避重试 2 次后才落 blocked。任务 5 实测
+  6 条意图以 blocked(error: context canceled) 白白收场，全是这种内部取消。
+
+### 文档
+
+- `docs/02-引擎与调度闭环.md` 补「覆盖归账与态势瘦身」节；复测手册补批量复测。
+
 ## [0.4.26] - 2026-11-02
 
 > 任务 5 连续跑了十几小时仍在扫。根因：`goal_met` 只取消在跑 worker、不结束任务；

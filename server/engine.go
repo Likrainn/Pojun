@@ -83,6 +83,18 @@ func retryableWorkerModelError(reason harness.TerminalReason, err error) bool {
 	return reason == harness.ReasonModelError && !isTaskLLMRuntimeError(err)
 }
 
+// isTransientContextCanceled：worker run 以 err 携带 context canceled 收场、但任务级
+// ctx 仍活着——取消发生在 run 内部（provider 流/内部子 ctx），不是用户暂停也不是
+// planner kill。任务 5 实测 6 条意图以 blocked(error: context canceled) 白白收场全是
+// 这种。与 model_error 同待遇：在 runIntent 的重试循环里退避重跑，重试耗尽才落
+// blocked，一条内部取消不再白丢整条意图。
+func isTransientContextCanceled(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "context canceled")
+}
+
 // Engine drives the event-driven exploration loop with real LLM agents
 // (docs §4.3/§4.4): on asset/exploration-graph change (debounced) it wakes the
 // planner, which reads the route, queries assets, judges goals and emits intents;
@@ -1165,6 +1177,7 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		label:  label,
 	}
 	wTaskID, _ := strconv.ParseInt(t.ID, 10, 64)
+	runStart := time.Now() // 意图墙钟起点（跨 model_error 重试累计），结算时落 payload
 	e.BeginLLMCall(t.ID)
 	var reason harness.TerminalReason
 	var wrote agent.WriteCounts
@@ -1180,10 +1193,10 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	// 再重试,避免退避挤占其他 worker 的优雅收尾窗口)。
 	maxRetries, retryBackoff := e.modelErrorRetryPolicy()
 	for attempt := 1; attempt <= maxRetries &&
-		retryableWorkerModelError(reason, err) &&
+		(retryableWorkerModelError(reason, err) || isTransientContextCanceled(err)) &&
 		workCtx.Err() == nil && ectx.Err() == nil && !e.IsPaused(t.ID) && !e.isSettling(t.ID); attempt++ {
-		log.Printf("[worker %s] task %s 意图 #%d model_error 收场，%v 后重试 (%d/%d)",
-			name, t.ID, intent.ID, retryBackoff, attempt, maxRetries)
+		log.Printf("[worker %s] task %s 意图 #%d 瞬时故障收场(%v)，%v 后重试 (%d/%d)",
+			name, t.ID, intent.ID, preview(fmt.Sprint(err), 80), retryBackoff, attempt, maxRetries)
 		if sleepCtx(workCtx, retryBackoff) {
 			break // 退避期间被取消（终止/暂停）→ 交给下方分支处理
 		}
@@ -1324,6 +1337,14 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		}
 	}
 	log.Printf("[worker %s] task %s 意图 #%d 结束: %s (写回 %s)", name, t.ID, intent.ID, state, wrote)
+	// 意图墙钟遥测（v0.4.27）：wall_ms 落 intent payload，planner 的 compactIntents
+	// 会带上它——「这条方向烧了多久」在图上可审计，不再只活在 activity 里。
+	if err := t.Store.MergeIntentPayload(intent.ID, map[string]any{
+		"wall_ms":  time.Since(runStart).Milliseconds(),
+		"terminal": state,
+	}); err != nil {
+		log.Printf("[worker %s] task %s 意图 #%d 墙钟遥测落库失败: %v", name, t.ID, intent.ID, err)
+	}
 	// B2:exhausted 且零写回 = 「烧了一整轮、没留下任何事实/资产/漏报」。这不是普通
 	// 收场——把该方向的最近几步摘要随 review 触发发给 planner,让他复盘落 fact
 	// (血缘 derived_from 指向该意图),而不是让这段尝试就此蒸发。放在终态落库之后:

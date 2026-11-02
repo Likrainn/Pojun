@@ -340,6 +340,20 @@ WHERE id=$2 AND exploration_id=$3 AND kind='goal'`, string(raw), id, s.expID)
 	return err
 }
 
+// MergeIntentPayload merges fields into an intent node's payload (jsonb ||).
+// Used by the engine's run settlement to persist run telemetry (wall_ms 等) on
+// the intent itself, so「这条方向烧了多久」在图上是可审计的，而不只活在 activity。
+func (s *ExplorationStore) MergeIntentPayload(id int64, fields map[string]any) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	raw, _ := json.Marshal(fields)
+	_, err := s.db.Exec(`UPDATE exploration_nodes
+SET payload = COALESCE(payload,'{}'::jsonb) || $1::jsonb
+WHERE id=$2 AND exploration_id=$3 AND kind='intent'`, string(raw), id, s.expID)
+	return err
+}
+
 // UpdateGoalPayload rewrites a goal node's payload text (and optional vulnclass);
 // scoped to kind='goal' so it can never mutate an intent/fact by id. Returns an
 // error if no such goal exists in this exploration.

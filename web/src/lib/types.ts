@@ -738,6 +738,21 @@ export interface FindingRetest {
   finished_at: string | null;
 }
 
+// 批量复测（v0.4.27）：候选清单条目 + 漏洞最新复测状态。
+export interface RetestCandidate {
+  id: number;
+  vulnclass: string;
+  name: string;
+  severity: Severity;
+  summary: string;
+}
+
+export interface RetestState {
+  finding_id: number;
+  status: "pending" | "running" | "completed" | "failed" | "stopped";
+  verdict: "" | "reproduced" | "fixed" | "inconclusive";
+}
+
 export interface Conversation {
   id: number;
   running?: boolean; // live server state, returned with the conversation list

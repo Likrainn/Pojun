@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -37,6 +40,11 @@ func compactIntents(ns []*db.Node, parentsOf, yieldsOf map[int64][]int64, tokens
 		// 要么猜、要么对每条意图多花 1-3 次 node_detail 读图。
 		if n.BlockedReason != "" {
 			m["stop_reason"] = n.BlockedReason
+		}
+		// wall_ms（v0.4.27）：意图墙钟（runIntent 结算时落 payload），planner 直接看到
+		// 「这条方向烧了多久」，配合 tokens 判断该不该续派。
+		if wm, ok := p["wall_ms"].(float64); ok && wm > 0 {
+			m["wall_ms"] = int64(wm)
 		}
 		if n.Inherited {
 			m["source_task_id"] = n.SourceTaskID
@@ -682,6 +690,75 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 				out["coverage"] = m
 			}
 		}
+	}
+	return out
+}
+
+// workerOverviewData is the worker-start lean situational snapshot. 任务 5 实测
+// worker 占全部 token 的 76.8%、单意图均 ≈300 万 input——每个 worker 启动都全量
+// 重建 planner 级态势（冷图×2、全血缘 edges、意图 token 台账、覆盖 CTE 算完即删、
+// cold_digests 整 body），再原样注入启动消息，是最大的固定浪费。worker 只需要
+// 「别人发现了什么」做去重与联想：goals/hints/计数/最新 findings/facts/根任务/
+// host 工具家底。规划专用字段（frontier、running/recent_done intents、cold 折叠、
+// stall、guard 归因、related_tasks、lineage、TokenByIntent、coverage）全部不进
+// worker 视图——既省每次启动的重建计算，也把注入前缀压到最短。
+func (t *ToolSet) workerOverviewData() map[string]any {
+	out := map[string]any{}
+	goals, _ := t.ts.ListByKind(db.KindGoal, 100)
+	gsum := make([]map[string]any, 0, len(goals))
+	for _, g := range goals {
+		var p map[string]any
+		_ = json.Unmarshal(g.Payload, &p)
+		gsum = append(gsum, map[string]any{"id": g.ID, "state": g.State, "text": p["text"]})
+	}
+	out["goals"] = gsum
+	hints, _ := t.ts.ListByKind(db.KindHint, 20)
+	hsum := make([]map[string]any, 0, len(hints))
+	for _, h := range hints {
+		var p map[string]any
+		_ = json.Unmarshal(h.Payload, &p)
+		hsum = append(hsum, map[string]any{"id": h.ID, "state": h.State, "text": p["text"]})
+	}
+	out["hints"] = hsum
+	vulnNodes, _ := t.ts.ListByKind(db.KindFinding, 1000)
+	factNodes, _ := t.ts.ListByKind(db.KindFact, 1000)
+	out["findings_total"] = len(vulnNodes)
+	out["facts"] = len(factNodes)
+	const findingListCap = 10
+	findingList := make([]map[string]any, 0, findingListCap)
+	for _, n := range vulnNodes {
+		if len(findingList) >= findingListCap {
+			break
+		}
+		var fp map[string]any
+		_ = json.Unmarshal(n.Payload, &fp)
+		findingList = append(findingList, map[string]any{"id": n.ID, "summary": fp["summary"]})
+	}
+	out["finding_list"] = findingList
+	const recentFactsCap = 20
+	recentFacts := make([]map[string]any, 0, recentFactsCap)
+	for _, n := range factNodes {
+		if len(recentFacts) >= recentFactsCap {
+			break
+		}
+		m := compactNode(n)
+		var fp map[string]any
+		if json.Unmarshal(n.Payload, &fp) == nil {
+			if c, ok := fp["confidence"].(string); ok && c != "" {
+				m["confidence"] = c
+			}
+		}
+		recentFacts = append(recentFacts, m)
+	}
+	out["recent_facts"] = recentFacts
+	out["tools"] = hosttools.Summary()
+	if t.as != nil && t.taskID > 0 {
+		if hosts, err := t.as.HostsByTaskWithSources(t.taskID); err == nil {
+			out["host_count"] = len(hosts)
+		}
+	}
+	if description, goal, err := t.ts.Root(); err == nil {
+		out["task"] = map[string]any{"description": description, "goal": goal}
 	}
 	return out
 }
@@ -1590,6 +1667,15 @@ func (t *ToolSet) recordOneFact(it factItem, defaultIntent int64) (int64, error)
 	// a fact is its OWN node kind (distinct from a vuln finding).
 	assetIDs := pidList(it.AssetIDs)
 	missing := t.missingAssetIDs(assetIDs)
+	// 覆盖归账（v0.4.27）：模型没给 asset_ids 时，从事实文本里反查任务资产自动锚定。
+	// 任务 5 实测 493 个 endpoint 只测到 30% 的主因不是没测——worker 大量用 Bash curl
+	// 探测后 record_fact 不带 asset_ids，覆盖度对账不出来，规划者被误导继续扫面上。
+	// 锚点是 provenance 边：自动锚定只影响覆盖统计与血缘展示，不改事实内容。
+	if len(assetIDs) == 0 {
+		if auto := t.autoAnchorFact(payload); len(auto) > 0 {
+			assetIDs = auto
+		}
+	}
 	id, err := t.ts.AddNode(db.KindFact, payload, 5, "confirmed", t.worker, assetIDs)
 	if err != nil {
 		return 0, err
@@ -1631,6 +1717,66 @@ func (t *ToolSet) missingAssetIDs(ids []int64) []int64 {
 		}
 	}
 	return missing
+}
+
+var (
+	factURLRe  = regexp.MustCompile(`https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+`)
+	factHostRe = regexp.MustCompile(`(?i)\b([a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b`)
+)
+
+// autoAnchorFact infers anchors for a fact that came in without asset_ids:
+// pull URLs/hosts out of the fact text, match them against task-owned assets,
+// cap the result (a fact name-dropping 20 hosts must not mark 20 assets tested).
+// Best effort — any failure just yields no anchors, the fact is written anyway.
+func (t *ToolSet) autoAnchorFact(payload map[string]any) []int64 {
+	if t.as == nil || t.taskID <= 0 {
+		return nil
+	}
+	parts := make([]string, 0, 3)
+	for _, k := range []string{"summary", "detail", "evidence"} {
+		if s, ok := payload[k].(string); ok && s != "" {
+			parts = append(parts, s)
+		}
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	text := strings.Join(parts, "\n")
+	hostSet := map[string]bool{}
+	var hosts []string
+	for _, m := range factHostRe.FindAllString(text, 16) {
+		h := strings.ToLower(m)
+		if !hostSet[h] && net.ParseIP(h) == nil && strings.Contains(h, ".") {
+			hostSet[h] = true
+			hosts = append(hosts, h)
+		}
+		if len(hosts) >= 12 {
+			break
+		}
+	}
+	urlSet := map[string]bool{}
+	var urls []string
+	for _, m := range factURLRe.FindAllString(text, 16) {
+		m = strings.TrimRight(m, ".,;，。；）)】")
+		if u, err := url.Parse(m); err == nil && u.Host != "" {
+			m = fmt.Sprintf("%s://%s%s", u.Scheme, strings.ToLower(u.Host), u.EscapedPath())
+		}
+		if !urlSet[m] {
+			urlSet[m] = true
+			urls = append(urls, m)
+		}
+		if len(urls) >= 12 {
+			break
+		}
+	}
+	if len(hosts) == 0 && len(urls) == 0 {
+		return nil
+	}
+	ids, err := t.as.ResolveHostAssets(t.taskID, hosts, urls, 6)
+	if err != nil {
+		return nil
+	}
+	return ids
 }
 
 func (t *ToolSet) recordFact() actool.CoreTool {

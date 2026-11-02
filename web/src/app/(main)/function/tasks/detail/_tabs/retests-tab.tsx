@@ -4,7 +4,7 @@ import * as React from "react";
 
 import Link from "next/link";
 
-import { ArrowUpRightIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
+import { ArrowUpRightIcon, ChevronLeftIcon, ChevronRightIcon, Loader2Icon, PlayIcon, SquareIcon } from "lucide-react";
 
 import { FindingRetestPanel } from "@/components/finding-retest-panel";
 import { StatusBadge } from "@/components/status-badge";
@@ -15,12 +15,30 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/u
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
-import type { Finding, FindingsPage } from "@/lib/types";
+import type { Finding, FindingsPage, RetestState } from "@/lib/types";
 
 const PAGE_SIZE = 20;
 
 function findingLabel(finding: Finding) {
   return finding.name?.trim() || finding.vulnclass.trim() || "未分类";
+}
+
+// 最新复测状态徽标文案（v0.4.27 批量复测配套）。
+function retestBadge(state: RetestState | undefined): { text: string; className: string } | null {
+  if (!state) return null;
+  if (state.status === "pending" || state.status === "running") {
+    return { text: "复测中", className: "bg-sky-500/15 text-sky-600 dark:text-sky-400" };
+  }
+  switch (state.verdict) {
+    case "fixed":
+      return { text: "已修复", className: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" };
+    case "reproduced":
+      return { text: "已复现", className: "bg-red-500/15 text-red-600 dark:text-red-400" };
+    case "inconclusive":
+      return { text: "无法确认", className: "bg-amber-500/15 text-amber-600 dark:text-amber-400" };
+    default:
+      return null;
+  }
 }
 
 export function RetestsTab({ taskId }: { taskId: string }) {
@@ -30,6 +48,58 @@ export function RetestsTab({ taskId }: { taskId: string }) {
   const [error, setError] = React.useState("");
   const [refreshVersion, setRefreshVersion] = React.useState(0);
   const refresh = React.useCallback(() => setRefreshVersion((version) => version + 1), []);
+
+  // 批量复测（v0.4.27）：候选=本任务 pending 且无进行中复测的 critical/high。
+  // 串行逐条发起（一次只跑一个复测会话），可随时停止。
+  const [candidates, setCandidates] = React.useState(0);
+  const [states, setStates] = React.useState<Record<number, RetestState>>({});
+  const [batchRunning, setBatchRunning] = React.useState(false);
+  const [batchDone, setBatchDone] = React.useState(0);
+  const [batchTotal, setBatchTotal] = React.useState(0);
+  const cancelBatch = React.useRef(false);
+
+  React.useEffect(() => {
+    let disposed = false;
+    api
+      .retestCandidates(taskId, ["critical", "high"])
+      .then((r) => {
+        if (disposed) return;
+        setCandidates(r.candidates.length);
+        setStates(Object.fromEntries(r.states.map((s) => [s.finding_id, s])));
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+    };
+  }, [taskId, refreshVersion]);
+
+  const runBatch = React.useCallback(async () => {
+    if (batchRunning) return;
+    setBatchRunning(true);
+    cancelBatch.current = false;
+    try {
+      const r = await api.retestCandidates(taskId, ["critical", "high"]);
+      const queue = r.candidates;
+      setStates(Object.fromEntries(r.states.map((s) => [s.finding_id, s])));
+      setBatchTotal(queue.length);
+      setBatchDone(0);
+      for (let i = 0; i < queue.length; i += 1) {
+        if (cancelBatch.current) break;
+        const c = queue[i];
+        try {
+          await api.startFindingRetest(String(c.id), "");
+          setStates((prev) => ({ ...prev, [c.id]: { finding_id: c.id, status: "running", verdict: "" } }));
+        } catch {
+          // 单条失败（如复测 Agent 未启用）不中断整批，继续下一条。
+        }
+        setBatchDone(i + 1);
+        await new Promise((resolve) => setTimeout(resolve, 1500)); // 会话启动间隔，避免瞬时并发
+      }
+      refresh();
+    } finally {
+      setBatchRunning(false);
+    }
+  }, [batchRunning, refresh, taskId]);
 
   // Only this task's own findings, including those without graph nodes.
   // Fetch history only for the selection, and wait for each poll to finish.
@@ -80,6 +150,36 @@ export function RetestsTab({ taskId }: { taskId: string }) {
           </AlertDescription>
         </Alert>
       ) : null}
+      {/* 批量复测条（v0.4.27）：把 pending 的 critical/high 逐条排进复测队列。 */}
+      <Card>
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3">
+          <div className="text-sm">
+            {batchRunning ? (
+              <span className="flex items-center gap-2">
+                <Loader2Icon className="size-4 animate-spin" />
+                批量复测进行中：{batchDone}/{batchTotal}（critical/high，串行执行）
+              </span>
+            ) : (
+              <span className="text-muted-foreground">
+                待复测（critical/high 且无进行中复测）：<span className="text-foreground font-medium">{candidates}</span> 条
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {batchRunning ? (
+              <Button variant="outline" size="sm" onClick={() => (cancelBatch.current = true)}>
+                <SquareIcon data-icon="inline-start" />
+                停止排队
+              </Button>
+            ) : (
+              <Button size="sm" disabled={candidates === 0} onClick={() => void runBatch()}>
+                <PlayIcon data-icon="inline-start" />
+                批量复测
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(16rem,22rem)_minmax(0,1fr)]">
         <Card className="min-w-0">
           <CardHeader>
@@ -102,6 +202,15 @@ export function RetestsTab({ taskId }: { taskId: string }) {
                   <span className="flex flex-wrap items-center gap-2">
                     <StatusBadge domain="severity" value={finding.severity} dot />
                     <StatusBadge domain="finding" value={finding.status} dot />
+                    {(() => {
+                      const badge = retestBadge(states[Number(finding.finding_id || finding.id)]);
+                      if (!badge) return null;
+                      return (
+                        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge.className}`}>
+                          {badge.text}
+                        </span>
+                      );
+                    })()}
                   </span>
                 </Button>
               </React.Fragment>
