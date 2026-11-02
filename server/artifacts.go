@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/chu0119/pojun/db"
+	"github.com/chu0119/pojun/docpreview"
 )
 
 // 证据附件限额（v0.5.0）。默认"样本策略"：worker 只保存证明性样本，全量
@@ -49,7 +50,7 @@ func artifactKindByExt(name string) (kind, mime string) {
 	case ".json":
 		return "data", "application/json"
 	case ".csv":
-		return "data", "text/csv"
+		return "spreadsheet", "text/csv"
 	case ".txt", ".log":
 		return "log", "text/plain"
 	case ".html", ".htm":
@@ -57,7 +58,27 @@ func artifactKindByExt(name string) (kind, mime string) {
 	case ".xml":
 		return "data", "application/xml"
 	case ".pdf":
-		return "data", "application/pdf"
+		return "pdf", "application/pdf"
+	case ".doc":
+		return "document", "application/msword"
+	case ".docx":
+		return "document", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case ".odt":
+		return "document", "application/vnd.oasis.opendocument.text"
+	case ".rtf":
+		return "document", "application/rtf"
+	case ".xls":
+		return "spreadsheet", "application/vnd.ms-excel"
+	case ".xlsx":
+		return "spreadsheet", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	case ".ods":
+		return "spreadsheet", "application/vnd.oasis.opendocument.spreadsheet"
+	case ".ppt":
+		return "presentation", "application/vnd.ms-powerpoint"
+	case ".pptx":
+		return "presentation", "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	case ".odp":
+		return "presentation", "application/vnd.oasis.opendocument.presentation"
 	}
 	return "other", "application/octet-stream"
 }
@@ -487,9 +508,11 @@ func (s *Server) recordArtifactAbs(abs, taskKey string, findingID int64, name, k
 				existing := &list[i]
 				if findingID > 0 && existing.FindingID == 0 {
 					if updated, uerr := pg.UpdateTaskArtifactBinding(existing.ID, findingID, note, sourceURL); uerr == nil {
+						s.enqueueArtifactPreview(updated, false)
 						return updated, nil
 					}
 				}
+				s.enqueueArtifactPreview(existing, false)
 				return existing, nil
 			}
 		}
@@ -519,10 +542,15 @@ func (s *Server) recordArtifactAbs(abs, taskKey string, findingID int64, name, k
 		SizeBytes: int64(len(data)), SHA256: sha, SourceURL: sourceURL,
 		Note: note, Storage: storage,
 	}
+	if docpreview.Supports(name) {
+		a.PreviewState = "pending" // 前端立即显示“生成中”，worker 接上后覆盖
+	}
 	if err := pg.InsertTaskArtifact(context.Background(), a); err != nil {
 		_ = os.Remove(dst)
 		return nil, fmt.Errorf("登记附件失败：%w", err)
 	}
+	// Office/PDF 附件异步生成取样预览（v0.4.21），不阻塞 save_evidence。
+	s.enqueueArtifactPreview(a, false)
 	return a, nil
 }
 
@@ -558,7 +586,10 @@ func (s *Server) scanTaskArtifactDir(taskID string) (added, skipped, truncated i
 		}
 		ext := strings.ToLower(filepath.Ext(path))
 		switch ext {
-		case ".png", ".jpg", ".jpeg", ".gif", ".webp":
+		case ".png", ".jpg", ".jpeg", ".gif", ".webp",
+			".pdf", ".doc", ".docx", ".odt", ".rtf",
+			".xls", ".xlsx", ".ods", ".csv",
+			".ppt", ".pptx", ".odp":
 		default:
 			return nil
 		}

@@ -13,16 +13,21 @@ type TaskArtifact struct {
 	TaskID string `json:"task_id"`
 	// FindingID 可选：这张图/这个样本证明哪个漏洞（worker 报完漏洞后登记时带上）。
 	// 0 = 任务级材料（如目标首页截图），不进单个漏洞的详情页。
-	FindingID int64     `json:"finding_id,omitempty"`
-	Name      string    `json:"name"` // 展示名（含扩展名）
-	Kind      string    `json:"kind"` // image|data|log|html|other
-	Mime      string    `json:"mime,omitempty"`
-	SizeBytes int64     `json:"size_bytes"`
-	SHA256    string    `json:"sha256,omitempty"`
-	SourceURL string    `json:"source_url,omitempty"`
-	Note      string    `json:"note,omitempty"` // 报告图注/附件说明
-	Storage   string    `json:"-"`              // data 目录下的相对路径（不对外）
-	CreatedAt time.Time `json:"created_at"`
+	FindingID int64  `json:"finding_id,omitempty"`
+	Name      string `json:"name"` // 展示名（含扩展名）
+	Kind      string `json:"kind"` // image|data|log|html|other
+	Mime      string `json:"mime,omitempty"`
+	SizeBytes int64  `json:"size_bytes"`
+	SHA256    string `json:"sha256,omitempty"`
+	SourceURL string `json:"source_url,omitempty"`
+	Note      string `json:"note,omitempty"` // 报告图注/附件说明
+	// 文档预览（v0.4.21）：Office/PDF 取样渲染成图片，sidecar 落盘不进附件限额。
+	// state: ""（非文档/未处理）| pending | ready | failed | skipped
+	PreviewState string    `json:"preview_state,omitempty"`
+	PreviewPages int       `json:"preview_pages,omitempty"`
+	PreviewError string    `json:"preview_error,omitempty"`
+	Storage      string    `json:"-"` // data 目录下的相对路径（不对外）
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // EnsureTaskArtifactsTable 幂等建表（服务启动时调用）。
@@ -44,6 +49,10 @@ CREATE TABLE IF NOT EXISTS task_artifacts (
 CREATE INDEX IF NOT EXISTS idx_task_artifacts_task ON task_artifacts(task_id);
 ALTER TABLE task_artifacts ADD COLUMN IF NOT EXISTS finding_id BIGINT;
 CREATE INDEX IF NOT EXISTS idx_task_artifacts_finding ON task_artifacts(finding_id);
+ALTER TABLE task_artifacts ADD COLUMN IF NOT EXISTS preview_state TEXT;
+ALTER TABLE task_artifacts ADD COLUMN IF NOT EXISTS preview_pages INT NOT NULL DEFAULT 0;
+ALTER TABLE task_artifacts ADD COLUMN IF NOT EXISTS preview_error TEXT;
+ALTER TABLE task_artifacts ADD COLUMN IF NOT EXISTS previewed_at TIMESTAMPTZ;
 `)
 	return err
 }
@@ -51,10 +60,10 @@ CREATE INDEX IF NOT EXISTS idx_task_artifacts_finding ON task_artifacts(finding_
 // InsertTaskArtifact 登记一个附件（文件已由 host 落盘）。
 func (d *DB) InsertTaskArtifact(ctx context.Context, a *TaskArtifact) error {
 	return d.QueryRowContext(ctx, `
-INSERT INTO task_artifacts(task_id,finding_id,name,kind,mime,size_bytes,sha256,source_url,note,storage_path)
-VALUES ($1,NULLIF($2,0),$3,$4,NULLIF($5,''),$6,NULLIF($7,''),NULLIF($8,''),NULLIF($9,''),$10)
+INSERT INTO task_artifacts(task_id,finding_id,name,kind,mime,size_bytes,sha256,source_url,note,storage_path,preview_state)
+VALUES ($1,NULLIF($2,0),$3,$4,NULLIF($5,''),$6,NULLIF($7,''),NULLIF($8,''),NULLIF($9,''),$10,NULLIF($11,''))
 RETURNING id, created_at`,
-		a.TaskID, a.FindingID, a.Name, a.Kind, a.Mime, a.SizeBytes, a.SHA256, a.SourceURL, a.Note, a.Storage).
+		a.TaskID, a.FindingID, a.Name, a.Kind, a.Mime, a.SizeBytes, a.SHA256, a.SourceURL, a.Note, a.Storage, a.PreviewState).
 		Scan(&a.ID, &a.CreatedAt)
 }
 
@@ -62,7 +71,7 @@ RETURNING id, created_at`,
 func (d *DB) ListTaskArtifacts(taskID string) ([]TaskArtifact, error) {
 	rows, err := d.Query(`
 SELECT id,task_id,COALESCE(finding_id,0),name,kind,COALESCE(mime,''),size_bytes,COALESCE(sha256,''),
-       COALESCE(source_url,''),COALESCE(note,''),storage_path,created_at
+       COALESCE(source_url,''),COALESCE(note,''),COALESCE(preview_state,''),COALESCE(preview_pages,0),COALESCE(preview_error,''),storage_path,created_at
 FROM task_artifacts WHERE task_id=$1 ORDER BY id`, taskID)
 	if err != nil {
 		return nil, err
@@ -72,7 +81,7 @@ FROM task_artifacts WHERE task_id=$1 ORDER BY id`, taskID)
 	for rows.Next() {
 		var a TaskArtifact
 		if err := rows.Scan(&a.ID, &a.TaskID, &a.FindingID, &a.Name, &a.Kind, &a.Mime, &a.SizeBytes,
-			&a.SHA256, &a.SourceURL, &a.Note, &a.Storage, &a.CreatedAt); err != nil {
+			&a.SHA256, &a.SourceURL, &a.Note, &a.PreviewState, &a.PreviewPages, &a.PreviewError, &a.Storage, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -85,10 +94,10 @@ func (d *DB) GetTaskArtifact(id int64) (*TaskArtifact, error) {
 	var a TaskArtifact
 	err := d.QueryRow(`
 SELECT id,task_id,COALESCE(finding_id,0),name,kind,COALESCE(mime,''),size_bytes,COALESCE(sha256,''),
-       COALESCE(source_url,''),COALESCE(note,''),storage_path,created_at
+       COALESCE(source_url,''),COALESCE(note,''),COALESCE(preview_state,''),COALESCE(preview_pages,0),COALESCE(preview_error,''),storage_path,created_at
 FROM task_artifacts WHERE id=$1`, id).
 		Scan(&a.ID, &a.TaskID, &a.FindingID, &a.Name, &a.Kind, &a.Mime, &a.SizeBytes,
-			&a.SHA256, &a.SourceURL, &a.Note, &a.Storage, &a.CreatedAt)
+			&a.SHA256, &a.SourceURL, &a.Note, &a.PreviewState, &a.PreviewPages, &a.PreviewError, &a.Storage, &a.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -109,9 +118,9 @@ func (d *DB) UpdateTaskArtifactFinding(id int64, findingID int64) (*TaskArtifact
 	err := d.QueryRow(`
 UPDATE task_artifacts SET finding_id=NULLIF($2,0) WHERE id=$1
 RETURNING id,task_id,COALESCE(finding_id,0),name,kind,COALESCE(mime,''),size_bytes,COALESCE(sha256,''),
-          COALESCE(source_url,''),COALESCE(note,''),storage_path,created_at`, id, findingID).
+          COALESCE(source_url,''),COALESCE(note,''),COALESCE(preview_state,''),COALESCE(preview_pages,0),COALESCE(preview_error,''),storage_path,created_at`, id, findingID).
 		Scan(&a.ID, &a.TaskID, &a.FindingID, &a.Name, &a.Kind, &a.Mime, &a.SizeBytes,
-			&a.SHA256, &a.SourceURL, &a.Note, &a.Storage, &a.CreatedAt)
+			&a.SHA256, &a.SourceURL, &a.Note, &a.PreviewState, &a.PreviewPages, &a.PreviewError, &a.Storage, &a.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -128,11 +137,38 @@ UPDATE task_artifacts SET finding_id=NULLIF($2,0),
        source_url=COALESCE(NULLIF(source_url,''),NULLIF($4,''))
 WHERE id=$1
 RETURNING id,task_id,COALESCE(finding_id,0),name,kind,COALESCE(mime,''),size_bytes,COALESCE(sha256,''),
-          COALESCE(source_url,''),COALESCE(note,''),storage_path,created_at`, id, findingID, note, sourceURL).
+          COALESCE(source_url,''),COALESCE(note,''),COALESCE(preview_state,''),COALESCE(preview_pages,0),COALESCE(preview_error,''),storage_path,created_at`, id, findingID, note, sourceURL).
 		Scan(&a.ID, &a.TaskID, &a.FindingID, &a.Name, &a.Kind, &a.Mime, &a.SizeBytes,
-			&a.SHA256, &a.SourceURL, &a.Note, &a.Storage, &a.CreatedAt)
+			&a.SHA256, &a.SourceURL, &a.Note, &a.PreviewState, &a.PreviewPages, &a.PreviewError, &a.Storage, &a.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return &a, nil
+}
+
+// SetTaskArtifactPreview 更新文档预览状态（v0.4.21）。
+func (d *DB) SetTaskArtifactPreview(id int64, state string, pages int, errMsg string) error {
+	_, err := d.Exec(`
+UPDATE task_artifacts
+SET preview_state=$2, preview_pages=$3, preview_error=NULLIF($4,''), previewed_at=now()
+WHERE id=$1`, id, state, pages, errMsg)
+	return err
+}
+
+// ListArtifactTaskIDs 返回有证据附件的任务 ID（离线补预览用）。
+func (d *DB) ListArtifactTaskIDs() ([]string, error) {
+	rows, err := d.Query(`SELECT DISTINCT task_id FROM task_artifacts ORDER BY task_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }

@@ -818,12 +818,16 @@ export interface TaskArtifact {
   task_id: string;
   finding_id?: number;
   name: string;
-  kind: string; // image|data|log|html|other
+  kind: string; // image|document|spreadsheet|presentation|pdf|data|log|html|other
   mime?: string;
   size_bytes: number;
   sha256?: string;
   source_url?: string;
   note?: string;
+  // 文档预览（v0.4.21）：Office/PDF 取样转图片的状态与页数。
+  preview_state?: "pending" | "ready" | "failed" | "skipped" | "";
+  preview_pages?: number;
+  preview_error?: string;
   created_at: string;
 }
 

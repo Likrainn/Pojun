@@ -4,6 +4,36 @@
 
 ## [Unreleased]
 
+## [0.4.21] - 2026-11-02
+
+> 用户要求：抓到的 Word/Excel/PDF 等文档也要能“看见成果”。本版把文档取样
+> 转成图片，任务证据卡与报告里直接预览；依赖随一键安装/Docker 装齐。
+
+### 新增
+
+- **文档转图片预览**：doc/docx/odt/rtf、xls/xlsx/ods/csv、ppt/pptx/odp、pdf
+  自动取**前 3 页**渲染 JPEG（长边 1600、q82）。Office 先经 LibreOffice 转
+  PDF，再走 poppler `pdftoppm`；PDF 直接渲染。
+- **异步预览队列**：单 worker 串行（避免 LibreOffice profile 锁），登记附件后
+  自动排队，不阻塞 `save_evidence`；前端每 4s 轮询生成状态。
+- **存储与限额**：预览 sidecar 落 `artifacts/previews/<id>/page-N.jpg`，不占
+  100 个附件限额，单独按任务 100MB 总量保护；失败/缺依赖写 `preview_error`。
+- **任务证据卡文档画廊**：新增 全部/图片/文档/其他 筛选；文档卡片显示首页
+  缩略图 + 类型/页数，点击可翻页看大图、下载原件；失败可单条重试。
+- **报告嵌文档预览**：引用文档类附件时嵌入第一页预览图；大图嵌报告前压到
+  1600px JPEG，避免 docx 体积膨胀（顺带解决 webp 无法嵌入）。
+- **扫描补登记支持文档**：历史工作目录里的 Office/PDF 也会被扫描入证据库并
+  自动生成预览。
+- **离线补预览**：`pojun-maint previews --task <id>` / `--all`（`--force` 重建）。
+- **API**：`GET /api/tasks/{id}/artifacts/{aid}/preview/{page}`、
+  `POST .../preview` 手动重新生成；附件列表返回 `preview_state/pages/error`。
+
+### 部署
+
+- `install.sh` 默认安装 `libreoffice-writer/calc/impress` + `poppler-utils`；
+  宿主环境页新增 `poppler` 条目，`libreoffice` 条目补全三组件；Docker 镜像内置。
+- 旧任务补预览：`pojun-maint previews --config /opt/pojun/config.json --all`。
+
 ## [0.4.20] - 2026-11-02
 
 > 用户反馈「加了照片之后，每个漏洞里都能看到同一批照片」。根因不是跨任务串数据

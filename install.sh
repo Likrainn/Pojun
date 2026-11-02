@@ -811,17 +811,20 @@ install_tools(){
     # seclists 在 apt 源里没有稳定包名，单独克隆（见 install_wordlists）；
     # 其余一次装齐，缺的包不阻断整体（不同发行版源里包名有出入）。
     # imagemagick：报告证据拼图/文件名水印（v0.4.10 起依赖）；
-    # libreoffice-writer：docx→PDF 离线导出（可选能力，装机时一并装全）。
+    # libreoffice-writer/calc/impress + poppler-utils：文档证据转图片预览
+    # （v0.4.21 起，Word/Excel/PPT→PDF→JPEG）。
     apt-get "${APT_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto gobuster ffuf john \
-      netcat-openbsd dnsutils whois unzip nodejs npm python3-impacket gitleaks imagemagick libreoffice-writer \
+      netcat-openbsd dnsutils whois unzip nodejs npm python3-impacket gitleaks imagemagick \
+      libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils \
       >/dev/null 2>&1 \
       || apt-get "${APT_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto gobuster ffuf john \
            netcat-openbsd dnsutils whois unzip nodejs npm python3-impacket imagemagick \
+           libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils \
            >/dev/null \
       || warn "部分 apt 工具未装上"
   elif command -v dnf >/dev/null 2>&1; then
     dnf "${DNF_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto john nmap-ncat bind-utils unzip \
-      nodejs python3-impacket ImageMagick libreoffice-writer \
+      nodejs python3-impacket ImageMagick libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils \
       || warn "dnf 部分包缺失，已装可用项"
   else
     warn "未识别的包管理器，跳过系统源工具安装"

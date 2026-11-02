@@ -16,6 +16,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/chu0119/pojun/agent"
 	"github.com/chu0119/pojun/db"
+	"github.com/chu0119/pojun/docpreview"
 )
 
 const (
@@ -40,14 +42,16 @@ const (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: pojun-maint <scan-artifacts|reset-prompts|fix-permissions> --config <config.json> [--force]")
+		fmt.Fprintln(os.Stderr, "usage: pojun-maint <scan-artifacts|previews|reset-prompts|fix-permissions> --config <config.json> [--force]")
 		os.Exit(2)
 	}
 	cmd := os.Args[1]
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	cfgPath := fs.String("config", "/opt/pojun/config.json", "POJUN config.json 路径")
 	dataDir := fs.String("data", "", "数据目录（默认取 config 目录下的 data）")
-	force := fs.Bool("force", false, "reset-prompts: 覆盖自定义编辑，直接写回内置默认")
+	force := fs.Bool("force", false, "reset-prompts: 覆盖自定义编辑；previews: 重新生成已 ready 的预览")
+	taskID := fs.Int64("task", 0, "previews: 只处理指定任务 ID")
+	all := fs.Bool("all", false, "previews: 处理所有任务")
 	_ = fs.Parse(os.Args[2:])
 
 	dsn, err := loadDSN(*cfgPath)
@@ -68,6 +72,8 @@ func main() {
 	switch cmd {
 	case "scan-artifacts":
 		scanArtifacts(pg, *dataDir)
+	case "previews":
+		generatePreviews(pg, *dataDir, *taskID, *all, *force)
 	case "reset-prompts":
 		resetPrompts(pg, *force)
 	case "fix-permissions":
@@ -190,6 +196,64 @@ func scanArtifacts(pg *db.DB, dataDir string) {
 		totalSkipped += skipped
 	}
 	fmt.Printf("\n完成：共补登记 %d 张，跳过 %d 张\n", totalAdded, totalSkipped)
+}
+
+// generatePreviews 为历史 Office/PDF 附件补生成取样预览（v0.4.21）。
+// 用法：--task <id> 或 --all；--force 重新生成已 ready 的。
+func generatePreviews(pg *db.DB, dataDir string, onlyTask int64, all, force bool) {
+	fmt.Printf("[previews] LibreOffice/pdftoppm 可用性：soffice=%v pdftoppm=%v\n", func() bool {
+		s, _ := docpreview.Available()
+		return s
+	}(), func() bool {
+		_, p := docpreview.Available()
+		return p
+	}())
+	var taskIDs []string
+	if onlyTask > 0 {
+		taskIDs = []string{strconv.FormatInt(onlyTask, 10)}
+	} else if all {
+		ids, err := pg.ListArtifactTaskIDs()
+		if err != nil {
+			fail(err)
+		}
+		taskIDs = ids
+	} else {
+		fail(fmt.Errorf("previews 需要 --task <id> 或 --all"))
+	}
+	totalReady, totalSkip, totalFail := 0, 0, 0
+	for _, taskID := range taskIDs {
+		list, err := pg.ListTaskArtifacts(taskID)
+		if err != nil {
+			fmt.Printf("[task %s] 读取附件失败：%v\n", taskID, err)
+			continue
+		}
+		for _, a := range list {
+			if !docpreview.Supports(a.Name) {
+				continue
+			}
+			if !force && a.PreviewState == "ready" && a.PreviewPages > 0 {
+				totalSkip++
+				continue
+			}
+			src := filepath.Join(dataDir, a.Storage)
+			outDir := filepath.Join(dataDir, "tasks", taskID, "artifacts", "previews", strconv.FormatInt(a.ID, 10))
+			pages, err := docpreview.Generate(context.Background(), src, outDir, docpreview.DefaultPages)
+			if err != nil {
+				state := "failed"
+				if errors.Is(err, docpreview.ErrSofficeMissing) || errors.Is(err, docpreview.ErrPdftoppmMissing) {
+					state = "skipped"
+				}
+				_ = pg.SetTaskArtifactPreview(a.ID, state, 0, err.Error())
+				fmt.Printf("[task %s] #%d %s → %s：%v\n", taskID, a.ID, a.Name, state, err)
+				totalFail++
+				continue
+			}
+			_ = pg.SetTaskArtifactPreview(a.ID, "ready", pages, "")
+			fmt.Printf("[task %s] #%d %s → ready（%d 页）\n", taskID, a.ID, a.Name, pages)
+			totalReady++
+		}
+	}
+	fmt.Printf("\n完成：生成 %d，跳过 %d，失败 %d\n", totalReady, totalSkip, totalFail)
 }
 
 func fileSHA(path string) (string, error) {

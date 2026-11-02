@@ -735,6 +735,11 @@ export const api = {
   // 修改附件归属（v0.4.20）：finding_id=0 表示任务级。
   updateTaskArtifact: (taskId: string, artifactId: number, findingId: number) =>
     patch<{ artifact: TaskArtifact }>(`/tasks/${taskId}/artifacts/${artifactId}`, { finding_id: findingId }),
+  // 文档预览（v0.4.21）：第 N 页 JPEG / 手动重新生成。
+  artifactPreviewUrl: (taskId: string, artifactId: number, page: number) =>
+    `/api/tasks/${taskId}/artifacts/${artifactId}/preview/${page}`,
+  regenerateArtifactPreview: (taskId: string, artifactId: number) =>
+    post<{ state: string }>(`/tasks/${taskId}/artifacts/${artifactId}/preview`, {}),
   tokenDaily: (days = 30) => get<DailyTokenBucket[]>(`/tokens/daily?days=${days}`).then(arr),
   conversationTokens: () =>
     get<ConvTokenSummary[]>("/tokens/conversations")

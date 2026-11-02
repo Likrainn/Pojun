@@ -7,6 +7,8 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -169,15 +171,56 @@ func (s *Server) artifactImageResolver(taskID string, onlyFindingID int64) func(
 			return nil, "", false
 		}
 		data, ok := s.artifactImageData(a)
-		if !ok {
-			return nil, "", false
-		}
 		caption := a.Note
 		if caption == "" {
 			caption = a.Name
 		}
+		// 文档附件（v0.4.21）：引用文档时嵌入第一页预览图，让报告里也能“看到”。
+		if !ok && a.PreviewState == "ready" && a.PreviewPages > 0 {
+			p := filepath.Join(s.previewDir(a.TaskID, a.ID), "page-1.jpg")
+			if b, err := os.ReadFile(p); err == nil && len(b) > 0 {
+				data, ok = b, true
+				caption = caption + "（文档第 1 页预览）"
+			}
+		}
+		if !ok {
+			return nil, "", false
+		}
+		// 大图先压到 1600px JPEG：20MB 原图直接塞进 docx 会让报告膨胀到几十 MB。
+		if len(data) > 2<<20 {
+			if small, ok := s.shrinkDocxImage(data); ok {
+				data = small
+			}
+		}
 		return data, caption, true
 	}
+}
+
+// shrinkDocxImage 把大图缩到长边 1600 的 JPEG；失败返回 false 由调用方用原图。
+func (s *Server) shrinkDocxImage(data []byte) ([]byte, bool) {
+	f, err := os.CreateTemp("", "pojun-embed-*.img")
+	if err != nil {
+		return nil, false
+	}
+	src := f.Name()
+	defer os.Remove(src)
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return nil, false
+	}
+	if err := f.Close(); err != nil {
+		return nil, false
+	}
+	dst := src + ".jpg"
+	defer os.Remove(dst)
+	if err := writeThumbnail(src, dst, 1600); err != nil {
+		return nil, false
+	}
+	out, err := os.ReadFile(dst)
+	if err != nil || len(out) == 0 || len(out) >= len(data) {
+		return nil, false
+	}
+	return out, true
 }
 
 // taskCustomerNames 任务关联企业名（封面「委托方」行；A12）。

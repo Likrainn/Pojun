@@ -51,6 +51,13 @@ type Server struct {
 	dataDir  string       // browsable workspace root
 	jwtKey   atomic.Value // HS256 signing key ([]byte); replaceable to revoke sessions
 
+	// 文档预览（v0.4.21）：Office/PDF 取样转图片，单 worker 串行（LibreOffice
+	// 的 UserInstallation 不能并发），queue 只放 artifact id。
+	previewOnce sync.Once
+	previewQ    chan int64
+	previewMu   sync.Mutex
+	previewIDs  map[int64]bool
+
 	// lm is the process-wide callback listener. It is initialized lazily so an
 	// installation that never needs a callback opens no extra socket or goroutine.
 	listenOnce sync.Once
@@ -822,9 +829,11 @@ func (s *Server) Handler() http.Handler {
 	// 证据附件（v0.5.0）：列表 / 单文件下载 / 证据包 zip。
 	mux.HandleFunc("GET /api/tasks/{id}/artifacts", s.listTaskArtifacts)
 	mux.HandleFunc("PATCH /api/tasks/{id}/artifacts/{aid}", s.patchTaskArtifact) // 改归属（任务级 ↔ 漏洞）
-	mux.HandleFunc("POST /api/tasks/{id}/artifacts/scan", s.scanTaskArtifacts) // 历史目录补登记
+	mux.HandleFunc("POST /api/tasks/{id}/artifacts/scan", s.scanTaskArtifacts)   // 历史目录补登记
 	mux.HandleFunc("GET /api/tasks/{id}/artifacts/export", s.exportTaskArtifacts)
 	mux.HandleFunc("GET /api/tasks/{id}/artifacts/{aid}", s.serveTaskArtifact)
+	mux.HandleFunc("GET /api/tasks/{id}/artifacts/{aid}/preview/{page}", s.serveArtifactPreview)
+	mux.HandleFunc("POST /api/tasks/{id}/artifacts/{aid}/preview", s.regenerateArtifactPreview)
 
 	mux.HandleFunc("GET /api/audit", s.getAudit)
 	mux.HandleFunc("POST /api/gc", s.gc)

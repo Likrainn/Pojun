@@ -7,6 +7,8 @@ import {
   AlertTriangleIcon,
   BugIcon,
   CheckIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   ClockIcon,
   ImageIcon,
   ImageOffIcon,
@@ -1408,6 +1410,9 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
   const [findings, setFindings] = React.useState<Finding[]>([]);
   const [assignTo, setAssignTo] = React.useState("0");
   const [assigning, setAssigning] = React.useState(false);
+  // v0.4.21：文档预览与筛选。
+  const [filter, setFilter] = React.useState<"all" | "image" | "document" | "file">("all");
+  const [docPreview, setDocPreview] = React.useState<{ artifact: TaskArtifact; page: number } | null>(null);
   const load = React.useCallback(
     (alive: { v: boolean }) =>
       api
@@ -1473,11 +1478,46 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
     }
   };
   const images = list.filter((a) => a.kind === "image");
-  const files = list.filter((a) => a.kind !== "image");
+  const isDoc = (a: TaskArtifact) =>
+    ["document", "spreadsheet", "presentation", "pdf"].includes(a.kind) ||
+    /\.(docx?|xlsx?|pptx?|pdf|odt|ods|odp|csv|rtf)$/i.test(a.name);
+  const documents = list.filter((a) => a.kind !== "image" && isDoc(a));
+  const files = list.filter((a) => a.kind !== "image" && !isDoc(a));
+  const docLabel = (a: TaskArtifact) => {
+    if (a.kind === "document") return "Word";
+    if (a.kind === "spreadsheet") return "Excel/CSV";
+    if (a.kind === "presentation") return "PPT";
+    if (a.kind === "pdf" || /\.pdf$/i.test(a.name)) return "PDF";
+    return a.kind;
+  };
   const fmtSize = (n: number) => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`);
   const thumbUrl = (id: number) => `${api.artifactUrl(taskId, id)}?thumb=1`;
   const fullUrl = (id: number) => api.artifactUrl(taskId, id);
   const downloadUrl = (id: number) => `${api.artifactUrl(taskId, id)}?download=1`;
+  const previewUrl = (id: number, page: number) => api.artifactPreviewUrl(taskId, id, page);
+  const regeneratePreview = async (a: TaskArtifact) => {
+    try {
+      await api.regenerateArtifactPreview(taskId, a.id);
+      toast.success("已提交预览生成，稍后自动刷新");
+      await load({ v: true });
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+  // 有文档在生成时自动轮询，完成后无需手动刷新。
+  React.useEffect(() => {
+    if (!expanded || !list.some((a) => a.preview_state === "pending")) return;
+    const t = window.setInterval(() => {
+      void load({ v: true });
+    }, 4000);
+    return () => window.clearInterval(t);
+  }, [expanded, list, load]);
+  const filterChips: { key: typeof filter; label: string }[] = [
+    { key: "all", label: `全部 ${list.length}` },
+    { key: "image", label: `图片 ${images.length}` },
+    { key: "document", label: `文档 ${documents.length}` },
+    { key: "file", label: `其他 ${files.length}` },
+  ];
   return (
     <>
       <Card>
@@ -1535,7 +1575,21 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
                 </Button>
               </div>
             )}
-            {images.length > 0 && (
+            {list.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {filterChips.map((c) => (
+                  <Button
+                    key={c.key}
+                    size="sm"
+                    variant={filter === c.key ? "default" : "outline"}
+                    onClick={() => setFilter(c.key)}
+                  >
+                    {c.label}
+                  </Button>
+                ))}
+              </div>
+            )}
+            {(filter === "all" || filter === "image") && images.length > 0 && (
               <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
                 {images.map((a) => (
                   <div key={a.id} className="relative">
@@ -1579,7 +1633,77 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
                 ))}
               </div>
             )}
-            {files.length > 0 && (
+            {(filter === "all" || filter === "document") && documents.length > 0 && (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                {documents.map((a) => {
+                  const ready = a.preview_state === "ready" && (a.preview_pages ?? 0) > 0;
+                  const stateText =
+                    a.preview_state === "pending"
+                      ? "预览生成中…"
+                      : a.preview_state === "failed"
+                        ? "预览失败"
+                        : a.preview_state === "skipped"
+                          ? "未生成预览"
+                          : "点击生成预览";
+                  return (
+                    <div key={a.id} className="relative">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (ready) setDocPreview({ artifact: a, page: 1 });
+                          else void regeneratePreview(a);
+                        }}
+                        className="group relative flex aspect-[3/4] w-full flex-col overflow-hidden rounded-md border bg-muted/40 text-left"
+                        title={a.preview_error || a.note || a.name}
+                      >
+                        {ready ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={previewUrl(a.id, 1)}
+                            alt={a.note || a.name}
+                            loading="lazy"
+                            className="h-full w-full object-cover object-top transition-transform duration-200 group-hover:scale-105"
+                          />
+                        ) : (
+                          <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-3 text-center text-[11px] text-muted-foreground">
+                            <BugIcon className="size-5" />
+                            {stateText}
+                            {a.preview_error ? <span className="line-clamp-2 break-all">{a.preview_error}</span> : null}
+                          </span>
+                        )}
+                        <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+                          {docLabel(a)}
+                          {ready ? ` · ${a.preview_pages} 页` : ""}
+                          {a.finding_id ? ` · #${a.finding_id}` : ""}
+                          {" · "}
+                          {a.name}
+                        </span>
+                      </button>
+                      <label className="absolute top-1.5 left-1.5 z-10 flex size-5 cursor-pointer items-center justify-center rounded bg-black/55">
+                        <input
+                          type="checkbox"
+                          aria-label={`选择 ${a.name}`}
+                          className="size-3.5 accent-primary"
+                          checked={selected.includes(a.id)}
+                          onChange={() => toggleSelected(a.id)}
+                        />
+                      </label>
+                      {!ready && a.preview_state !== "pending" && (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="absolute right-1.5 bottom-7 z-10 h-6 px-2 text-[11px]"
+                          onClick={() => void regeneratePreview(a)}
+                        >
+                          {a.preview_state === "failed" ? "重试" : "生成预览"}
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {(filter === "all" || filter === "file") && files.length > 0 && (
               <div className="flex flex-col divide-y rounded border">
                 {files.map((a) => (
                   <div key={a.id} className="flex min-w-0 items-center gap-2 px-3 py-2 text-sm">
@@ -1632,6 +1756,57 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
                 <Button size="sm" variant="outline" asChild>
                   <a href={downloadUrl(preview.id)}>下载原件</a>
                 </Button>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={!!docPreview}
+        onOpenChange={(o) => {
+          if (!o) setDocPreview(null);
+        }}
+      >
+        <DialogContent className="max-w-6xl">
+          <DialogHeader>
+            <DialogTitle className="break-all text-base">
+              {docPreview?.artifact.note || docPreview?.artifact.name}
+            </DialogTitle>
+          </DialogHeader>
+          {docPreview && (
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={previewUrl(docPreview.artifact.id, docPreview.page)}
+                alt={`${docPreview.artifact.name} 第 ${docPreview.page} 页`}
+                className="mx-auto max-h-[70vh] w-auto max-w-full rounded border object-contain"
+              />
+              <div className="flex flex-wrap items-center justify-between gap-2 text-muted-foreground text-xs">
+                <span className="break-all">
+                  {docPreview.artifact.name} · 第 {docPreview.page} / {docPreview.artifact.preview_pages ?? 0} 页
+                  {docPreview.artifact.finding_id ? ` · 漏洞 #${docPreview.artifact.finding_id}` : ""}
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={docPreview.page <= 1}
+                    onClick={() => setDocPreview((cur) => (cur ? { ...cur, page: cur.page - 1 } : cur))}
+                  >
+                    <ChevronLeftIcon className="size-3.5" /> 上一页
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={docPreview.page >= (docPreview.artifact.preview_pages ?? 1)}
+                    onClick={() => setDocPreview((cur) => (cur ? { ...cur, page: cur.page + 1 } : cur))}
+                  >
+                    下一页 <ChevronRightIcon className="size-3.5" />
+                  </Button>
+                  <Button size="sm" variant="outline" asChild>
+                    <a href={downloadUrl(docPreview.artifact.id)}>下载原件</a>
+                  </Button>
+                </div>
               </div>
             </>
           )}

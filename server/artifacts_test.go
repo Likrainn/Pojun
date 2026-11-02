@@ -11,6 +11,19 @@ import (
 	"testing"
 )
 
+// TestArtifactKindDocument v0.4.21：Office/PDF 归入可预览类型。
+func TestArtifactKindDocument(t *testing.T) {
+	cases := map[string]string{
+		"a.docx": "document", "a.xlsx": "spreadsheet", "a.pptx": "presentation", "a.pdf": "pdf", "a.csv": "spreadsheet",
+		"a.png": "image", "a.json": "data", "a.bin": "other",
+	}
+	for name, want := range cases {
+		if got, _ := artifactKindByExt(name); got != want {
+			t.Fatalf("artifactKindByExt(%q)=%q want %q", name, got, want)
+		}
+	}
+}
+
 // TestWriteThumbnail 验证缩略图：长边缩到 480 内、输出是合法 JPEG。
 func TestWriteThumbnail(t *testing.T) {
 	dir := t.TempDir()

@@ -22,8 +22,8 @@ import (
 type PkgMgr string
 
 const (
-	PkgApt PkgMgr = "apt"
-	PkgDnf PkgMgr = "dnf"
+	PkgApt  PkgMgr = "apt"
+	PkgDnf  PkgMgr = "dnf"
 	PkgNone PkgMgr = ""
 )
 
@@ -90,15 +90,22 @@ func aptArgv(tool hosttools.Tool, mgr PkgMgr, proxy string) ([]string, error) {
 	if pkg == "" {
 		return nil, fmt.Errorf("%s 没有适配本机包管理器的包名", tool.Name)
 	}
+	// 一个工具可能对应多个系统包（如 LibreOffice 三组件），包名字段允许空格分隔。
+	pkgs := strings.Fields(pkg)
+	if len(pkgs) == 0 {
+		return nil, fmt.Errorf("%s 没有适配本机包管理器的包名", tool.Name)
+	}
 	if mgr == PkgApt {
 		argv := append([]string{"apt-get"}, APTProxyArgs(proxy)...)
-		return append(argv, "install", "-y", pkg), nil
+		argv = append(argv, "install", "-y")
+		return append(argv, pkgs...), nil
 	}
 	argv := []string{"dnf"}
 	if proxy != "" {
 		argv = append(argv, "--setopt=proxy="+proxy)
 	}
-	return append(argv, "install", "-y", pkg), nil
+	argv = append(argv, "install", "-y")
+	return append(argv, pkgs...), nil
 }
 
 // aptUpdateArgv apt 索引刷新(apt 源随时间失效,装之前先 update 一次)。
@@ -149,12 +156,13 @@ func pipArgv(tool hosttools.Tool, proxy string) []string {
 // GitHubAssetURL 由资产模板拼出下载地址。tag 形如 v3.4.10,资产名里不带 v。
 //
 // 模板占位符：
-//   {ver}   版本号（不带 v），如 3.4.10
-//   {verv}  版本号（带 v），如 v3.4.10
-//   {arch}  架构，amd64 / arm64（Go 的 GOARCH 写法）
-//   {arch2} 架构，x86_64 / aarch64（部分项目用这套，如 gitleaks/amass）
-//   {arch3} 架构，x86 / arm（又一套，如 chisel 的部分资产）
-//   {arch4}  架构，x64 / arm64（gitleaks 用这套）
+//
+//	{ver}   版本号（不带 v），如 3.4.10
+//	{verv}  版本号（带 v），如 v3.4.10
+//	{arch}  架构，amd64 / arm64（Go 的 GOARCH 写法）
+//	{arch2} 架构，x86_64 / aarch64（部分项目用这套，如 gitleaks/amass）
+//	{arch3} 架构，x86 / arm（又一套，如 chisel 的部分资产）
+//	{arch4}  架构，x64 / arm64（gitleaks 用这套）
 //
 // 各项目的资产命名差异很大（架构在前/后、版本带不带 v、扩展名 .zip/.tar.gz/.gz），
 // 所以模板必须能覆盖这些差异，否则「一键安装」只能对着一半项目有效。
