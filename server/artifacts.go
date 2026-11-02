@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -186,7 +187,9 @@ func (s *Server) serveTaskArtifact(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "attachment file missing")
 		return
 	}
-	isImage := strings.HasPrefix(a.Mime, "image/")
+	// MIME 可能为空（历史登记/扫描补登记），此时按 kind 判断——否则图片会被
+	// 当成普通文件走 attachment，浏览器直接报错（v0.4.16 修复）。
+	isImage := a.Kind == "image" || strings.HasPrefix(strings.ToLower(a.Mime), "image/")
 	q := r.URL.Query()
 	switch {
 	case isImage && q.Get("thumb") != "":
@@ -215,9 +218,41 @@ func (s *Server) serveTaskArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// writeThumbnail 用双线性缩放生成 JPEG 缩略图（长边 maxEdge），写磁盘缓存。
-// 标准库解码 png/jpeg/gif；解码失败（如 webp 未注册）由调用方退回原图。
+// writeThumbnail 生成 JPEG 缩略图（长边 maxEdge），写磁盘缓存。
+// 优先调用 ImageMagick（4K 大图毫秒级；Go 逐像素缩放会慢到请求超时——
+// 实测 3072x4096 图单张 1–2s，前端并发加载 6–12 张时大量失败，v0.4.16 修复）。
+// ImageMagick 不可用或失败时回退到纯 Go 实现。
 func writeThumbnail(src, dst string, maxEdge int) error {
+	if bin := findImageMagick(); bin != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, bin, src,
+			"-auto-orient",
+			"-resize", fmt.Sprintf("%dx%d>", maxEdge, maxEdge),
+			"-quality", "82",
+			dst)
+		if err := cmd.Run(); err == nil {
+			if st, err := os.Stat(dst); err == nil && st.Size() > 0 {
+				return nil
+			}
+		}
+		_ = os.Remove(dst)
+	}
+	return writeThumbnailGo(src, dst, maxEdge)
+}
+
+// findImageMagick 返回可用的 magick/convert 命令路径（空 = 不可用）。
+func findImageMagick() string {
+	for _, name := range []string{"magick", "convert"} {
+		if p, err := exec.LookPath(name); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// writeThumbnailGo 是纯 Go 回退实现（双线性缩放）。
+func writeThumbnailGo(src, dst string, maxEdge int) error {
 	f, err := os.Open(src)
 	if err != nil {
 		return err
