@@ -1519,6 +1519,16 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
     { key: "document", label: `文档 ${documents.length}` },
     { key: "file", label: `其他 ${files.length}` },
   ];
+  const visibleIDs =
+    filter === "image"
+      ? images.map((a) => a.id)
+      : filter === "document"
+        ? documents.map((a) => a.id)
+        : filter === "file"
+          ? files.map((a) => a.id)
+          : list.map((a) => a.id);
+  const selectVisible = () =>
+    setSelected((cur) => Array.from(new Set([...cur, ...visibleIDs])));
   return (
     <>
       <Card>
@@ -1588,6 +1598,12 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
                     {c.label}
                   </Button>
                 ))}
+                <Button size="sm" variant="ghost" onClick={selectVisible}>
+                  全选当前
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setSelected([])}>
+                  清空
+                </Button>
               </div>
             )}
             {(filter === "all" || filter === "image") && images.length > 0 && (

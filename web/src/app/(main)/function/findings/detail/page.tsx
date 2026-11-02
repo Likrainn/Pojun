@@ -365,6 +365,9 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
   const [preview, setPreview] = React.useState<TaskArtifact | null>(null);
   const [docPreview, setDocPreview] = React.useState<{ artifact: TaskArtifact; page: number } | null>(null);
   const [broken, setBroken] = React.useState<Record<number, boolean>>({});
+  const [pickerOpen, setPickerOpen] = React.useState(false);
+  const [pickSelected, setPickSelected] = React.useState<number[]>([]);
+  const [picking, setPicking] = React.useState(false);
   const load = React.useCallback(() => {
     if (!taskId) return;
     api
@@ -384,6 +387,13 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
   );
   const images = own.filter((a) => a.kind === "image");
   const docs = own.filter((a) => a.kind !== "image" && isDoc(a));
+  // 本漏洞已归属但不是可视证据的附件（JSON/日志/HTML），空态时要说清楚，
+  // 避免用户误以为“这个漏洞什么都没留下”。
+  const otherOwn = all.filter(
+    (a) => String(a.finding_id ?? "") === findingId && a.kind !== "image" && !isDoc(a),
+  );
+  // 可供挑选的任务级证据（未归属的图片/文档）。
+  const candidates = all.filter((a) => !a.finding_id && (a.kind === "image" || isDoc(a)));
   const thumbUrl = (id: number) => `${api.artifactUrl(taskId!, id)}?thumb=1`;
   const fullUrl = (id: number) => api.artifactUrl(taskId!, id);
   const downloadUrl = (id: number) => `${api.artifactUrl(taskId!, id)}?download=1`;
@@ -405,24 +415,135 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
       toast.error((e as Error).message);
     }
   };
+  const applyPick = async () => {
+    if (!taskId || pickSelected.length === 0) return;
+    setPicking(true);
+    try {
+      for (const id of pickSelected) {
+        await api.updateTaskArtifact(taskId, id, Number(findingId));
+      }
+      toast.success(`已把 ${pickSelected.length} 项证据归属到本漏洞`);
+      setPickSelected([]);
+      setPickerOpen(false);
+      load();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setPicking(false);
+    }
+  };
   React.useEffect(() => {
     if (!expanded || !own.some((a) => a.preview_state === "pending")) return;
     const t = window.setInterval(load, 4000);
     return () => window.clearInterval(t);
   }, [expanded, own, load]);
+  const pickerDialog = (
+    <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
+      <DialogContent className="max-w-5xl">
+        <DialogHeader>
+          <DialogTitle className="text-base">从任务证据中挑选（归属到本漏洞）</DialogTitle>
+        </DialogHeader>
+        {candidates.length === 0 ? (
+          <p className="text-muted-foreground text-sm">
+            任务里没有未归属的图片或文档。到任务总览「证据附件」可以先把其他漏洞的图改回任务级，或等待 worker 继续取证。
+          </p>
+        ) : (
+          <>
+            <div className="grid max-h-[60vh] grid-cols-2 gap-2 overflow-y-auto pr-1 sm:grid-cols-3 lg:grid-cols-5">
+              {candidates.map((a) => {
+                const checked = pickSelected.includes(a.id);
+                return (
+                  <label
+                    key={a.id}
+                    className={`relative flex cursor-pointer flex-col overflow-hidden rounded-md border text-left ${
+                      checked ? "ring-2 ring-primary" : ""
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="absolute top-1.5 left-1.5 z-10 size-4 accent-primary"
+                      checked={checked}
+                      onChange={() =>
+                        setPickSelected((cur) =>
+                          cur.includes(a.id) ? cur.filter((x) => x !== a.id) : [...cur, a.id],
+                        )
+                      }
+                    />
+                    <span className="flex aspect-[4/3] items-center justify-center bg-muted/40">
+                      {a.kind === "image" ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={thumbUrl(a.id)} alt={a.note || a.name} loading="lazy" className="h-full w-full object-cover" />
+                      ) : a.preview_state === "ready" ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={previewUrl(a.id, 1)}
+                          alt={a.note || a.name}
+                          loading="lazy"
+                          className="h-full w-full object-cover object-top"
+                        />
+                      ) : (
+                        <span className="p-2 text-center text-[11px] text-muted-foreground">
+                          {a.preview_state === "pending" ? "预览生成中…" : "暂无预览"}
+                        </span>
+                      )}
+                    </span>
+                    <span className="line-clamp-2 bg-background/90 px-1.5 py-1 text-[10px]">
+                      {a.kind === "image" ? "" : `${docLabel(a)} · `}
+                      {a.name}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-muted-foreground text-xs">已选 {pickSelected.length} 项</span>
+              <div className="flex gap-2">
+                <Button size="sm" variant="ghost" onClick={() => setPickSelected([])}>
+                  清空
+                </Button>
+                <Button size="sm" disabled={picking || pickSelected.length === 0} onClick={() => void applyPick()}>
+                  {picking ? "保存中…" : "归属到本漏洞"}
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
   if (!taskId) return null;
   if (own.length === 0) {
     return (
-      <Card>
-        <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4 text-sm text-muted-foreground">
-          <span>本漏洞暂无专属截图或文档。任务级证据（目标首页、批次照片等）请到任务总览的「证据附件」查看，可在那里把图片/文档归属到本漏洞。</span>
-          <Button size="sm" variant="outline" asChild>
-            <Link href={`/function/tasks/detail?id=${taskId}&tab=overview`}>
-              查看任务总览 <ArrowUpRightIcon className="size-3.5" />
-            </Link>
-          </Button>
-        </CardContent>
-      </Card>
+      <>
+        <Card>
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4 text-sm text-muted-foreground">
+            <span>
+              {otherOwn.length > 0
+                ? `本漏洞有 ${otherOwn.length} 个数据/日志附件，但没有可预览的图片或文档。`
+                : "本漏洞暂无专属截图或文档。"}
+              任务级证据（目标首页、批次照片等）请到任务总览的「证据附件」查看，也可以直接从任务证据里挑选后归属到本漏洞。
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="default"
+                onClick={() => {
+                  setPickSelected([]);
+                  setPickerOpen(true);
+                }}
+              >
+                从任务证据中挑选
+              </Button>
+              <Button size="sm" variant="outline" asChild>
+                <Link href={`/function/tasks/detail?id=${taskId}&tab=overview`}>
+                  查看任务总览 <ArrowUpRightIcon className="size-3.5" />
+                </Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+        {pickerDialog}
+      </>
     );
   }
   return (
@@ -435,7 +556,18 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
               {" "}
               · 仅显示归属本漏洞的图片与文档（图片 {images.length} / 文档 {docs.length}）
             </span>
-            <Button size="sm" variant="outline" className="ml-auto" onClick={() => setExpanded((v) => !v)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="ml-auto"
+              onClick={() => {
+                setPickSelected([]);
+                setPickerOpen(true);
+              }}
+            >
+              添加证据
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setExpanded((v) => !v)}>
               {expanded ? "收起" : "展开查看"}
             </Button>
           </CardTitle>
@@ -599,6 +731,7 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
           )}
         </DialogContent>
       </Dialog>
+      {pickerDialog}
     </>
   );
 }
