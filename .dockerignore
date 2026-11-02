@@ -3,6 +3,9 @@
 web/.next
 web/out
 server/webui/dist
+/pojun
+/pojun.exe
+/pojun-*
 /artex
 data
 *.db

@@ -1,8 +1,11 @@
 <div align="center">
 
-# ARTEX
+# 破军 Pojun
 
 **AI 自主渗透测试 · 红队作战平台**
+
+> 破军，北斗第七星，主杀伐、主变局。<br/>
+> 名字取自它，因为这套系统做的事正是「找到防线的破口，并把破口证明给你看」。
 
 Go 单体后端（内嵌 Next.js 前端）· PostgreSQL · 多 Agent 自主推进 · 全程证据留痕
 
@@ -11,20 +14,34 @@ Go 单体后端（内嵌 Next.js 前端）· PostgreSQL · 多 Agent 自主推�
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey)
 
-📦 **Docker**：`ghcr.io/chu0119/pojun` · `xingchuan1314/artex`
-🧠 **单技能版**：[artex-skill](https://github.com/chu0119/pojun-skill)——ARTEX 方法论的单 skill 版，任意 AI Agent 即装即用
+📦 **Docker**：`ghcr.io/chu0119/pojun` · `xingchuan1314/pojun`
+🧠 **单技能版**：[pojun-skill](https://github.com/chu0119/pojun-skill)——Pojun 方法论的单 skill 版，任意 AI Agent 即装即用
 
 </div>
 
 ---
 
+## 名字与来历
+
+本项目最初是 **ARTEX**：fork 自已删除的原作者项目 `Autumn-27/ARTEX`（基于其最终
+定版 v0.3.15）。接手的第一个版本是 v0.3.15 的修复与加固；此后 v0.3.16 以来
+**160+ 提交、约 4 万行新增**全部由本仓库维护者完成，覆盖了原作者版本没有的
+整条能力线（漏洞情报运营、红队作战、证据附件、公文级报告、模型路由……）。
+
+2026-11-02 起项目正式改名 **破军 / Pojun**（`pojun`）：代码标识、二进制
+（`pojun` / `pojun-hostd` / `pojun-maint`）、安装目录（`/opt/pojun`）、环境变量
+（`POJUN_*`）、镜像（`ghcr.io/chu0119/pojun`）全部切换。旧名 ARTEX 与旧路径
+仅作为来源说明与登录用户名兼容保留；原作者代码保留在 git 历史里作为起点。
+
+---
+
 ## 这是什么
 
-ARTEX 是一套 **LLM 多 Agent 自主渗透测试平台**：你给一句话目标，它自动完成
+Pojun 是一套 **LLM 多 Agent 自主渗透测试平台**：你给一句话目标，它自动完成
 「目标拆解 → 侦察 → 漏洞挖掘 → 利用 → 后渗透 → 报告」全流程，人随时可以插手纠偏。
 
 与本仓库**前一版本**（接手自已删除的原作者项目 `Autumn-27/ARTEX`，基于其最终定版
-v0.3.15）相比，现在的 ARTEX 已经是**完全独立演进的新项目**——原作者的代码留在
+v0.3.15）相比，现在的 Pojun 已经是**完全独立演进的新项目**——原作者的代码留在
 git 历史里作为起点，v0.3.16 以来的 **160+ 提交、约 4 万行新增**全部由本仓库的
 维护者完成，覆盖了原作者版本没有的整条能力线：
 
@@ -42,27 +59,41 @@ git 历史里作为起点，v0.3.16 以来的 **160+ 提交、约 4 万行新增
 
 ---
 
-## 截图预览
+## 界面速览
 
-| 仪表盘（总览 / Token 消耗 / 活动流） | 任务列表 |
+> 以下截图来自真实运行实例，目标域名、主机地址、人员与凭据等敏感信息均已脱敏。
+
+**入口与全局态势**
+
+| 控制台登录（首次启动初始化管理员） | 总览：任务 / 漏洞 / 资产 / Token 消耗 |
 | :---: | :---: |
-| ![仪表盘](screenshots/dashboard.png) | ![任务](screenshots/tasks.png) |
+| ![登录](screenshots/pojun-login.png) | ![总览](screenshots/pojun-dashboard.png) |
 
-| 任务 · 执行过程（会话 / 工具调用） | 探索链路 |
+**任务与资产**
+
+| 任务列表：目标进度、漏洞分布一屏可见 | 资产覆盖图：力导向布局，已测节点高亮 |
 | :---: | :---: |
-| ![执行过程](screenshots/sessions.png) | ![探索链路](screenshots/graph.png) |
+| ![任务列表](screenshots/pojun-tasks.png) | ![资产覆盖图](screenshots/pojun-assets-graph.png) |
 
-| 发现 | 资产 |
+**证据与报告（SRC 交付的关键）**
+
+| 证据附件：截图 / 数据样本自动归档、缩略图预览 | 漏洞详情：摘要 + 现场截图 + PoC + 复测入口 |
 | :---: | :---: |
-| ![发现](screenshots/findings.png) | ![资产](screenshots/assets.png) |
+| ![证据附件](screenshots/pojun-evidence.png) | ![漏洞详情](screenshots/pojun-finding-detail.png) |
 
-| 资产覆盖图（力导向布局 · 已测高亮） | 流量录制 |
+| 现场截图：按漏洞归档，Word 报告自动嵌图 |
+| :---: |
+| ![现场截图](screenshots/pojun-finding-shots.png) |
+
+**平台配置**
+
+| Agent 清单：8 个内置角色 + 自定义 | 宿主环境：63 件工具体检 + 一键装齐 |
 | :---: | :---: |
-| ![资产覆盖图](screenshots/assets_test.png) | ![流量](screenshots/traffic.png) |
+| ![Agent](screenshots/pojun-agents.png) | ![宿主环境](screenshots/pojun-hostenv.png) |
 
-| Agent 管理 | LLM 配置 | 拦截审批 | 后端日志 |
-| :---: | :---: | :---: | :---: |
-| ![Agent](screenshots/agents.png) | ![LLM](screenshots/llm.png) | ![拦截](screenshots/intercept.png) | ![日志](screenshots/logs.png) |
+| LLM 配置：多通道轮询 / 熔断 / 按角色路由 |
+| :---: |
+| ![LLM](screenshots/pojun-llm.png) |
 
 ---
 
@@ -122,7 +153,7 @@ sequenceDiagram
 
 ### 漏洞情报运营（持续，不是静态知识库）
 
-多数同类产品的情报是「按组件查」；ARTEX 做的是「**按时间流**」——
+多数同类产品的情报是「按组件查」；Pojun 做的是「**按时间流**」——
 **最近 7 天爆了什么 → 匹配我的资产 → 排进任务**：
 
 - NVD 全量/增量 + **CISA KEV 在野利用** + **GitHub Advisory**（版本区间第二来源）
@@ -193,7 +224,7 @@ flowchart LR
 ### 方式一：一键部署脚本（推荐）
 
 ```bash
-git clone https://github.com/chu0119/Pojun.git && cd ARTEX
+git clone https://github.com/chu0119/Pojun.git && cd Pojun
 sudo ./install.sh                    # 交互选择（默认二进制）
 sudo ./install.sh --mode=binary      # 二进制 + systemd（生产推荐）
 sudo ./install.sh --mode=binary --with-tools   # 顺装常用渗透工具
@@ -201,7 +232,7 @@ sudo ./install.sh --mode=docker      # Docker Compose
 ```
 
 幂等：重复执行 = 原地升级；`config.json` / `jwt.key` / 数据 / 数据库不动。
-卸载：`systemctl disable --now artex pojun-hostd && rm -rf /opt/pojun`。
+卸载：`systemctl disable --now pojun pojun-hostd && rm -rf /opt/pojun`。
 
 ### 方式二：下载预编译二进制
 
@@ -220,7 +251,7 @@ cp config.example.json config.json   # 填好 database 连接
 ```bash
 cd web && npm ci && npm run build:static && cd ..
 cp -r web/out server/webui/dist
-CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/pojun
+CGO_ENABLED=0 go build -tags embedui -o pojun ./cmd/pojun
 CGO_ENABLED=0 go build -o pojun-hostd ./cmd/pojun-hostd   # 可选：特权安装助手
 ./start.sh
 ```
@@ -250,8 +281,8 @@ v0.3.85 起内置公网部署安全基线（登录防爆破、探活去指纹、
 **数据库**（`config.json` 或 `POJUN_PG_DSN`）：
 
 ```json
-{ "database": { "host": "127.0.0.1", "port": 5432, "user": "artex",
-                "password": "…", "dbname": "artex", "sslmode": "disable" } }
+{ "database": { "host": "127.0.0.1", "port": 5432, "user": "pojun",
+                "password": "…", "dbname": "pojun", "sslmode": "disable" } }
 ```
 
 **LLM**：环境变量 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` 可兜底，UI「LLM 配置」页
@@ -300,7 +331,7 @@ cd web && npx tsc --noEmit && NEXT_EXPORT=1 npx next build
 ## 项目结构
 
 ```
-cmd/            程序入口（artex 主服务 / pojun-hostd 特权助手）
+cmd/            程序入口（pojun 主服务 / pojun-hostd 特权助手）
 agent/          多 Agent 层：planner / worker / mainagent / 领域工具（tools_*.go）
 db/             PostgreSQL 唯一存储：schema.sql（幂等迁移）+ 全部表 Store
 server/         HTTP 服务：路由 / 引擎调度 / Manager / 会话 / 报告 / 更新
