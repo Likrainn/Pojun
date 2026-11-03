@@ -226,17 +226,6 @@ func (e *Engine) settleTaskWithReason(ctx context.Context, t *Task, reason, deta
 		e.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
 			Summary: fmt.Sprintf("自动收尾：%s", detail)})
 	}
-	// 收尾提醒：把「还没复测的 critical/high」数量写进活动流（v0.4.37）。平台实测
-	// 5 个任务 222 个漏洞只有 1 条复测——不提醒，报告就带着大量未验证结论交付。
-	if reason != "timeout" {
-		if tid, err := strconv.ParseInt(t.ID, 10, 64); err == nil {
-			if crit, high, err := e.m.pg.CountPendingFindings(tid); err == nil && crit+high > 0 {
-				e.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
-					Summary: fmt.Sprintf("收尾提醒：%d 个 critical、%d 个 high 仍未复测；可在任务详情→复测页一键批量复测（也可在系统设置开启自动复测）", crit, high)})
-			}
-		}
-	}
-
 	// ④ 等在跑 worker/planner drain(在跑 run 因夹逼的 MaxDuration 自行进收尾);
 	// 超过 grace 仍未清空 → 硬 cancel 该任务 exec ctx(settling-aware 分支正确归类)。
 	hardStop := time.Now().Add(settleDrainGrace)
