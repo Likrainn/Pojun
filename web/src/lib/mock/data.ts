@@ -3361,6 +3361,9 @@ export const settings: Settings = {
   intent_budget_tokens: 3000000,
   finding_evidence_verify: "warn",
   tool_output_injection_guard: true,
+  auto_retest_enabled: true,
+  auto_retest_max: 10,
+  auto_retest_severities: "critical",
 };
 
 // ── LLM 轮询（故障转移）──────────────────────────────────────────────────────

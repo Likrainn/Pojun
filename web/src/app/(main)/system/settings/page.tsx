@@ -2,7 +2,7 @@
 
 import * as React from "react";
 
-import { CpuIcon, FlaskConicalIcon, GaugeIcon, KeyboardIcon, RadioTowerIcon, SearchIcon, ShieldAlertIcon, TimerResetIcon } from "lucide-react";
+import { CpuIcon, FlaskConicalIcon, GaugeIcon, KeyboardIcon, RadioTowerIcon, SearchIcon, ShieldAlertIcon, ShieldCheckIcon, TimerResetIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -48,6 +48,10 @@ export default function SystemSettingsPage() {
   const [intentBudgetEnabled, setIntentBudgetEnabled] = React.useState(true);
   const [intentBudgetTokens, setIntentBudgetTokens] = React.useState("3000000");
   const [savingIntentBudget, setSavingIntentBudget] = React.useState(false);
+  const [autoRetestEnabled, setAutoRetestEnabled] = React.useState(true);
+  const [autoRetestMax, setAutoRetestMax] = React.useState("10");
+  const [autoRetestSevs, setAutoRetestSevs] = React.useState("critical");
+  const [savingAutoRetest, setSavingAutoRetest] = React.useState(false);
   const [savingAutoFinish, setSavingAutoFinish] = React.useState(false);
   // 冷节点压缩的输出预算与墙钟上限。0=用默认值(65536 token / 20 分钟)。
   const [compactionTokens, setCompactionTokens] = React.useState("0");
@@ -91,6 +95,9 @@ export default function SystemSettingsPage() {
     setAutoFinishMax(String(s.auto_finish_max_rounds ?? 80));
     setIntentBudgetEnabled(s.intent_budget_enabled !== false);
     setIntentBudgetTokens(String(s.intent_budget_tokens ?? 3000000));
+    setAutoRetestEnabled(s.auto_retest_enabled !== false);
+    setAutoRetestMax(String(s.auto_retest_max ?? 10));
+    setAutoRetestSevs(s.auto_retest_severities ?? "critical");
   }, []);
 
   const saveWorkers = () => {
@@ -163,6 +170,27 @@ export default function SystemSettingsPage() {
       })
       .catch((e) => toast.error(`保存失败：${(e as Error).message}`))
       .finally(() => setSavingIntentBudget(false));
+  };
+
+  const saveAutoRetest = () => {
+    const max = Number(autoRetestMax);
+    if (!Number.isInteger(max) || max < 1 || max > 50) {
+      toast.error("自动复测上限必须在 1–50 之间");
+      return;
+    }
+    setSavingAutoRetest(true);
+    api
+      .setSettings({
+        auto_retest_enabled: autoRetestEnabled,
+        auto_retest_max: max,
+        auto_retest_severities: autoRetestSevs,
+      })
+      .then((s) => {
+        apply(s);
+        toast.success("已保存自动复测设置（任务收尾时生效）");
+      })
+      .catch((e) => toast.error(`保存失败：${(e as Error).message}`))
+      .finally(() => setSavingAutoRetest(false));
   };
 
   const saveCompaction = () => {
@@ -942,6 +970,66 @@ export default function SystemSettingsPage() {
             <div>
               <Button onClick={saveIntentBudget} disabled={!loaded || savingIntentBudget}>
                 {savingIntentBudget ? "保存中…" : "保存"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="mb-4 break-inside-avoid md:mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ShieldCheckIcon className="size-4" />
+              任务收尾自动复测
+            </CardTitle>
+            <CardDescription>
+              任务收尾（目标达成/自动收尾）后，把仍未复测的 critical 漏洞按队列<b>串行</b>补测，
+              默认只测 critical、最多 10 条，避免报告带着大量未验证结论交付。
+              复测会话与手动复测完全一致（独立会话、原证据快照、结论三态）；
+              可在任务详情→复测页随时查看进度。默认开启，按量消耗 LLM，可随时关闭。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <div className="flex items-center justify-between gap-4 rounded-lg border px-3 py-2">
+              <div className="flex flex-col">
+                <span className="text-sm font-medium">启用自动复测</span>
+                <span className="text-muted-foreground text-xs">关闭后仅保留收尾提醒，不自动开会话</span>
+              </div>
+              <Switch
+                checked={autoRetestEnabled}
+                disabled={!loaded || savingAutoRetest}
+                onCheckedChange={setAutoRetestEnabled}
+              />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="flex flex-col gap-1 text-sm">
+                <span>每次最多复测（1–50）</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={50}
+                  className="w-full font-mono text-sm sm:w-40"
+                  value={autoRetestMax}
+                  disabled={!loaded || savingAutoRetest}
+                  onChange={(e) => setAutoRetestMax(e.target.value)}
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span>复测等级</span>
+                <Select value={autoRetestSevs} onValueChange={setAutoRetestSevs} disabled={!loaded || savingAutoRetest}>
+                  <SelectTrigger className="w-full sm:w-48">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="critical">仅 critical</SelectItem>
+                    <SelectItem value="critical,high">critical + high</SelectItem>
+                    <SelectItem value="critical,high,medium">critical + high + medium</SelectItem>
+                  </SelectContent>
+                </Select>
+              </label>
+            </div>
+            <div>
+              <Button onClick={saveAutoRetest} disabled={!loaded || savingAutoRetest}>
+                {savingAutoRetest ? "保存中…" : "保存"}
               </Button>
             </div>
           </CardContent>

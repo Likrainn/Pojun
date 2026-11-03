@@ -105,6 +105,9 @@ func isTransientContextCanceled(err error) bool {
 type Engine struct {
 	m        *Manager
 	debounce time.Duration
+	// onSettled 在任务收尾完成后回调（taskID, reason）。用于任务级收尾联动，
+	// 例如自动复测（v0.4.38）。nil = 不回调。
+	onSettled func(taskID, reason string)
 
 	bc *Broadcaster // live activity pub/sub (SSE)
 
@@ -397,6 +400,9 @@ func (e *Engine) ActiveLLMCalls(taskID string) int64 {
 }
 
 func (e *Engine) touch(taskID string) { e.lastAct.Store(taskID, time.Now().Unix()) }
+
+// SetOnSettled 注册任务收尾回调（Server 装配时注入自动复测）。
+func (e *Engine) SetOnSettled(fn func(taskID, reason string)) { e.onSettled = fn }
 
 func NewEngine(m *Manager) *Engine {
 	return &Engine{m: m, debounce: 800 * time.Millisecond, bc: NewBroadcaster(),
