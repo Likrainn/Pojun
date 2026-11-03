@@ -1324,6 +1324,11 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 		if cn.Kind != db.KindIntent {
 			return 0, fmt.Errorf("continues %d 是 %q 节点，不能作为接续来源：continues 只能填【意图】id（接续的是一条探索方向）", cid, cn.Kind)
 		}
+		// 接续不能从【正在跑】的意图出发——那是并行竞争。
+		// open 允许：可能是暂停回退的意图，planner 认为需要换角度接续是合理的。
+		if cn.State == "running" {
+			return 0, fmt.Errorf("continues %d 正在执行中，不能接续：等它结束后再派接续意图", cid)
+		}
 		if d := continuationDepthOf(cn); d+1 > depth {
 			depth = d + 1
 		}
@@ -1862,6 +1867,11 @@ func (t *ToolSet) recordFact() actool.CoreTool {
 			_ = json.Unmarshal(in, &a)
 			batch := len(a.Facts) > 0
 			items := a.Facts
+			// 单次最多 10 条（v0.4.44）：防 worker 一次调用写几十条拆碎的事实，
+			// 图谱会被灌爆。超限截断并在返回值里告知模型。
+			if len(items) > 10 {
+				items = items[:10]
+			}
 			if !batch {
 				items = []factItem{a.factItem}
 			}
