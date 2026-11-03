@@ -695,7 +695,7 @@ func (d *DB) AddCompanyScopeAuto(taskID, companyID int64, reason string) error {
 	if _, err := tx.Exec(`
 INSERT INTO task_scope(task_id, kind, company_id, source, reason)
 VALUES ($1, 'company', $2, 'auto', $3)
-ON CONFLICT (task_id, kind, company_id) DO NOTHING`, taskID, companyID, reason); err != nil {
+ON CONFLICT DO NOTHING`, taskID, companyID, reason); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`
