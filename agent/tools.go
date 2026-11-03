@@ -1267,6 +1267,28 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 	if strings.TrimSpace(summary) == "" {
 		return 0, fmt.Errorf("summary 不能为空")
 	}
+	// 意图粒度闸门（v0.4.44）：意图 summary 不能是任务 description/goal 的复读——
+	// 第一轮最常见错误就是 planner 把总目标原封不动包成一条意图派下去，worker
+	// 收到等于收到整个任务。这里用「前缀匹配 + 长度」做确定性检测。
+	if rootDesc, rootGoal, rootErr := t.ts.Root(); rootErr == nil {
+		for _, src := range []string{rootDesc, rootGoal} {
+			src = strings.TrimSpace(src)
+			if len(src) < 40 {
+				continue
+			}
+			// 取目标文本的前 60 字节做前缀匹配（足够区分「复读」和「正常引用」）
+			probe := src
+			if len(probe) > 60 {
+				probe = probe[:60]
+			}
+			if strings.Contains(summary, probe) {
+				return 0, fmt.Errorf(
+					"意图 summary 是任务目标/描述的复读，不是可执行的子步骤。" +
+						"请把它拆成 3–5 条具体意图（如「DNS 解析 + 子域名枚举」「端口扫描与服务识别」「未授权面探测」等），" +
+						"每条 summary 写清【对哪个资产 + 做什么具体动作 + 期望产出】；总目标的完整背景留在任务描述里即可，不需要复述。")
+			}
+		}
+	}
 	// 先校验锚点（建节点前，避免坏锚点留下孤儿意图）。
 	parents := pidList(it.ParentIDs)
 	for _, pidv := range parents {
