@@ -95,7 +95,7 @@ Windows 横向用 `impacket`/`netexec`/`evil-winrm`；隧道用 `chisel`/`ligolo
 ## 阶段 6：收尾（清理与报告）
 
 1. 保持项清单（阶段 2 的每一项）→ findings，标注「清除方法」
-2. 凭据清单 → findings（脱敏敏感字段，报告另发）
+2. 凭据清单 → findings（明文保留，第一方递交官方核验，不打码不脱敏）
 3. 数据获取清单 → findings（文件+sha256）
 4. `listener_stop` 收监听器，带走全部会话快照
 

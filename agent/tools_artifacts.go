@@ -32,7 +32,8 @@ const artifactGuidance = `
 - 截图：用 browser/playwright 工具访问目标页面截图（登录后的数据列表、后台界面、IDOR 越权页、上传/下载结果、命令回显页面），或用 chromium headless 兜底：
   ` + "`chromium --headless --disable-gpu --screenshot=<工作目录内路径>.png --window-size=1440,900 '<URL>'`" + `
   截图后用 save_evidence 登记，note 写清"哪个系统的什么页面、证明什么"（这是报告图注）。
-- 数据样本：扒到的敏感数据只存**证明性样本**（如前 20 条记录/前 50 行），不要存全量 PII；全量数据留在工作目录供分析，不随报告分发。
+- 数据样本（v0.4.34 明文保真政策）：我们是第一方、第一手向官方递交，**证据必须原样保真，禁止打码/模糊/涂抹/覆写任何字段**（身份证号、人脸、手机号、账号、口令、凭据等全部明文保留）——打码会破坏溯源与漏洞判定。数据样本建议保留足够证明面的行数（如前 100 条或覆盖全部关键字段）；关键数据集（导出的 CSV/JSON/Excel）可整份存到工作目录并登记为附件（注意任务附件上限 300 件/500MB，超限时优先保留关键样本+清单）。
+- **明文是硬要求**：reporter 写报告、worker 写 fact/evidence 时引用真实数据原值（可截取字段值），不得用 "***" 掩码代替；涉密的是平台自身的 LLM/FOFA key 等运营配置，不是目标数据。
 - 日志/HTML/JSON：命令输出、接口原始响应、页面源码，存成 .txt/.json/.html 再登记。
 - 每个漏洞至少登记 1 张关键截图（能截到的话）；截不到（无浏览器/非 HTTP）就跳过并在证据里说明原因，不要伪造。
 - 登记时传 finding_id（report_finding 返回的独立漏洞 ID）：该漏洞的详情页与单漏洞报告才会展示这张图；任务级材料（目标首页等）不传。
@@ -56,13 +57,13 @@ done
 magick wm_a.jpg wm_b.jpg +append montage.png
    - 单图叠水印：
      ` + "`magick in.jpg -gravity south -background '#000000a8' -splice 0x36 -fill white -pointsize 22 -font /usr/share/fonts/gongwen/仿宋_GB2312.ttf -annotate +0+9 'filename.jpg' out.png`" + `
-   - 含身份证号/人脸等敏感信息但必须证明真实性的，先做模糊处理再登记（` + "`magick in.jpg -region 60%x25%+20%+40% -blur 0x12 out.jpg`" + ` 之类），并在 note 说明脱敏位置。
+   - **不要模糊/打码**（v0.4.34）：身份证、人脸、手机号、凭据等敏感信息是官方核验漏洞真实性的关键，一律原样登记；仅当样本文件本身过大时按原分辨率压缩（不改内容）。
 3. 登记时带 source_url（bucket 的对象 URL）与 finding_id；note 里写明样本数量。报告里用 ![说明](artifact:<id>) 引用，图注写清 bucket/文件与“样本 N 张”。`
 
 // saveEvidence 把工作目录里的文件登记为任务附件。
 func (t *ToolSet) saveEvidence() actool.CoreTool {
 	return writeTool("save_evidence",
-		"把工作目录里的证据文件登记为任务附件（截图 / 数据样本 / 日志 / HTML / JSON），随报告导出成证据包。默认只存证明性样本：敏感数据只存前 20 条左右，不要存全量 PII。同一文件重复登记会去重。",
+		"把工作目录里的证据文件登记为任务附件（截图 / 数据样本 / 日志 / HTML / JSON），随报告导出成证据包。证据原样保真、明文保留（不打码/不脱敏，第一方递交官方核验）；大数据集可整份登记（附件上限 300 件/500MB）。同一文件重复登记会去重。",
 		obj(map[string]any{
 			"path":       str("工作目录内的相对路径（如 shots/login-userlist.png）"),
 			"name":       str("可选：展示名（含扩展名）；省略用文件名"),

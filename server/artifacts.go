@@ -453,7 +453,7 @@ func (s *Server) exportTaskArtifacts(w http.ResponseWriter, r *http.Request) {
 	mf, _ := json.MarshalIndent(map[string]any{
 		"task_id":     taskID,
 		"exported_at": time.Now().UTC().Format(time.RFC3339),
-		"policy":      "样本策略：仅保存证明性样本，全量数据不回传；附件随报告分发前请确认脱敏。",
+		"policy":      "证据政策（v0.4.34）：第一方递交官方，附件一律明文保真、不打码不脱敏；大数据集可整份保存（上限 300 件/500MB），超限优先保留关键样本与清单。",
 		"artifacts":   manifest,
 	}, "", "  ")
 	if fw, err := zw.Create("manifest.json"); err == nil {
