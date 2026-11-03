@@ -80,11 +80,11 @@ type ToolSet struct {
 	// runDir 是本次运行的专属工作目录（worker 在这里产生截图/样本），
 	// save_evidence 的相对路径基准；由 Worker.Execute 注入。
 	runDir string
-	as              *db.AssetStore   // asset store (optional; nil = asset tools not available)
-	cs              *db.CompanyStore // company store (optional)
-	ts              *db.ExplorationStore
-	worker          string
-	taskID          int64 // PG tasks.id; 0 when unknown (tests / orchestrator cross-task reads)
+	as     *db.AssetStore   // asset store (optional; nil = asset tools not available)
+	cs     *db.CompanyStore // company store (optional)
+	ts     *db.ExplorationStore
+	worker string
+	taskID int64 // PG tasks.id; 0 when unknown (tests / orchestrator cross-task reads)
 	// coverageDisabled mirrors tasks.coverage_enabled=false. Stored inverted so the
 	// zero value (all existing ToolSet constructions) means ENABLED — matching the
 	// DB default (true). When true: graphOverviewData drops the coverage block, the
@@ -1542,6 +1542,25 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		if msg := validateFindingEvidence(a.Severity, a.Evidence); msg != "" {
 			return actool.Errorf(msg), nil
 		}
+		// 证据逐字回验（v0.4.29，P0b #2，PentestGPT 机制自研）：先告警后拦截。
+		// 证据里至少要有一行能在本次 run 的真实工具回显里逐字找到出处——
+		// 「none」且档位=block 时只打回 critical/high（误报代价最高的两档）。
+		verifyNote := ""
+		if ledger, mode := ToolOutputsFromContext(ctx); ledger != nil && mode != EvidenceVerifyOff && strings.TrimSpace(a.Evidence) != "" {
+			matched, total := ledger.VerifyEvidence(a.Evidence)
+			switch evidenceVerdict(matched, total) {
+			case "none":
+				if mode == EvidenceVerifyBlock && (a.Severity == "critical" || a.Severity == "high") {
+					return actool.Errorf(fmt.Sprintf(
+						"证据逐字回验未通过：evidence 里没有任何一行能在本次工具输出中找到出处（已比对 %d 行有效内容）。"+
+							"critical/high 必须带本会话真实命令输出：请把工具回显中的关键行原样粘进 evidence（命令 + 输出特征），"+
+							"或降级为 medium 后再报，或改用 record_fact 记为待验证线索。", total)), nil
+				}
+				verifyNote = fmt.Sprintf("⚠️ 证据出处核对：0/%d 行可在本次工具输出中逐字找到——报告读者将无法复核，建议补粘命令与输出原文。", total)
+			case "partial":
+				verifyNote = fmt.Sprintf("⚠️ 证据出处核对：仅 %d/%d 行可在本次工具输出中逐字找到，其余为转述；关键结论请引用原文。", matched, total)
+			}
+		}
 		// Auto-binding off: ignore the evidence params instead of rejecting the call.
 		// stripTrafficParameters already removes them from the advertised schema, but
 		// models routinely emit fields anyway — failing here would discard a confirmed
@@ -1586,9 +1605,10 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		}
 		result := struct {
 			*db.RecordedFinding
-			EvidenceStatus string `json:"evidence_status"`
-			EvidenceNote   string `json:"evidence_note,omitempty"`
-		}{RecordedFinding: recorded, EvidenceStatus: "bound"}
+			EvidenceStatus     string `json:"evidence_status"`
+			EvidenceNote       string `json:"evidence_note,omitempty"`
+			EvidenceVerifyNote string `json:"evidence_verify_note,omitempty"`
+		}{RecordedFinding: recorded, EvidenceStatus: "bound", EvidenceVerifyNote: verifyNote}
 		if len(recorded.Traffic.Bindings) == 0 {
 			result.EvidenceStatus = "not_bound"
 			result.EvidenceNote = "漏洞已保存，未绑定流量。TCP/无包情形可正常继续；若已有核实的 HTTP 流量，请用可用的 bind_finding_traffic 或漏洞页面补绑，再完成证据交接。不要重复创建漏洞。"

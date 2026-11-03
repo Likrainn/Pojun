@@ -3359,6 +3359,8 @@ export const settings: Settings = {
   auto_finish_max_rounds: 80,
   intent_budget_enabled: true,
   intent_budget_tokens: 3000000,
+  finding_evidence_verify: "warn",
+  tool_output_injection_guard: true,
 };
 
 // ── LLM 轮询（故障转移）──────────────────────────────────────────────────────

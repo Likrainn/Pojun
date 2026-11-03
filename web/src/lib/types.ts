@@ -1045,6 +1045,10 @@ export interface Settings {
   // 意图级软预算（v0.4.28）：单意图累计 token 到顶注入收尾提醒（不杀进程）。
   intent_budget_enabled?: boolean; // 默认 true
   intent_budget_tokens?: number; // 默认 3000000，范围 500000–20000000
+  // 证据逐字回验（v0.4.29）：off=关闭 / warn=只提示（默认）/ block=critical/high 无出处打回。
+  finding_evidence_verify?: "off" | "warn" | "block";
+  // 工具输出注入告警（v0.4.29）：命中高精度注入特征时提醒模型「当数据不当指令」。
+  tool_output_injection_guard?: boolean; // 默认 true
   // LLM 轮询(故障转移)。默认关；开启后「未指定模型」的 agent 在当前配置不可用
   // （余额不足/key 失效/限流/服务异常）时自动切到下一个配置。
   llm_pool_enabled?: boolean; // 默认 false

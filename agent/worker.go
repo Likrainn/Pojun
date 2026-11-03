@@ -397,6 +397,11 @@ func resumeBrief(ts *db.ExplorationStore, intent *db.Node) string {
 	return b.String()
 }
 
+// workerToolOutputChars 是 worker 单次工具回显的上限（字符）。超长输出由 SDK
+// tool.Capture 落盘到 cmd-output/ 并在回显尾部给绝对路径指针。12000 ≈ 3k token，
+// 足够一次 sqlmap/nuclei 的关键段落；需要全文时模型按指针自行 grep/sed。
+const workerToolOutputChars = 12000
+
 // renderWorkerGraphOverview folds the global situational snapshot into the worker's
 // launch USER message for AWARENESS ONLY. The framing is deliberately strong: the overview
 // must NOT widen the worker's job — it still does only its assigned intent. Its sole
@@ -557,8 +562,12 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		// 因步数=夹逼窗口内步数先耗尽→回落 per-run 词。非 clamped 维持纯 per-run。
 		Settlement: settle,
 		// large tool output spills to cmd-output/ with a head + pointer (SDK tool.Capture);
-		// full output preserved on disk. 截断上限用 SDK 默认(30000 字符)。
-		ToolOutputDir: cmdOutDir(runDir),
+		// full output preserved on disk. 单次上限收到 12000 字符（v0.4.29，同行对比 P0b）：
+		// 任务 5 实测 Bash 6833 次、单意图均 300 万 input——单条 30k(≈7.5k token) 的
+		// 工具回显是主要放大源；12000 仍容纳一次 sqlmap/httpx 的关键输出，超长部分
+		// SDK 自动落盘并在回显里给绝对路径指针，模型需要时自行 grep/sed 回读。
+		ToolOutputDir:      cmdOutDir(runDir),
+		MaxToolOutputChars: workerToolOutputChars,
 		Compaction:    compactionConfig(w.compactionWindow()), // long tool-heavy runs stay within the window
 		Todos:         actool.NewTodoStore(),                  // 会话级临时待办（TodoWrite），纯规划用，退出即丢
 		NonStreaming:  w.nonStreaming(),                       // 该 profile 选非流式时走 Provider.Complete

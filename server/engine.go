@@ -1189,6 +1189,36 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 			inner(a)
 		}
 	}
+	// 证据回验台账 + 注入告警（v0.4.29，P0b #2/#4）：tool_result 的 Detail 就是模型
+	// 实际看到的回显文本（已过 SDK 落盘截断）——台账收集它供 report_finding 逐字核对；
+	// 命中高精度注入特征时经 steer 通道在下一次工具调用前提醒「当数据不当指令」。
+	ledger := agent.NewToolOutputLedger()
+	workCtx = agent.WithToolOutputs(workCtx, ledger, evidenceVerifyModeFromPG(e.m.pg))
+	if injectionGuardFromPG(e.m.pg) {
+		var injAlerts atomic.Int64
+		inner := emit
+		emit = func(a db.Activity) {
+			if a.Kind == "tool_result" && a.Detail != "" {
+				ledger.Add(a.Detail)
+				if pat := scanInjection(a.Detail); pat != "" && injAlerts.Add(1) <= 3 {
+					if err := e.SteerWork(iid, injectionAlertText(pat)); err != nil {
+						log.Printf("[injection %s] 告警入队失败: %v", label, err)
+					} else {
+						log.Printf("[injection %s] 工具输出命中注入特征 %q，已提醒模型按数据处理", label, pat)
+					}
+				}
+			}
+			inner(a)
+		}
+	} else {
+		inner := emit
+		emit = func(a db.Activity) {
+			if a.Kind == "tool_result" && a.Detail != "" {
+				ledger.Add(a.Detail)
+			}
+			inner(a)
+		}
+	}
 	// nudges 有意建在 model_error 重跑循环之外:空转续跑的上限是「这条意图」的总量，
 	// 重跑一轮不该把额度清零重来。
 	hooks := steerHooks{
