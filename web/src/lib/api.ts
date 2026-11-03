@@ -767,6 +767,12 @@ export const api = {
   updateTaskArtifact: (taskId: string, artifactId: number, findingId: number) =>
     patch<{ artifact: TaskArtifact }>(`/tasks/${taskId}/artifacts/${artifactId}`, { finding_id: findingId }),
   // 文档预览（v0.4.21）：第 N 页 JPEG / 手动重新生成。
+  // 智能关联（v0.4.42）：把任务级数据/日志证据按主机交叉自动归属到唯一命中的漏洞。
+  artifactsAutoBind: (taskId: string) =>
+    post<{ bound: number; skipped: number; details: string[] }>(
+      `/tasks/${encodeURIComponent(taskId)}/artifacts/auto-bind`,
+      {},
+    ),
   // 数据文件在线预览（v0.4.41）：JSON/JSONL/CSV/TSV 解析成表格行，文本返回前 200 行。
   artifactDataPreview: (taskId: string, artifactId: number) =>
     get<DataPreviewPayload>(`/tasks/${encodeURIComponent(taskId)}/artifacts/${artifactId}/data-preview`),

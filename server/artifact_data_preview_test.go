@@ -1,6 +1,9 @@
 package server
 
 import (
+	"compress/gzip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -73,5 +76,41 @@ func TestParseJSONPreviewEnvelope(t *testing.T) {
 	}
 	if r.TotalRows != 2 || len(r.Rows) != 2 || r.Rows[0][1] != "A1" {
 		t.Fatalf("rows=%v", r.Rows)
+	}
+}
+
+func TestDataPreviewKindExt(t *testing.T) {
+	cases := map[string]string{
+		"a.json": "json", "b.jsonl": "jsonl", "c.csv": "csv", "d.tsv": "tsv",
+		"e.gz": "gz", "f.zip": "zip", "g.xml": "text", "h.yaml": "text",
+		"i.sql": "text", "j.log": "text", "k.md": "text", "l.txt": "text",
+		"m.out": "text", "n.diff": "text",
+	}
+	for name, want := range cases {
+		if got := dataPreviewKind(name); got != want {
+			t.Errorf("kind(%q)=%q want %q", name, got, want)
+		}
+	}
+}
+
+func TestParseGZDataset(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "orders.json.gz")
+	f, _ := os.Create(p)
+	zw := gzip.NewWriter(f)
+	_, _ = zw.Write([]byte(`[{"k":"v1"},{"k":"v2"}]`))
+	zw.Close()
+	f.Close()
+
+	raw, inner, zipRes, err := expandArtifact(p, "orders.json.gz")
+	if err != nil || zipRes != nil {
+		t.Fatalf("expand err=%v zipRes=%v", err, zipRes)
+	}
+	if inner != "orders.json" {
+		t.Fatalf("inner=%q want orders.json", inner)
+	}
+	res := parseDataPreview(dataPreviewKind(inner), raw)
+	if res.Type != "json" || res.TotalRows != 2 || res.Rows[0][0] != "v1" {
+		t.Fatalf("res=%+v", res)
 	}
 }

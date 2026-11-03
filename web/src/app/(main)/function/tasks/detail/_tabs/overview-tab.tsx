@@ -1502,6 +1502,23 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
   const fullUrl = (id: number) => api.artifactUrl(taskId, id);
   const downloadUrl = (id: number) => `${api.artifactUrl(taskId, id)}?download=1`;
   const previewUrl = (id: number, page: number) => api.artifactPreviewUrl(taskId, id, page);
+  const [autoBinding, setAutoBinding] = React.useState(false);
+  const autoBind = async () => {
+    setAutoBinding(true);
+    try {
+      const r = await api.artifactsAutoBind(taskId);
+      if (r.bound > 0) {
+        toast.success(`智能关联：${r.bound} 条数据证据已归属到漏洞${r.skipped ? `（${r.skipped} 条歧义/无主机特征跳过）` : ""}`);
+        await load({ v: true });
+      } else {
+        toast.info("没有可自动归属的数据证据（无主机特征或多漏洞歧义，已跳过）");
+      }
+    } catch (e) {
+      toast.error(`智能关联失败：${(e as Error).message}`);
+    } finally {
+      setAutoBinding(false);
+    }
+  };
   const regeneratePreview = async (a: TaskArtifact) => {
     try {
       await api.regenerateArtifactPreview(taskId, a.id);
@@ -1545,6 +1562,9 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
           <CardTitle className="flex items-center gap-2 text-base">
             <ImageIcon className="size-4 text-primary" /> 证据附件（{list.length}）
             <div className="ml-auto flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="ghost" disabled={scanning || autoBinding} onClick={() => void autoBind()}>
+                {autoBinding ? "关联中…" : "智能关联"}
+              </Button>
               <Button size="sm" variant="ghost" disabled={scanning} onClick={() => void scan()}>
                 {scanning ? "扫描中…" : "扫描补登记"}
               </Button>

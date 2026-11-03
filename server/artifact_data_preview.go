@@ -9,9 +9,13 @@ package server
 // 超出在响应里标 truncated——证据原文永远可以走 download 拿全量。
 
 import (
+	"archive/zip"
+	"bytes"
+	"compress/gzip"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -30,6 +34,10 @@ const (
 func dataPreviewKind(name string) string {
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(name), "."))
 	switch ext {
+	case "gz":
+		return "gz"
+	case "zip":
+		return "zip"
 	case "json":
 		return "json"
 	case "jsonl", "ndjson":
@@ -279,26 +287,17 @@ func (s *Server) serveArtifactDataPreview(w http.ResponseWriter, r *http.Request
 		writeErr(w, 404, "artifact file missing")
 		return
 	}
-	raw := ""
-	if st.Size() > dataPreviewMaxBytes {
-		f, err := os.Open(abs)
-		if err != nil {
-			writeErr(w, 500, "open failed")
-			return
-		}
-		defer f.Close()
-		buf := make([]byte, dataPreviewMaxBytes)
-		n, _ := f.Read(buf)
-		raw = string(buf[:n])
-	} else {
-		b, err := os.ReadFile(abs)
-		if err != nil {
-			writeErr(w, 500, "read failed")
-			return
-		}
-		raw = string(b)
+	raw, innerName, zipRes, err := expandArtifact(abs, a.Name)
+	if err != nil {
+		writeErr(w, 500, "解析失败: "+err.Error())
+		return
 	}
-	res := parseDataPreview(dataPreviewKind(a.Name), raw)
+	var res *dataParseResult
+	if zipRes != nil {
+		res = zipRes
+	} else {
+		res = parseDataPreview(dataPreviewKind(innerName), raw)
+	}
 	res.TotalSize = st.Size()
 	res.Name = a.Name
 	res.Kind = a.Kind
@@ -307,3 +306,75 @@ func (s *Server) serveArtifactDataPreview(w http.ResponseWriter, r *http.Request
 }
 
 // 解析单测见 artifact_data_preview_test.go。
+
+// v0.4.42 扩展：gzip 解包、zip 目录、xml/yaml/sql/html 当文本——更多文件类型
+// 能被「主动转化」成可读形态。
+
+// innerPreviewName 剥掉 .gz 后缀，返回解包后的真实文件名。
+func innerPreviewName(name string) string {
+	return strings.TrimSuffix(strings.ToLower(name), ".gz")
+}
+
+// expandArtifact 读取文件并按需解包：.gz 自动 gunzip；.zip 返回条目清单。
+// 返回 (内容, 内层文件名, zip条目, 错误)。
+func expandArtifact(abs string, name string) (string, string, *dataParseResult, error) {
+	f, err := os.Open(abs)
+	if err != nil {
+		return "", "", nil, err
+	}
+	defer f.Close()
+	if strings.HasSuffix(strings.ToLower(name), ".gz") {
+		zr, err := gzip.NewReader(f)
+		if err != nil {
+			return "", "", nil, err
+		}
+		defer zr.Close()
+		raw, err := io.ReadAll(io.LimitReader(zr, dataPreviewMaxBytes))
+		if err != nil {
+			return "", "", nil, err
+		}
+		return string(raw), innerPreviewName(name), nil, nil
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, dataPreviewMaxBytes))
+	if err != nil {
+		return "", "", nil, err
+	}
+	if strings.HasSuffix(strings.ToLower(name), ".zip") {
+		zr, err := zip.NewReader(bytes.NewReader(raw), st64(abs))
+		if err != nil {
+			// 不是合法 zip → 当文本
+			return string(raw), name, nil, nil
+		}
+		res := &dataParseResult{Type: "zip", Columns: []string{"文件名", "大小", "修改时间"}}
+		res.TotalRows = len(zr.File)
+		res.Truncated = len(zr.File) > dataPreviewMaxRows
+		n := len(zr.File)
+		if n > dataPreviewMaxRows {
+			n = dataPreviewMaxRows
+		}
+		for _, zf := range zr.File[:n] {
+			mt := zf.Modified.Format("2006-01-02 15:04")
+			res.Rows = append(res.Rows, []any{zf.Name, fmtBytes64(zf.UncompressedSize64), mt})
+		}
+		return "", name, res, nil
+	}
+	return string(raw), name, nil, nil
+}
+
+func fmtBytes64(n uint64) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1fMB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1fKB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%dB", n)
+	}
+}
+
+func st64(path string) int64 {
+	if st, err := os.Stat(path); err == nil {
+		return st.Size()
+	}
+	return 0
+}
