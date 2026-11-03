@@ -142,7 +142,7 @@ export function FindingsTable({
 
   return (
     /* 固定列宽保证展开内容不撑开表格；窄屏只在表格内部横向滚动。 */
-    <Table className="min-w-[60rem] table-fixed">
+    <Table className="min-w-0 table-fixed md:min-w-[60rem]">
       <TableHeader>
         <TableRow>
           <TableHead className="w-8">
@@ -155,11 +155,11 @@ export function FindingsTable({
           <TableHead className="w-8" />
           <TableHead className="w-20">严重度</TableHead>
           <TableHead>漏洞名称</TableHead>
-          <TableHead className="w-44">资产</TableHead>
+          <TableHead className="hidden w-44 md:table-cell">资产</TableHead>
           <TableHead className="w-28">状态</TableHead>
-          <TableHead className="w-48">所属任务</TableHead>
-          <TableHead className="w-24">时间</TableHead>
-          <TableHead className="w-48">操作</TableHead>
+          <TableHead className="hidden w-48 md:table-cell">所属任务</TableHead>
+          <TableHead className="hidden w-24 md:table-cell">时间</TableHead>
+          <TableHead className="hidden w-48 md:table-cell">操作</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -216,7 +216,7 @@ export function FindingsTable({
                     <Badge variant="outline">流量证据 {f.traffic_count ?? 0} 条</Badge>
                   </div>
                 </TableCell>
-                <TableCell>
+                <TableCell className="hidden md:table-cell">
                   {f.assets && f.assets.length > 0 ? (
                     <div className="flex flex-wrap gap-1">
                       {f.assets.slice(0, 3).map((a) => (
@@ -254,7 +254,7 @@ export function FindingsTable({
                     <StatusBadge domain="finding" value={f.status} dot />
                   )}
                 </TableCell>
-                <TableCell>
+                <TableCell className="hidden md:table-cell">
                   {f.task_id ? (
                     <Link
                       href={`/function/tasks/detail?id=${f.task_id}`}
@@ -274,8 +274,8 @@ export function FindingsTable({
                     <span className="text-muted-foreground">—</span>
                   )}
                 </TableCell>
-                <TableCell className="text-muted-foreground text-xs tabular-nums">{fmtTime(f.ts)}</TableCell>
-                <TableCell onClick={(e) => e.stopPropagation()}>
+                <TableCell className="hidden text-muted-foreground text-xs tabular-nums md:table-cell">{fmtTime(f.ts)}</TableCell>
+                <TableCell className="hidden md:table-cell" onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center gap-1">
                     {retest ? (
                       <Button asChild size="sm" variant="ghost">

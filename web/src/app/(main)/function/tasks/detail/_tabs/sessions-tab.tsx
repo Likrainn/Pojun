@@ -1738,23 +1738,23 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                       cache={taskTokens.cache_read_tokens}
                       output={taskTokens.output_tokens}
                     />
-                    {taskCost && taskCost.cost_usd > 0 ? (
+                    {taskCost && Number.isFinite(taskCost.cost_usd) && taskCost.cost_usd > 0 ? (
                       <>
                         <span>·</span>
-                        <span>≈${taskCost.cost_usd.toFixed(2)}</span>
+                        <span>≈${(taskCost.cost_usd ?? 0).toFixed(2)}</span>
                       </>
                     ) : null}
                   </div>
                 </TooltipTrigger>
                 <TooltipContent>
-                  输入 {taskTokens.input_tokens.toLocaleString()} · 输出 {taskTokens.output_tokens.toLocaleString()} ·
-                  缓存读取 {taskTokens.cache_read_tokens.toLocaleString()} · 缓存写入{" "}
-                  {taskTokens.cache_write_tokens.toLocaleString()}
+                  输入 {(taskTokens.input_tokens ?? 0).toLocaleString()} · 输出 {(taskTokens.output_tokens ?? 0).toLocaleString()} ·
+                  缓存读取 {(taskTokens.cache_read_tokens ?? 0).toLocaleString()} · 缓存写入{" "}
+                  {(taskTokens.cache_write_tokens ?? 0).toLocaleString()}
                   {taskCost ? (
                     <>
                       <br />
-                      成本 ≈ ${taskCost.cost_usd.toFixed(2)}（{taskCost.pricing_note}）
-                      {taskCost.unpriced_models.length > 0
+                      成本 ≈ ${Number(taskCost.cost_usd ?? 0).toFixed(2)}（{taskCost.pricing_note}）
+                      {(taskCost.unpriced_models?.length ?? 0) > 0
                         ? ` 未定价模型：${taskCost.unpriced_models.join("、")}（成本被低估）`
                         : ""}
                     </>
@@ -1990,10 +1990,10 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                       </span>
                     </TooltipTrigger>
                     <TooltipContent>
-                      输入 {activeTokens.input_tokens.toLocaleString()} · 输出{" "}
-                      {activeTokens.output_tokens.toLocaleString()} · 缓存读取{" "}
-                      {activeTokens.cache_read_tokens.toLocaleString()} · 缓存写入{" "}
-                      {activeTokens.cache_write_tokens.toLocaleString()}
+                      输入 {(activeTokens.input_tokens ?? 0).toLocaleString()} · 输出{" "}
+                      {(activeTokens.output_tokens ?? 0).toLocaleString()} · 缓存读取{" "}
+                      {(activeTokens.cache_read_tokens ?? 0).toLocaleString()} · 缓存写入{" "}
+                      {(activeTokens.cache_write_tokens ?? 0).toLocaleString()}
                     </TooltipContent>
                   </Tooltip>
                 )}

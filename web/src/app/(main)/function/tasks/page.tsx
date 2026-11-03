@@ -973,7 +973,26 @@ export default function TasksPage() {
                 没有匹配的任务。
               </div>
             ) : (
-              <Table className="**:data-[slot='table-cell']:px-4 **:data-[slot='table-head']:px-4">
+              <>
+                {/* 手机端（<md）卡片列表：表格 1624px 宽，在手机上只剩 ID/操作两列。
+                    卡片把名称/状态/描述/目标进度/漏洞数/时长/Token/操作都放在一屏内。 */}
+                <div className="divide-y border-t md:hidden">
+                  {paginated.map((task) => (
+                    <TaskMobileCard
+                      key={task.id}
+                      task={task}
+                      nowSec={task.status === "running" ? nowSec : 0}
+                      onDelete={deleteTask}
+                      onControl={controlTask}
+                      onRename={renameTask}
+                      onTogglePinned={toggleTaskPinned}
+                      onArchive={queueTaskArchive}
+                      selected={selectedIds.has(task.id)}
+                      onSelectedChange={toggleSelected}
+                    />
+                  ))}
+                </div>
+                <Table className="hidden **:data-[slot='table-cell']:px-4 **:data-[slot='table-head']:px-4 md:table">
                 <TableHeader className="[&_tr]:border-t">
                   <TableRow>
                     <TableHead className="w-10">
@@ -1047,6 +1066,7 @@ export default function TasksPage() {
                   ))}
                 </TableBody>
               </Table>
+              </>
             )}
             <TablePagination
               page={page}
@@ -1365,8 +1385,116 @@ const TaskRow = React.memo(function TaskRow({
   );
 });
 
-function TaskNameEditor({ task, onRename }: { task: Task; onRename: (task: Task, name: string) => Promise<void> }) {
-  const [editing, setEditing] = React.useState(false);
+// TaskMobileCard 是任务列表在手机端（<md）的卡片形态：表格 1624px 宽在手机上只剩
+// ID/操作两列，核心信息（名称/状态/目标进度/漏洞数/时长/Token）全部在横向滚动之外。
+// 卡片把这些信息折叠进一屏，操作按钮保留（图标触控区 ≥32px）。
+function TaskMobileCard({
+  task,
+  nowSec,
+  onDelete,
+  onControl,
+  onRename,
+  onTogglePinned,
+  onArchive,
+  selected,
+  onSelectedChange,
+}: {
+  task: Task;
+  nowSec: number;
+  onDelete: (id: string, options: DeleteTaskOptions) => Promise<void>;
+  onControl: (id: string, action: "pause" | "resume") => Promise<void>;
+  onRename: (task: Task, name: string) => Promise<void>;
+  onTogglePinned: (task: Task) => Promise<void>;
+  onArchive: (task: Task) => Promise<void>;
+  selected: boolean;
+  onSelectedChange: (id: string, checked: boolean) => void;
+}) {
+  const findings = task.findings;
+  const findingTotal = findings ? findings.critical + findings.high + findings.medium + findings.low : 0;
+  const dur = taskDuration(task, nowSec);
+  return (
+    <div className="flex flex-col gap-2 px-4 py-3" data-state={selected ? "selected" : undefined}>
+      <div className="flex items-start gap-2">
+        <Checkbox
+          className="mt-1"
+          checked={selected}
+          onCheckedChange={(checked) => onSelectedChange(task.id, checked === true)}
+          aria-label={`选择任务 ${task.id}`}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <TaskNameEditor task={task} onRename={onRename} />
+            {task.active && <StarIcon className="size-3.5 shrink-0 fill-amber-400 text-amber-400" />}
+            {taskIsPinned(task) && <PinIcon className="size-3.5 shrink-0 text-primary" aria-label="已置顶" />}
+          </div>
+          <div className="mt-0.5 flex items-center gap-2 text-muted-foreground text-xs">
+            <code className="rounded bg-muted px-1 font-mono">{task.id}</code>
+            <span className="tabular-nums">{fmtDateTime(task.created_unix)}</span>
+          </div>
+        </div>
+        <StatusBadge domain="task" value={task.status} dot />
+      </div>
+      {task.description ? (
+        <Link
+          href={`/function/tasks/detail?id=${encodeURIComponent(task.id)}`}
+          className="line-clamp-2 text-muted-foreground text-sm"
+        >
+          {task.description}
+        </Link>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+        <span className="text-muted-foreground">
+          目标{" "}
+          <span className="text-foreground tabular-nums">
+            {typeof task.goals_total === "number" && task.goals_total > 0 ? `${task.goals_met}/${task.goals_total}` : "—"}
+          </span>
+        </span>
+        <span className="text-muted-foreground">
+          漏洞{" "}
+          {findingTotal > 0 && findings ? (
+            <span className="font-medium tabular-nums">
+              <span className="text-rose-600 dark:text-rose-400">{findings.critical}</span>/
+              <span className="text-red-600 dark:text-red-400">{findings.high}</span>/
+              <span className="text-amber-600 dark:text-amber-400">{findings.medium}</span>/
+              <span className="text-slate-600 dark:text-slate-400">{findings.low}</span>
+            </span>
+          ) : (
+            <span className="text-foreground">0</span>
+          )}
+        </span>
+        <span className="text-muted-foreground">
+          Worker <span className="text-foreground tabular-nums">{task.in_flight ?? 0}</span>
+        </span>
+        {dur > 0 && (
+          <span className="text-muted-foreground">
+            时长 <span className={task.status === "running" ? "text-foreground" : ""}>{fmtDuration(dur)}</span>
+          </span>
+        )}
+        {task.tokens && (
+          <span className="text-muted-foreground">
+            Token{" "}
+            <span className="text-foreground tabular-nums">
+              {fmtTokens(task.tokens.input_tokens + task.tokens.cache_read_tokens + task.tokens.output_tokens)}
+            </span>
+          </span>
+        )}
+      </div>
+      <div className="flex items-center justify-end gap-0.5 border-t pt-1">
+        <Button size="icon" variant="ghost" asChild aria-label="查看任务详情" title="查看任务详情">
+          <Link href={`/function/tasks/detail?id=${encodeURIComponent(task.id)}`}>
+            <EyeIcon />
+          </Link>
+        </Button>
+        <TaskControlButton task={task} onControl={onControl} />
+        <TaskPinAction task={task} onTogglePinned={onTogglePinned} />
+        <TaskArchiveAction task={task} onArchive={onArchive} />
+        <DeleteTaskDialog task={task} onDelete={onDelete} />
+      </div>
+    </div>
+  );
+}
+
+function TaskNameEditor({ task, onRename }: { task: Task; onRename: (task: Task, name: string) => Promise<void> }) {  const [editing, setEditing] = React.useState(false);
   const [name, setName] = React.useState(task.name ?? "");
   const [saving, setSaving] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
@@ -1439,7 +1567,13 @@ function TaskNameEditor({ task, onRename }: { task: Task; onRename: (task: Task,
         className="min-w-0 truncate rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         title={task.name?.trim() ? task.name : task.description}
       >
-        {task.name?.trim() ? task.name : <span className="text-muted-foreground">未命名</span>}
+        {task.name?.trim() ? (
+          task.name
+        ) : task.description?.trim() ? (
+          <span className="line-clamp-1 text-muted-foreground">{task.description}</span>
+        ) : (
+          <span className="text-muted-foreground">未命名</span>
+        )}
       </Link>
       <Button
         type="button"

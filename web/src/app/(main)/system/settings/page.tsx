@@ -848,7 +848,7 @@ export default function SystemSettingsPage() {
                   type="number"
                   min={2}
                   max={20}
-                  className="w-40 font-mono text-sm"
+                  className="w-full font-mono text-sm sm:w-40"
                   value={autoFinishIdle}
                   disabled={!loaded || savingAutoFinish}
                   onChange={(e) => setAutoFinishIdle(e.target.value)}
@@ -860,7 +860,7 @@ export default function SystemSettingsPage() {
                   type="number"
                   min={1}
                   max={50}
-                  className="w-40 font-mono text-sm"
+                  className="w-full font-mono text-sm sm:w-40"
                   value={autoFinishMin}
                   disabled={!loaded || savingAutoFinish}
                   onChange={(e) => setAutoFinishMin(e.target.value)}
@@ -872,7 +872,7 @@ export default function SystemSettingsPage() {
                   type="number"
                   min={0}
                   max={100}
-                  className="w-40 font-mono text-sm"
+                  className="w-full font-mono text-sm sm:w-40"
                   value={autoFinishCoverage}
                   disabled={!loaded || savingAutoFinish}
                   onChange={(e) => setAutoFinishCoverage(e.target.value)}
@@ -884,7 +884,7 @@ export default function SystemSettingsPage() {
                   type="number"
                   min={0}
                   max={500}
-                  className="w-40 font-mono text-sm"
+                  className="w-full font-mono text-sm sm:w-40"
                   value={autoFinishMax}
                   disabled={!loaded || savingAutoFinish}
                   onChange={(e) => setAutoFinishMax(e.target.value)}
@@ -933,7 +933,7 @@ export default function SystemSettingsPage() {
                 min={500000}
                 max={20000000}
                 step={100000}
-                className="w-48 font-mono text-sm"
+                className="w-full font-mono text-sm sm:w-48"
                 value={intentBudgetTokens}
                 disabled={!loaded || savingIntentBudget}
                 onChange={(e) => setIntentBudgetTokens(e.target.value)}
@@ -969,7 +969,7 @@ export default function SystemSettingsPage() {
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2">
-              <Label htmlFor="compaction-tokens" className="w-40 text-sm">
+              <Label htmlFor="compaction-tokens" className="w-40 shrink-0 text-sm">
                 输出预算 (token)
               </Label>
               <Input
@@ -977,13 +977,13 @@ export default function SystemSettingsPage() {
                 type="number"
                 min={0}
                 step={1024}
-                className="w-40 font-mono text-sm"
+                className="w-full font-mono text-sm sm:w-40"
                 placeholder="0 = 默认 65536"
                 value={compactionTokens}
                 disabled={!loaded || savingCompaction}
                 onChange={(e) => setCompactionTokens(e.target.value)}
               />
-              <Label htmlFor="compaction-timeout" className="w-40 text-sm">
+              <Label htmlFor="compaction-timeout" className="w-40 shrink-0 text-sm">
                 单次超时 (秒)
               </Label>
               <Input
@@ -991,20 +991,20 @@ export default function SystemSettingsPage() {
                 type="number"
                 min={0}
                 step={60}
-                className="w-40 font-mono text-sm"
+                className="w-full font-mono text-sm sm:w-40"
                 placeholder="0 = 默认 1200"
                 value={compactionTimeout}
                 disabled={!loaded || savingCompaction}
                 onChange={(e) => setCompactionTimeout(e.target.value)}
               />
-              <Label htmlFor="compaction-members" className="w-40 text-sm">
+              <Label htmlFor="compaction-members" className="w-40 shrink-0 text-sm">
                 单块节点数上限
               </Label>
               <Input
                 id="compaction-members"
                 type="number"
                 min={0}
-                className="w-40 font-mono text-sm"
+                className="w-full font-mono text-sm sm:w-40"
                 placeholder="0 = 默认 6"
                 value={compactionMembers}
                 disabled={!loaded || savingCompaction}

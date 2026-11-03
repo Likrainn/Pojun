@@ -452,7 +452,7 @@ export default function TrafficPage() {
             </div>
           </PopoverContent>
         </Popover>
-        <div className="relative w-48">
+        <div className="relative w-full sm:w-48">
           <Input placeholder="host…" value={host} onChange={(e) => setHost(e.target.value)} className="h-8" />
         </div>
         <Button
@@ -479,7 +479,7 @@ export default function TrafficPage() {
           <EraserIcon className="size-3.5" />
           清空全部
         </Button>
-        <div className="relative max-w-sm flex-1">
+        <div className="relative w-full sm:max-w-sm sm:flex-1">
           <SearchIcon className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder="搜索全部（URL / 方法 / 类型 / 状态码…）"
@@ -489,7 +489,7 @@ export default function TrafficPage() {
           />
         </div>
         <Select value={method} onValueChange={setMethod}>
-          <SelectTrigger size="sm" className="w-32">
+          <SelectTrigger size="sm" className="w-full sm:w-32">
             <SelectValue placeholder="方法" />
           </SelectTrigger>
           <SelectContent>
@@ -502,7 +502,7 @@ export default function TrafficPage() {
           </SelectContent>
         </Select>
         <Select value={String(size)} onValueChange={(v) => setSize(Number(v))}>
-          <SelectTrigger size="sm" className="w-28">
+          <SelectTrigger size="sm" className="w-full sm:w-28">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -545,7 +545,7 @@ export default function TrafficPage() {
       {/* Advanced filters (issue #177): narrow 660k+ exchanges down to the one packet. */}
       <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5">
         <span className="pl-1 font-medium text-muted-foreground text-xs">高级筛选</span>
-        <div className="relative w-56">
+        <div className="relative w-full sm:w-56">
           <Input
             placeholder="响应内容（正文关键词，≥3字）"
             value={body}
@@ -553,7 +553,7 @@ export default function TrafficPage() {
             className="h-8"
           />
         </div>
-        <div className="relative w-52">
+        <div className="relative w-full sm:w-52">
           <Input
             placeholder="路径（如 /api/user/…）"
             value={path}
@@ -574,7 +574,7 @@ export default function TrafficPage() {
             ))}
           </SelectContent>
         </Select>
-        <div className="flex items-center gap-1 text-muted-foreground text-xs">
+        <div className="flex w-full flex-wrap items-center gap-1 text-muted-foreground text-xs sm:w-auto">
           <span>响应长度</span>
           <Input
             type="number"
@@ -582,7 +582,7 @@ export default function TrafficPage() {
             placeholder="最小(B)"
             value={respMin}
             onChange={(e) => setRespMin(e.target.value)}
-            className="h-8 w-24"
+            className="h-8 w-24 max-sm:min-w-0 max-sm:flex-1"
           />
           <span>–</span>
           <Input
@@ -642,9 +642,9 @@ export default function TrafficPage() {
                     activeField={sort.field}
                     direction={sort.direction}
                     onSort={toggleSort}
-                    className="w-36"
+                    className="hidden w-36 md:table-cell"
                   />
-                  <TableHead className="w-44">host</TableHead>
+                  <TableHead className="hidden w-44 md:table-cell">host</TableHead>
                   <TableHead className="w-20">方法</TableHead>
                   <TableHead>URL</TableHead>
                   <SortableHead
@@ -655,7 +655,7 @@ export default function TrafficPage() {
                     onSort={toggleSort}
                     className="w-20"
                   />
-                  <TableHead className="w-36">content-type</TableHead>
+                  <TableHead className="hidden w-36 md:table-cell">content-type</TableHead>
                   <SortableHead
                     field="resp_len"
                     label="响应长度"
@@ -663,7 +663,7 @@ export default function TrafficPage() {
                     direction={sort.direction}
                     onSort={toggleSort}
                     align="right"
-                    className="w-24 text-right"
+                    className="hidden w-24 text-right md:table-cell"
                   />
                 </TableRow>
               </TableHeader>
@@ -689,21 +689,22 @@ export default function TrafficPage() {
                         }
                       />
                     </TableCell>
-                    <TableCell className="text-muted-foreground text-xs tabular-nums">{fmtTime(e.ts)}</TableCell>
-                    <TableCell className="font-mono text-xs">{e.host}</TableCell>
+                    <TableCell className="hidden text-muted-foreground text-xs tabular-nums md:table-cell">{fmtTime(e.ts)}</TableCell>
+                    <TableCell className="hidden font-mono text-xs md:table-cell">{e.host}</TableCell>
                     <TableCell>
                       <MethodBadge method={e.method} />
                     </TableCell>
                     <TableCell className="max-w-0">
-                      <span className="block truncate font-mono text-xs">{e.url}</span>
+                      <span className="line-clamp-2 break-all font-mono text-xs md:line-clamp-1 md:truncate">{e.url}</span>
+                      <span className="mt-0.5 block text-muted-foreground text-[10px] md:hidden">{e.content_type || "—"} · {fmtBytes(e.resp_len)}</span>
                     </TableCell>
                     <TableCell>
                       <span className={cn("font-mono font-semibold text-xs tabular-nums", statusTone(e.status))}>
                         {e.status}
                       </span>
                     </TableCell>
-                    <TableCell className="text-muted-foreground text-xs">{e.content_type}</TableCell>
-                    <TableCell className="text-right text-xs tabular-nums">{fmtBytes(e.resp_len)}</TableCell>
+                    <TableCell className="hidden text-muted-foreground text-xs md:table-cell">{e.content_type}</TableCell>
+                    <TableCell className="hidden text-right text-xs tabular-nums md:table-cell">{fmtBytes(e.resp_len)}</TableCell>
                   </TableRow>
                 ))}
                 {exchanges.length === 0 && (
