@@ -55,6 +55,7 @@ type dataParseResult struct {
 	Rows         [][]any  `json:"rows,omitempty"`
 	Text         string   `json:"text,omitempty"`
 	TotalSize    int64    `json:"total_size"`
+	Envelope     string   `json:"envelope,omitempty"`
 }
 
 func parseDataPreview(kind, raw string) *dataParseResult {
@@ -76,34 +77,24 @@ func parseJSONPreview(raw string) *dataParseResult {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &v); err != nil {
 		return parseTextPreview(raw)
 	}
-	switch arr := v.(type) {
-	case []any:
-		res.TotalRows = len(arr)
-		res.Truncated = len(arr) > dataPreviewMaxRows
-		// 两遍：先收集并排序列名，再按统一列序摊行——否则列排序后与行错位。
-		colSet := map[string]bool{}
-		n := len(arr)
-		if n > dataPreviewMaxRows {
-			n = dataPreviewMaxRows
-		}
-		for _, item := range arr[:n] {
-			if obj, ok := item.(map[string]any); ok {
-				for k := range obj {
-					if !colSet[k] && len(colSet) < 30 {
-						colSet[k] = true
-					}
-				}
+	// API 信封下钻（v0.4.41）：{code,msg,data:[...]} 这类响应自动取数组字段作为
+	// 行来源（data/rows/list/result/records 优先）。
+	if obj, ok := v.(map[string]any); ok {
+		for _, k := range []string{"data", "rows", "list", "result", "records"} {
+			if inner, ok2 := obj[k].([]any); ok2 && len(inner) > 0 {
+				res2 := parseJSONPreviewItems(inner)
+				res2.Envelope = k
+				res2.TotalRows = len(inner)
+				res2.Truncated = len(inner) > dataPreviewMaxRows
+				return res2
 			}
 		}
-		cols := make([]string, 0, len(colSet))
-		for k := range colSet {
-			cols = append(cols, k)
-		}
-		sort.Strings(cols)
-		res.Columns = cols
-		for _, item := range arr[:n] {
-			res.Rows = append(res.Rows, dataRowCells(item, &cols, colSet))
-		}
+	}
+	switch arr := v.(type) {
+	case []any:
+		*res = *parseJSONPreviewItems(arr)
+		res.TotalRows = len(arr)
+		res.Truncated = len(arr) > dataPreviewMaxRows
 	case map[string]any:
 		res.TotalRows = 1
 		keys := []string{}
@@ -160,6 +151,36 @@ func clipValue(v any) any {
 		s = s[:dataPreviewMaxValue] + "…"
 	}
 	return s
+}
+
+
+// parseJSONPreviewItems 把数组元素摊成表格行（与 []any 分支共用列收集逻辑）。
+func parseJSONPreviewItems(arr []any) *dataParseResult {
+	res := &dataParseResult{Type: "json"}
+	colSet := map[string]bool{}
+	n := len(arr)
+	if n > dataPreviewMaxRows {
+		n = dataPreviewMaxRows
+	}
+	for _, item := range arr[:n] {
+		if obj, ok := item.(map[string]any); ok {
+			for k := range obj {
+				if !colSet[k] && len(colSet) < 30 {
+					colSet[k] = true
+				}
+			}
+		}
+	}
+	cols := make([]string, 0, len(colSet))
+	for k := range colSet {
+		cols = append(cols, k)
+	}
+	sort.Strings(cols)
+	res.Columns = cols
+	for _, item := range arr[:n] {
+		res.Rows = append(res.Rows, dataRowCells(item, &cols, colSet))
+	}
+	return res
 }
 
 func parseJSONLPreview(raw string) *dataParseResult {

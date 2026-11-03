@@ -63,3 +63,15 @@ func TestParseTextPreviewTruncates(t *testing.T) {
 		t.Fatalf("text lines=%d want %d", got, dataPreviewMaxLines)
 	}
 }
+
+// API 信封 {code,msg,data:[...]} 自动下钻到 data 数组（生产最常见的响应形态）。
+func TestParseJSONPreviewEnvelope(t *testing.T) {
+	raw := `{"code":"200","msg":"ok","data":[{"order":"A1","amount":100},{"order":"A2","amount":200}]}`
+	r := parseJSONPreview(raw)
+	if r.Envelope != "data" {
+		t.Fatalf("envelope=%q want data", r.Envelope)
+	}
+	if r.TotalRows != 2 || len(r.Rows) != 2 || r.Rows[0][1] != "A1" {
+		t.Fatalf("rows=%v", r.Rows)
+	}
+}
