@@ -1522,6 +1522,24 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (seg[0] === "tasks" && seg[2] === "coverage-graph") return D.coverageGraph;
   if (seg[0] === "tasks" && seg[2] === "asset-refs") return D.assetRefsFor(Number(q.get("asset_id") ?? 0));
 
+  // ── 数据文件预览（v0.4.41 mock）──
+  if (seg[0] === "tasks" && seg[4] === "data-preview") {
+    const id = Number(seg[3]);
+    return {
+      type: "json",
+      name: `artifact-${id}.json`,
+      kind: "data",
+      bound_finding: 0,
+      total_rows: 2,
+      truncated: false,
+      columns: ["order", "amount"],
+      rows: [
+        ["A1", 100],
+        ["A2", 200],
+      ],
+      total_size: 2048,
+    };
+  }
   // ── 批量复测候选（v0.4.27 mock）──
   if (seg[0] === "tasks" && seg[2] === "retest-candidates" && seg.length === 3) {
     const taskID = mockTaskAssetID(seg[1]) ?? Number(seg[1]);
