@@ -810,3 +810,13 @@ func (d *DB) FindingMetaByNodeID(taskID int64) (map[int64]FindingMeta, error) {
 	}
 	return out, rows.Err()
 }
+
+// CountPendingFindings 统计任务内仍未复测（status=pending）的 critical/high 数量。
+// 用于任务收尾时的「未复测提醒」——平台实测 4 个任务 200+ 漏洞只有 1 条复测，
+// 收尾时把缺口明确写进活动流，推动人工/批量复测。
+func (d *DB) CountPendingFindings(taskID int64) (critical, high int, err error) {
+	err = d.QueryRow(`
+SELECT count(*) FILTER (WHERE severity='critical'), count(*) FILTER (WHERE severity='high')
+FROM findings WHERE task_id=$1 AND status='pending'`, taskID).Scan(&critical, &high)
+	return
+}

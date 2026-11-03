@@ -585,6 +585,8 @@ const (
 	IntentStopTaskDone = "task_done"
 	// IntentStopKilled 被规划者终止。
 	IntentStopKilled = "killed"
+	// IntentStopShutdown 服务停止/任务范围取消，意图已放回 open（恢复后重跑）。
+	IntentStopShutdown = "server_shutdown"
 )
 
 // SetIntentStopReason records WHY an intent stopped. Unlike SetIntentBlockedReason

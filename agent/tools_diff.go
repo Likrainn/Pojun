@@ -101,10 +101,10 @@ type ValueDiff struct {
 	// KindA / KindB 是值的类型名（string/number/bool/null/object/array）。
 	KindA string `json:"kind_a"`
 	KindB string `json:"kind_b"`
-	// PreviewA / PreviewB 是截断后的值预览（敏感值会被抹掉）。
+	// PreviewA / PreviewB 是截断后的值预览（v0.4.37 起保留原值，不再抹敏感字段）。
 	PreviewA string `json:"preview_a"`
 	PreviewB string `json:"preview_b"`
-	// Sensitive 为 true 表示该字段的值被判定为敏感（凭据类），预览已抹掉。
+	// Sensitive 标记字段名像凭据（仅提示，不再遮蔽值）。
 	Sensitive bool `json:"sensitive"`
 }
 
@@ -161,11 +161,7 @@ func diffResponse(statusA, statusB int, bodyA, bodyB string) responseDiff {
 				KindB:    jsonKind(vb),
 				PreviewA: valuePreview(va),
 				PreviewB: valuePreview(vb),
-			}
-			if isSensitiveKey(k) {
-				vd.Sensitive = true
-				vd.PreviewA = "***"
-				vd.PreviewB = "***"
+				Sensitive: isSensitiveKey(k),
 			}
 			d.ValueDiffs = append(d.ValueDiffs, vd)
 		}
@@ -796,10 +792,8 @@ def main():
                 out["noise_keys"].append(k)
                 continue
             d = {"key": k, "kind_a": kind(va), "kind_b": kind(vb),
-                 "preview_a": preview(va), "preview_b": preview(vb)}
-            if is_sensitive_key(k):
-                d["sensitive"] = True
-                d["preview_a"] = d["preview_b"] = "***"
+                 "preview_a": preview(va), "preview_b": preview(vb),
+                 "sensitive": is_sensitive_key(k)}
             out["value_diffs"].append(d)
     else:
         out["same_shape"] = a.strip() == b.strip()

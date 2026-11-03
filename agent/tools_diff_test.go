@@ -104,8 +104,8 @@ func TestDiffResponseComparesNestedStructures(t *testing.T) {
 	}
 }
 
-// 凭据类字段的值要抹掉——响应体里常有 token，不能原样进报告/图谱。
-func TestDiffResponseMasksSensitiveValues(t *testing.T) {
+// v0.4.37：凭据类字段仍打 Sensitive 标记，但值原样展示（第一方证据需可溯源）。
+func TestDiffResponseKeepsSensitiveValuesPlaintext(t *testing.T) {
 	d := diffResponse(200, 200, `{"access_token":"aaa111","id":1}`, `{"access_token":"bbb222","id":2}`)
 
 	var found bool
@@ -115,8 +115,8 @@ func TestDiffResponseMasksSensitiveValues(t *testing.T) {
 			if !vd.Sensitive {
 				t.Error("access_token 应标记为敏感")
 			}
-			if vd.PreviewA != "***" || vd.PreviewB != "***" {
-				t.Errorf("敏感值未抹掉: %q / %q", vd.PreviewA, vd.PreviewB)
+			if vd.PreviewA != "aaa111" || vd.PreviewB != "bbb222" {
+				t.Errorf("敏感值应保留明文: %q / %q", vd.PreviewA, vd.PreviewB)
 			}
 		}
 	}

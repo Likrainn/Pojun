@@ -794,6 +794,14 @@ func (e *Engine) Run(ctx context.Context, t *Task) {
 	}
 	rt := e.registerTaskRoutines(ctx, t.ID, 1+workers)
 	e.deleteMu.RUnlock()
+	// created→running：任务真正开跑后状态列必须与事实一致（此前 bootstrap 准入不写
+	// running，线上任务跑了数小时 DB 里仍是 created）。仅 created 时写，避免覆盖
+	// paused/done 等状态。
+	if t.Status == "created" {
+		if err := e.m.SetTaskStatus(t.ID, "running"); err == nil {
+			t.Status = "running"
+		}
+	}
 	e.touch(t.ID)
 	runTaskRoutine(rt, func(loopCtx context.Context) { e.plannerLoop(loopCtx, t) })
 	for i := 0; i < workers; i++ {
@@ -1335,6 +1343,19 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 			_ = t.Store.SetIntentStopReason(intent.ID, db.IntentStopTaskDone)
 		}
 		log.Printf("[worker %s] task %s 意图 #%d 因任务已完成而取消(stopped)", name, t.ID, intent.ID)
+		e.touch(t.ID)
+		return true
+	}
+	// 服务停止 / 任务范围取消（非 pause、非收尾、非终态、非 kill）：本 run 是被
+	// 进程级 ctx 取消的，不是 worker 的错。把意图放回 open，服务恢复后重新领取——
+	// 否则每次部署重启都会烧掉若干意图（实测 5 个任务累计 29 条 blocked=context canceled）。
+	if ectx.Err() != nil && !e.isSettling(t.ID) && !isTerminalStatus(e.m.TaskStatus(t.ID)) && !killed {
+		if err := transitionIntentState(t.Store, intent.ID, "running", "open"); err != nil {
+			log.Printf("[worker %s] task %s 意图 #%d 服务停止回退失败: %v", name, t.ID, intent.ID, err)
+		} else {
+			_ = t.Store.SetIntentStopReason(intent.ID, db.IntentStopShutdown)
+		}
+		log.Printf("[worker %s] task %s 意图 #%d 因服务停止回到 open（恢复后重新领取）", name, t.ID, intent.ID)
 		e.touch(t.ID)
 		return true
 	}

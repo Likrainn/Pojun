@@ -200,6 +200,11 @@ func (s *Server) admitTaskWhen(t *Task, mode string, requirePaused bool) (queued
 	}
 
 	status := lifecycle.Status
+	// 首次准入（bootstrap）之前 tasks.status 一直停在 created，任务实际已跑数小时
+	// 界面上仍显示 created。真正开始执行（不入队）时落 running。
+	if !shouldQueue && status == "created" {
+		status = "running"
+	}
 	if wasTerminal {
 		status = "running"
 		// 终态复活是一次新的探索：清掉旧收尾计数，避免第一轮就被 idle 判据收掉。
