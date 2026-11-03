@@ -259,6 +259,26 @@ function interceptPageQuery(page: number, size: number, filter: InterceptApprova
   return query.toString();
 }
 
+// triggerBlobDownload 是移动端兼容的 blob 下载触发器（v0.4.33）：
+// · <a> 必须挂进 DOM 再 click——部分移动浏览器（Firefox/旧 WebView）对游离节点不触发下载；
+// · revokeObjectURL 延迟 30s——立即 revoke 会让 Safari 在真正写盘前拿到空 URL，
+//   表现为"点了没反应/下载失败"；
+// · download 属性在 iOS 13+ 生效；失败时抛错由调用方 toast 提示。
+function triggerBlobDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  window.setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 30_000);
+}
+
 export const api = {
   // 后端应用版本号（release 时由 ldflags 注入，默认 "dev"）。
   health: () => get<{ ok: boolean; status: string }>("/health"),
@@ -988,11 +1008,7 @@ export const api = {
     });
     if (!r.ok) throw new Error(`docx: ${r.status}`);
     const blob = await r.blob();
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `pojun-report-${task || "active"}-${new Date().toISOString().slice(0, 10)}.docx`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    triggerBlobDownload(blob, `pojun-report-${task || "active"}-${new Date().toISOString().slice(0, 10)}.docx`);
   },
   // 单漏洞 Word 导出
   downloadFindingDocx: async (id: number | string) => {
@@ -1002,11 +1018,7 @@ export const api = {
     });
     if (!r.ok) throw new Error(`docx: ${r.status}`);
     const blob = await r.blob();
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `pojun-finding-${id}-${new Date().toISOString().slice(0, 10)}.docx`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    triggerBlobDownload(blob, `pojun-finding-${id}-${new Date().toISOString().slice(0, 10)}.docx`);
   },
   chatMentions: (kind: string, query: string, signal?: AbortSignal, cursor = "") =>
     http<{ items: ChatMention[]; next_cursor?: string }>(

@@ -54,7 +54,7 @@ function Row({
   const [open, setOpen] = React.useState(false);
   return (
     <div className="border-b last:border-b-0">
-      <div className="flex w-full items-center gap-3 px-4 py-3 text-sm hover:bg-accent/40">
+      <div className="flex w-full flex-col gap-2 px-4 py-3 text-sm hover:bg-accent/40 sm:flex-row sm:items-center sm:gap-3">
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
@@ -76,6 +76,7 @@ function Row({
             <span className="truncate text-muted-foreground text-xs">{f.summary}</span>
           </div>
         </button>
+        <div className="flex flex-wrap items-center gap-2 pl-7 sm:pl-0">
         <Badge variant="outline">流量证据 {f.traffic_count ?? 0} 条</Badge>
         {f.assets && f.assets.length > 0 && (
           <div className="hidden shrink-0 flex-wrap justify-end gap-1 sm:flex">
@@ -126,6 +127,7 @@ function Row({
             <ArrowUpRightIcon className="size-3" />
           </Link>
         )}
+        </div>
       </div>
       {open && (
         <div className="bg-muted/30 px-4 pb-4 pl-11">

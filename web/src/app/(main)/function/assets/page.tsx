@@ -355,9 +355,9 @@ export default function AssetsPage() {
                 <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow>
                     <TableHead>企业</TableHead>
-                    <TableHead className="w-24 text-right">资产数</TableHead>
+                    <TableHead className="hidden w-24 text-right md:table-cell">资产数</TableHead>
                     <TableHead>资产范围</TableHead>
-                    <TableHead className="w-36 text-right">操作</TableHead>
+                    <TableHead className="w-auto text-right md:w-36">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -366,10 +366,10 @@ export default function AssetsPage() {
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <CompanyAvatar name={c.name} logo={c.logo} />
-                          <span className="font-medium">{c.name}</span>
+                          <span className="line-clamp-1 font-medium">{c.name}</span>
                         </div>
                       </TableCell>
-                      <TableCell className="text-right text-sm tabular-nums">{c.asset_count}</TableCell>
+                      <TableCell className="hidden text-right text-sm tabular-nums md:table-cell">{c.asset_count}</TableCell>
                       <TableCell>
                         {c.scope?.length ? (
                           <div className="flex flex-wrap gap-1">

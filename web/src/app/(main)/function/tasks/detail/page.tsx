@@ -392,9 +392,13 @@ function TaskDetailInner() {
             {task.id}
           </code>
           <Separator orientation="vertical" className="mx-1 hidden h-4 sm:block" />
-          <TaskLLMControl task={task} profiles={profiles} onUpdated={load} />
-          <StatusBadge domain={terminal ? "task" : "engine"} value={terminal ? task.status : engineMode} dot />
-          {canArchive ? (
+          <span className="hidden sm:inline-flex">
+            <TaskLLMControl task={task} profiles={profiles} onUpdated={load} />
+          </span>
+          <span className="hidden sm:inline-flex">
+            <StatusBadge domain={terminal ? "task" : "engine"} value={terminal ? task.status : engineMode} dot />
+          </span>
+          <span className="hidden sm:inline-flex">{canArchive ? (
             <AlertDialog>
               <AlertDialogTrigger asChild>{archiveTrigger}</AlertDialogTrigger>
               <AlertDialogContent>
@@ -419,14 +423,21 @@ function TaskDetailInner() {
               <TooltipContent>{archiveDisabledReason}</TooltipContent>
             </Tooltip>
           )}
+          </span>
           <Button size="sm" variant={controlVariant} onClick={togglePause} disabled={terminal}>
             {controlIcon}
             {controlLabel}
           </Button>
         </div>
-        <p className="truncate text-muted-foreground text-xs">{task.goal}</p>
+        {/* 手机端第二行：状态/模型/归档（桌面在首行） */}
+        <div className="flex flex-wrap items-center gap-2 sm:hidden">
+          <StatusBadge domain={terminal ? "task" : "engine"} value={terminal ? task.status : engineMode} dot />
+          <TaskLLMControl task={task} profiles={profiles} onUpdated={load} />
+          <span className="inline-flex">{archiveTrigger}</span>
+        </div>
+        <p className="line-clamp-2 text-muted-foreground text-xs sm:truncate">{task.goal}</p>
         {/* Tabs */}
-        <div className="no-scrollbar min-w-0 overflow-x-auto">
+        <div className="no-scrollbar min-w-0 overflow-x-auto max-sm:[mask-image:linear-gradient(to_right,#000_88%,transparent)]">
           <TabsList variant="default" className="min-w-max">
             {TABS.map((t) => (
               <TabsTrigger key={t.value} value={t.value}>

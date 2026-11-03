@@ -205,10 +205,10 @@ export default function CommandsPage() {
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-card">
                 <TableRow>
-                  <TableHead className="w-[130px]">时间</TableHead>
-                  <TableHead className="w-[60px]">任务</TableHead>
-                  <TableHead className="w-[90px]">Worker</TableHead>
-                  <TableHead className="w-[110px]">工具</TableHead>
+                  <TableHead className="w-[110px] md:w-[130px]">时间</TableHead>
+                  <TableHead className="hidden w-[60px] md:table-cell">任务</TableHead>
+                  <TableHead className="hidden w-[90px] md:table-cell">Worker</TableHead>
+                  <TableHead className="hidden w-[110px] md:table-cell">工具</TableHead>
                   <TableHead>输入</TableHead>
                   <TableHead className="w-[60px]">状态</TableHead>
                 </TableRow>
@@ -236,13 +236,13 @@ export default function CommandsPage() {
                       <TableCell className="text-muted-foreground text-xs tabular-nums">
                         {fmtTime(cmd.created_at)}
                       </TableCell>
-                      <TableCell className="font-mono text-muted-foreground text-xs">#{cmd.exploration_id}</TableCell>
-                      <TableCell>
+                      <TableCell className="hidden font-mono text-muted-foreground text-xs md:table-cell">#{cmd.exploration_id}</TableCell>
+                      <TableCell className="hidden md:table-cell">
                         <Badge variant="outline" className="font-mono text-xs">
                           {cmd.worker || "-"}
                         </Badge>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="hidden md:table-cell">
                         <Badge variant="secondary" className="font-mono text-xs">
                           {cmd.tool || "-"}
                         </Badge>
@@ -251,6 +251,9 @@ export default function CommandsPage() {
                         <code className="block truncate font-mono text-xs">
                           {truncate(toolInput(cmd.command), CMD_MAX_LEN)}
                         </code>
+                        <span className="mt-0.5 block truncate text-muted-foreground text-[10px] md:hidden">
+                          {cmd.tool || "-"} · {cmd.worker || "-"}
+                        </span>
                       </TableCell>
                       <TableCell>
                         {cmd.is_error ? (

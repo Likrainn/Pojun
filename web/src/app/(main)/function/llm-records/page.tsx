@@ -381,12 +381,12 @@ export default function LLMRecordsPage() {
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-card">
                 <TableRow>
-                  <TableHead className="w-[130px]">时间</TableHead>
-                  <TableHead className="w-[60px]">任务</TableHead>
-                  <TableHead className="w-[90px]">Worker</TableHead>
-                  <TableHead className="w-[100px]">Profile</TableHead>
+                  <TableHead className="w-[110px] md:w-[130px]">时间</TableHead>
+                  <TableHead className="hidden w-[60px] md:table-cell">任务</TableHead>
+                  <TableHead className="hidden w-[90px] md:table-cell">Worker</TableHead>
+                  <TableHead className="hidden w-[100px] md:table-cell">Profile</TableHead>
                   <TableHead className="w-[140px]">Model</TableHead>
-                  <TableHead className="w-[70px]">延迟</TableHead>
+                  <TableHead className="hidden w-[70px] md:table-cell">延迟</TableHead>
                   <TableHead className="w-[90px]">Tokens</TableHead>
                   <TableHead className="w-[60px]">状态</TableHead>
                 </TableRow>
@@ -417,21 +417,21 @@ export default function LLMRecordsPage() {
                       <TableCell className="text-muted-foreground text-xs tabular-nums">
                         {fmtTime(rec.ts)}
                       </TableCell>
-                      <TableCell className="font-mono text-muted-foreground text-xs">
+                      <TableCell className="hidden font-mono text-muted-foreground text-xs md:table-cell">
                         {rec.task_id ? `#${rec.task_id}` : "-"}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="hidden md:table-cell">
                         <Badge variant="outline" className="font-mono text-xs">
                           {rec.worker || "-"}
                         </Badge>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="hidden md:table-cell">
                         <span className="text-xs">{rec.profile_name || "-"}</span>
                       </TableCell>
                       <TableCell>
-                        <span className="font-mono text-xs">{rec.model || "-"}</span>
+                        <span className="block max-w-[9rem] truncate font-mono text-xs">{rec.model || "-"}</span>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="hidden md:table-cell">
                         <span className={cn("text-xs", rec.latency_ms > 30000 && "text-amber-500")}>
                           {fmtLatency(rec.latency_ms)}
                         </span>

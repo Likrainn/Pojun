@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 
 import { ArrowLeftIcon, ArrowUpRightIcon, ChevronLeftIcon, ChevronRightIcon, FileDownIcon, ShieldAlertIcon } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
 
 import { CopyButton } from "@/components/copy-button";
@@ -60,6 +61,7 @@ function FindingDetailInner() {
   const searchParams = useSearchParams();
   const id = searchParams.get("id") ?? "";
   const contextTaskId = searchParams.get("context_task") ?? "";
+  const [exporting, setExporting] = React.useState(false);
   const [finding, setFinding] = React.useState<Finding | null>(null);
   const [loaded, setLoaded] = React.useState(false);
   const [tab, setTab] = React.useState("overview");
@@ -147,8 +149,23 @@ function FindingDetailInner() {
           </h1>
           <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-muted-foreground text-xs">#{finding.id}</code>
           <Separator orientation="vertical" className="mx-1 h-4" />
-          <Button size="sm" variant="outline" onClick={() => api.downloadFindingDocx(finding.id)}>
-            <FileDownIcon /> 导出 Word
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={exporting}
+            onClick={async () => {
+              setExporting(true);
+              try {
+                await api.downloadFindingDocx(finding.id);
+                toast.success("Word 已开始下载（含证据附件，文件较大请稍候）");
+              } catch (e) {
+                toast.error(`导出失败：${(e as Error).message}`);
+              } finally {
+                setExporting(false);
+              }
+            }}
+          >
+            {exporting ? <Spinner data-icon="inline-start" /> : <FileDownIcon />} {exporting ? "导出中…" : "导出 Word"}
           </Button>
           <StatusBadge domain="severity" value={finding.severity} dot />
           <StatusBadge domain="finding" value={finding.status} dot />

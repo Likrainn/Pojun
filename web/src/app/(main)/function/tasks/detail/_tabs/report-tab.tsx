@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import { CheckIcon, CopyIcon, FileDownIcon, FileTextIcon } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
 
 import { Markdown } from "@/components/markdown";
@@ -15,6 +16,7 @@ export function ReportTab({ taskId }: { taskId: string }) {
   const [report, setReport] = React.useState<string>("");
   const [loading, setLoading] = React.useState(true);
   const [copied, setCopied] = React.useState(false);
+  const [exporting, setExporting] = React.useState(false);
 
   React.useEffect(() => {
     let active = true;
@@ -83,8 +85,23 @@ export function ReportTab({ taskId }: { taskId: string }) {
             </Button>
           )}
           {report && (
-            <Button size="sm" variant="outline" onClick={() => api.downloadTaskDocx(taskId)}>
-              <FileDownIcon /> 导出 Word
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={exporting}
+              onClick={async () => {
+                setExporting(true);
+                try {
+                  await api.downloadTaskDocx(taskId);
+                  toast.success("Word 已开始下载（含证据附件，文件较大请稍候）");
+                } catch (e) {
+                  toast.error(`导出失败：${(e as Error).message}`);
+                } finally {
+                  setExporting(false);
+                }
+              }}
+            >
+              {exporting ? <Spinner data-icon="inline-start" /> : <FileDownIcon />} {exporting ? "导出中…" : "导出 Word"}
             </Button>
           )}
         </div>
