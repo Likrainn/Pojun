@@ -337,12 +337,3 @@ ORDER BY r.finding_id, r.id DESC`, taskID)
 	}
 	return out, rows.Err()
 }
-
-// HasActiveFindingRetest 报告某漏洞当前是否有进行中（pending/running）的复测。
-// 自动复测队列用它等待上一条跑完再启动下一条。
-func (d *DB) HasActiveFindingRetest(findingID int64) (bool, error) {
-	var exists bool
-	err := d.QueryRow(`SELECT EXISTS(
-SELECT 1 FROM finding_retests WHERE finding_id=$1 AND status IN ('pending','running'))`, findingID).Scan(&exists)
-	return exists, err
-}

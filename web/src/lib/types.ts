@@ -1049,10 +1049,6 @@ export interface Settings {
   finding_evidence_verify?: "off" | "warn" | "block";
   // 工具输出注入告警（v0.4.29）：命中高精度注入特征时提醒模型「当数据不当指令」。
   tool_output_injection_guard?: boolean; // 默认 true
-  // 任务收尾自动复测（v0.4.38）：默认只测 critical、最多 10 条、串行执行。
-  auto_retest_enabled?: boolean;
-  auto_retest_max?: number;
-  auto_retest_severities?: string; // 逗号分隔，如 "critical" / "critical,high"
   // LLM 轮询(故障转移)。默认关；开启后「未指定模型」的 agent 在当前配置不可用
   // （余额不足/key 失效/限流/服务异常）时自动切到下一个配置。
   llm_pool_enabled?: boolean; // 默认 false

@@ -58,9 +58,6 @@ type Server struct {
 	previewMu   sync.Mutex
 	previewIDs  map[int64]bool
 
-	// 自动复测队列（v0.4.38）：任务收尾后对未复测 critical 串行补测。
-	autoRetest *autoRetestState
-
 	// lm is the process-wide callback listener. It is initialized lazily so an
 	// installation that never needs a callback opens no extra socket or goroutine.
 	listenOnce sync.Once
@@ -167,7 +164,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	if err != nil {
 		log.Fatalf("[auth] JWT key: %v", err)
 	}
-	s := &Server{m: m, engine: NewEngine(m), ctx: ctx, skillDir: skillDir, keyDir: keyDir, dataDir: dataDir, chatBusy: map[string]bool{}, autoRetest: newAutoRetestState(),
+	s := &Server{m: m, engine: NewEngine(m), ctx: ctx, skillDir: skillDir, keyDir: keyDir, dataDir: dataDir, chatBusy: map[string]bool{},
 		chatCancel: map[string]context.CancelCauseFunc{}, triggerQ: map[string][]triggeredRun{},
 		triggerActive: map[string]int{}, triggerCfg: map[string]triggerBehavior{},
 		profChatAgents: map[int64]*agent.ChatAgent{},
@@ -187,8 +184,6 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	// Every task uses a stable task router. An empty explicit chain is resolved by
 	// that router through Agent bindings and then the global provider, so adding a
 	// first chain to a running task takes effect on its very next LLM call.
-	// 任务收尾后自动复测（v0.4.38）：critical 串行补测，设置可关。
-	s.engine.SetOnSettled(func(taskID, reason string) { s.maybeAutoRetest(taskID, reason) })
 	s.engine.SetAuthoritativeAgentResolver(func(t *Task) (*agent.Planner, *agent.Worker) {
 		if !s.taskRuntimeAvailable(t, "planner", "worker") {
 			return nil, nil
@@ -3439,7 +3434,6 @@ func (s *Server) settingsPayload() map[string]any {
 	}
 	af := autoFinishConfigFromPG(s.m.pg)
 	ib := intentBudgetFromPG(s.m.pg)
-	ar := autoRetestFromPG(s.m.pg)
 	return map[string]any{
 		"traffic_capture":       s.m.TrafficEnabled(),
 		"agent_traffic_binding": s.m.pg.GetBool(settingAgentTrafficBinding, false),
@@ -3474,10 +3468,6 @@ func (s *Server) settingsPayload() map[string]any {
 		// 证据逐字回验（v0.4.29）：off|warn|block，默认 warn。
 		"finding_evidence_verify":    evidenceVerifyModeFromPG(s.m.pg).String(),
 		"tool_output_injection_guard": injectionGuardFromPG(s.m.pg),
-		// 任务收尾自动复测（v0.4.38）：默认只测 critical、最多 10 条。
-		"auto_retest_enabled":      ar.Enabled,
-		"auto_retest_max":          ar.Max,
-		"auto_retest_severities":   strings.Join(ar.Severities, ","),
 		// LLM 轮询(故障转移)。默认关；开启后走全局激活配置的 agent 在当前配置不可用时
 		// 自动切到下一个配置。bind_fallback 仅在轮询开启时有意义(默认关)。
 		"llm_pool_enabled":       s.m.LLMPoolEnabled(),
@@ -3576,10 +3566,6 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		// 证据逐字回验（v0.4.29）：off|warn|block；工具输出注入告警开关。
 		EvidenceVerify     *string `json:"finding_evidence_verify"`
 		InjectionGuard     *bool   `json:"tool_output_injection_guard"`
-		// 任务收尾自动复测（v0.4.38）。
-		AutoRetestEnabled *bool   `json:"auto_retest_enabled"`
-		AutoRetestMax     *int    `json:"auto_retest_max"`
-		AutoRetestSevs    *string `json:"auto_retest_severities"`
 		// LLM 轮询(故障转移)开关 + 「绑定配置失败也兜底回轮询链」开关。两者都需要
 		// 重建 provider 链才生效，走下面的 changed → applyLLM 路径。
 		LLMPoolEnabled      *bool `json:"llm_pool_enabled"`
@@ -3795,39 +3781,6 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.InjectionGuard != nil {
 		if err := s.m.pg.SetBool(settingInjectionGuard, *req.InjectionGuard); err != nil {
-			writeErr(w, 500, err.Error())
-			return
-		}
-	}
-	if req.AutoRetestEnabled != nil {
-		if err := s.m.pg.SetBool(settingAutoRetestEnabled, *req.AutoRetestEnabled); err != nil {
-			writeErr(w, 500, err.Error())
-			return
-		}
-	}
-	if req.AutoRetestMax != nil {
-		if *req.AutoRetestMax < 1 || *req.AutoRetestMax > 50 {
-			writeErr(w, 400, "auto_retest_max 必须在 1–50 之间")
-			return
-		}
-		if err := s.m.pg.SetSetting(settingAutoRetestMax, strconv.Itoa(*req.AutoRetestMax)); err != nil {
-			writeErr(w, 500, err.Error())
-			return
-		}
-	}
-	if req.AutoRetestSevs != nil {
-		sevs := splitComma(*req.AutoRetestSevs)
-		if len(sevs) == 0 {
-			writeErr(w, 400, "auto_retest_severities 不能为空")
-			return
-		}
-		for _, sv := range sevs {
-			if !db.ValidSeverity(sv) {
-				writeErr(w, 400, "auto_retest_severities 含非法等级: "+sv)
-				return
-			}
-		}
-		if err := s.m.pg.SetSetting(settingAutoRetestSevs, strings.Join(sevs, ",")); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}

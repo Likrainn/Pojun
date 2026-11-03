@@ -226,11 +226,6 @@ func (e *Engine) settleTaskWithReason(ctx context.Context, t *Task, reason, deta
 		e.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
 			Summary: fmt.Sprintf("自动收尾：%s", detail)})
 	}
-	// 任务收尾联动（v0.4.38）：交给 Server 的自动复测队列（设置可关）。
-	// 放在活动提醒之前，保证复测候选查询与提醒看到的是同一批 pending 数据。
-	if e.onSettled != nil && reason != "timeout" {
-		e.onSettled(t.ID, reason)
-	}
 	// 收尾提醒：把「还没复测的 critical/high」数量写进活动流（v0.4.37）。平台实测
 	// 5 个任务 222 个漏洞只有 1 条复测——不提醒，报告就带着大量未验证结论交付。
 	if reason != "timeout" {
