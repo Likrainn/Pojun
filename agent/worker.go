@@ -254,6 +254,11 @@ const workerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 3. **意图本身有问题就早停**：开跑前发现意图自相矛盾、与锚定资产不符、或缺失必要前置时，立即 record_fact 一条（confidence=observed，summary 写"意图 #N 不可执行：……原因"）并结束——不要自行改目标继续探，更不要硬着头皮绕到步数耗尽。
 4. 只在授权范围内操作。系统提示顶部若附【操作约束】，那是最高优先级红线：每条命令/探测执行前先自检，违反即不做（哪怕它落在你领到的意图里）。
 5. **报漏洞前先做一次对抗式自检**：当你觉得"打通了/拿到成果了"，先切换成怀疑者——用与首次**不同的路径或独立命令**再触发一次（换方法、换参数、换入口、换编码），确认这不是误报、不是一次性假象、不是把"版本命中/参数可疑"当成了已利用。自检没过就老实记成 inferred 事实，别硬认成 finding。**证伪和证实同等有价值。**
+6. **工具使用纪律**（v0.4.30，汇总 EnIGMA/CAI 的操作纪律，自译重写；也是省 token 的硬纪律）：
+   - **一条命令只做一件事，且必须带超时**：curl 加 --max-time 15、nc 加 -w5、长命令套 timeout 30；**不要执行会等待输入的交互命令**（裸 ssh/nc、vim/less/tail -f、无 --batch 的工具）——挂死会白烧预算。
+   - **大输出先落盘再检索**：cmd > out.txt 2>&1 后用 grep -n / sed -n 取片段；二进制/编码内容先 xxd | head 或 strings | head，别把整段二进制灌进对话。
+   - **能用领域工具就别手写循环**：批量探活用 http_probe，带认证请求用 auth_request，响应对比用 diff_responses，回看已抓流量用 traffic_search —— 它们回显紧凑且自动留痕。
+   - **同一打法连续 3 次没有新信息就换本质不同的打法**（换入口/换参数位置/换方法/换身份），不要在原参数上反复微调——微调换不来新信息，只烧预算。
 
 **边发现边写回**（写进图才算数，脑子/文字里的不算；每得一个结果立刻写，别攒到最后被步数耗尽丢掉）。三种写回，别串图：
 - **新资产/资源 → insert_assets（资产图）**：子域 / service / endpoint / 指纹 / 凭据 等一切资产【本身】。**这里只登记资产；探索结论/判断不写这里，用 record_fact。**
@@ -568,10 +573,10 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		// SDK 自动落盘并在回显里给绝对路径指针，模型需要时自行 grep/sed 回读。
 		ToolOutputDir:      cmdOutDir(runDir),
 		MaxToolOutputChars: workerToolOutputChars,
-		Compaction:    compactionConfig(w.compactionWindow()), // long tool-heavy runs stay within the window
-		Todos:         actool.NewTodoStore(),                  // 会话级临时待办（TodoWrite），纯规划用，退出即丢
-		NonStreaming:  w.nonStreaming(),                       // 该 profile 选非流式时走 Provider.Complete
-		MaxTokens:     w.maxTokens(),                          // 0 = 不发上限,由服务端默认值决定
+		Compaction:         compactionConfig(w.compactionWindow()), // long tool-heavy runs stay within the window
+		Todos:              actool.NewTodoStore(),                  // 会话级临时待办（TodoWrite），纯规划用，退出即丢
+		NonStreaming:       w.nonStreaming(),                       // 该 profile 选非流式时走 Provider.Complete
+		MaxTokens:          w.maxTokens(),                          // 0 = 不发上限,由服务端默认值决定
 	}
 	if hooks != nil { // typed-nil guard: only set when concrete (avoids harness panic)
 		// 工具调用可观测：worker 的工具调用此前完全不可观测——journal 里只有 planner
