@@ -747,6 +747,20 @@ export interface RetestCandidate {
   summary: string;
 }
 
+// 数据文件在线预览（v0.4.41）：后端按扩展名解析 JSON/JSONL/CSV/TSV/文本。
+export interface DataPreviewPayload {
+  type: "json" | "jsonl" | "csv" | "text";
+  name: string;
+  kind: string;
+  bound_finding: number;
+  total_rows: number;
+  truncated: boolean;
+  columns?: string[];
+  rows?: unknown[][];
+  text?: string;
+  total_size: number;
+}
+
 export interface RetestState {
   finding_id: number;
   status: "pending" | "running" | "completed" | "failed" | "stopped";

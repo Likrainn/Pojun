@@ -1572,6 +1572,22 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		if len(a.EvidenceHintID) > 0 && pid(a.EvidenceHintID) <= 0 {
 			return actool.Errorf("evidence_hint_id 必须为有效的提示节点 ID；无交接提示时省略"), nil
 		}
+		// 漏洞资产自动锚定（v0.4.40，与 record_fact 同一策略）：模型没给 asset_ids
+		// 时，从 summary/evidence 文本反查任务资产补上——归属链路保证 finding 能
+		// 连到资产/意图，报告与按资产聚合才不缺项。
+		if len(a.AssetIDs) == 0 {
+			if auto := t.autoAnchorFact(map[string]any{
+				"summary":  a.Summary,
+				"detail":   a.Evidence,
+				"evidence": a.Evidence,
+			}); len(auto) > 0 {
+				for _, id := range auto {
+					if raw, err := json.Marshal(id); err == nil {
+						a.AssetIDs = append(a.AssetIDs, raw)
+					}
+				}
+			}
+		}
 		refs, err := t.findingRefsFromHint(pid(a.EvidenceHintID), a.TrafficRefs)
 		if err != nil {
 			return actool.Errorf(err.Error()), nil

@@ -29,6 +29,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ArtifactDataViewerDialog } from "@/components/artifact-data-viewer";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Progress } from "@/components/ui/progress";
@@ -1404,6 +1405,7 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
   const [scanning, setScanning] = React.useState(false);
   const [expanded, setExpanded] = React.useState(false);
   const [preview, setPreview] = React.useState<TaskArtifact | null>(null);
+  const [dataPreview, setDataPreview] = React.useState<TaskArtifact | null>(null);
   const [broken, setBroken] = React.useState<Record<number, boolean>>({});
   // v0.4.20：历史/任务级图片批量归属到漏洞。
   const [selected, setSelected] = React.useState<number[]>([]);
@@ -1411,7 +1413,7 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
   const [assignTo, setAssignTo] = React.useState("0");
   const [assigning, setAssigning] = React.useState(false);
   // v0.4.21：文档预览与筛选。
-  const [filter, setFilter] = React.useState<"all" | "image" | "document" | "file">("all");
+  const [filter, setFilter] = React.useState<"all" | "image" | "document" | "data" | "file">("all");
   const [docPreview, setDocPreview] = React.useState<{ artifact: TaskArtifact; page: number } | null>(null);
   const load = React.useCallback(
     (alive: { v: boolean }) =>
@@ -1480,9 +1482,13 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
   const images = list.filter((a) => a.kind === "image");
   const isDoc = (a: TaskArtifact) =>
     ["document", "spreadsheet", "presentation", "pdf"].includes(a.kind) ||
-    /\.(docx?|xlsx?|pptx?|pdf|odt|ods|odp|csv|rtf)$/i.test(a.name);
-  const documents = list.filter((a) => a.kind !== "image" && isDoc(a));
-  const files = list.filter((a) => a.kind !== "image" && !isDoc(a));
+    /\.(docx?|xlsx?|pptx?|pdf|odt|ods|odp|rtf)$/i.test(a.name);
+  const isDataFile = (a: TaskArtifact) =>
+    ["data", "log"].includes(a.kind) ||
+    /\.(json|jsonl|ndjson|csv|tsv|txt|log|out|diff)$/i.test(a.name);
+  const documents = list.filter((a) => a.kind !== "image" && isDoc(a) && !isDataFile(a));
+  const dataFiles = list.filter((a) => a.kind !== "image" && isDataFile(a));
+  const files = list.filter((a) => a.kind !== "image" && !isDoc(a) && !isDataFile(a));
   const docLabel = (a: TaskArtifact) => {
     const ext = (a.name.split(".").pop() || "").toLowerCase();
     if (["doc", "docx", "odt", "rtf"].includes(ext) || a.kind === "document") return "Word";
@@ -1517,6 +1523,7 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
     { key: "all", label: `全部 ${list.length}` },
     { key: "image", label: `图片 ${images.length}` },
     { key: "document", label: `文档 ${documents.length}` },
+    { key: "data", label: `数据 ${dataFiles.length}` },
     { key: "file", label: `其他 ${files.length}` },
   ];
   const visibleIDs =
@@ -1524,9 +1531,11 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
       ? images.map((a) => a.id)
       : filter === "document"
         ? documents.map((a) => a.id)
-        : filter === "file"
-          ? files.map((a) => a.id)
-          : list.map((a) => a.id);
+        : filter === "data"
+          ? dataFiles.map((a) => a.id)
+          : filter === "file"
+            ? files.map((a) => a.id)
+            : list.map((a) => a.id);
   const selectVisible = () =>
     setSelected((cur) => Array.from(new Set([...cur, ...visibleIDs])));
   return (
@@ -1552,7 +1561,7 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
             </div>
           </CardTitle>
           <CardDescription>
-            截图与数据样本来自任务执行过程；数据按样本策略保存（证明性样本，非全量）。勾选图片/文件可批量归属到漏洞，归属后只在该漏洞详情与单漏洞报告中出现；任务级证据统一在这里查看。
+            截图与数据样本来自任务执行过程，全部明文保真展示。数据类证据（JSON/CSV/日志等）点「查看数据」可在线阅读；勾选可批量归属到漏洞，归属后只在该漏洞详情与单漏洞报告中出现。
           </CardDescription>
         </CardHeader>
         {expanded && (
@@ -1720,6 +1729,33 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
                 })}
               </div>
             )}
+            {(filter === "all" || filter === "data") && dataFiles.length > 0 && (
+              <div className="flex flex-col divide-y rounded border">
+                {dataFiles.map((a) => (
+                  <div key={a.id} className="flex min-w-0 items-center gap-2 px-3 py-2 text-sm">
+                    <input
+                      type="checkbox"
+                      aria-label={`选择 ${a.name}`}
+                      className="size-3.5 shrink-0 accent-primary"
+                      checked={selected.includes(a.id)}
+                      onChange={() => toggleSelected(a.id)}
+                    />
+                    <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">数据</span>
+                    <span className="min-w-0 flex-1 truncate" title={a.note || a.name}>{a.name}</span>
+                    {a.finding_id ? (
+                      <span className="shrink-0 text-muted-foreground text-xs">#{a.finding_id}</span>
+                    ) : null}
+                    <span className="shrink-0 text-muted-foreground text-xs">{fmtSize(a.size_bytes)}</span>
+                    <Button size="sm" variant="outline" onClick={() => setDataPreview(a)}>
+                      查看数据
+                    </Button>
+                    <Button size="sm" variant="ghost" asChild>
+                      <a href={downloadUrl(a.id)}>下载</a>
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
             {(filter === "all" || filter === "file") && files.length > 0 && (
               <div className="flex flex-col divide-y rounded border">
                 {files.map((a) => (
@@ -1778,6 +1814,12 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
           )}
         </DialogContent>
       </Dialog>
+      <ArtifactDataViewerDialog
+        taskId={taskId}
+        artifact={dataPreview}
+        open={!!dataPreview}
+        onClose={() => setDataPreview(null)}
+      />
       <Dialog
         open={!!docPreview}
         onOpenChange={(o) => {

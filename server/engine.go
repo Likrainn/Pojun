@@ -398,6 +398,64 @@ func (e *Engine) ActiveLLMCalls(taskID string) int64 {
 
 func (e *Engine) touch(taskID string) { e.lastAct.Store(taskID, time.Now().Unix()) }
 
+// autoAttributeCompany 任务首次开跑时自动归属公司（v0.4.40）。
+// 数据背景：companies 与 assets.company_id 都有归属，但任务的 company scope 全空
+// ——任务在公司维度是「无主」的，无法按公司分组/汇报。
+// 规则（保守）：范围内资产 100% 属于同一家公司，且该公司资产总量 ≤ 3×范围资产+20
+// （说明公司≈该客户）才自动写 company scope 并快照资产；否则只写建议到活动流。
+func (e *Engine) autoAttributeCompany(t *Task) {
+	if e.m == nil || e.m.pg == nil {
+		return
+	}
+	tid, err := strconv.ParseInt(t.ID, 10, 64)
+	if err != nil || tid <= 0 {
+		return
+	}
+	has, err := e.m.pg.HasCompanyScope(tid)
+	if err != nil || has {
+		return
+	}
+	dist, total, err := e.m.pg.ScopeCompanyDistribution(tid)
+	if err != nil || total == 0 {
+		return
+	}
+	var cid int64
+	others := 0
+	for id, n := range dist {
+		if id <= 0 || n == 0 {
+			continue
+		}
+		if cid == 0 {
+			cid = id
+		} else if id != cid {
+			others++
+		}
+	}
+	if cid == 0 {
+		return
+	}
+	if others == 0 {
+		compTotal, err := e.m.pg.CompanyScopeAssetCount(cid)
+		if err != nil {
+			return
+		}
+		if compTotal <= 3*total+20 {
+			reason := fmt.Sprintf("自动归属：任务范围内 %d 个资产全部属于该公司（公司现有资产 %d，已快照纳入范围；可在任务范围设置中撤销）", total, compTotal)
+			if err := e.m.pg.AddCompanyScopeAuto(tid, cid, reason); err == nil {
+				log.Printf("[task %s] 自动归属公司 #%d（scope 资产 %d，公司资产 %d）", t.ID, cid, total, compTotal)
+				e.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
+					Summary: fmt.Sprintf("任务已自动归属到公司 #%d：范围内 %d 个资产全部属于该公司，其现有 %d 个资产已一并纳入测试范围；如需调整可在任务范围设置中撤销。", cid, total, compTotal)})
+				return
+			}
+		}
+		e.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
+			Summary: fmt.Sprintf("归属建议：范围内 %d 个资产全部属于公司 #%d，但该公司共有 %d 个资产（超出本任务范围较多）——如需一并测试，请在任务范围设置里手动关联该公司。", total, cid, compTotal)})
+		return
+	}
+	e.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
+		Summary: fmt.Sprintf("归属提示：任务范围内资产分属多家公司（主要公司 #%d）。如需按公司组织任务，请在任务范围设置里关联对应企业。", cid)})
+}
+
 func NewEngine(m *Manager) *Engine {
 	return &Engine{m: m, debounce: 800 * time.Millisecond, bc: NewBroadcaster(),
 		execCancel: map[string]context.CancelCauseFunc{}, execCtx: map[string]context.Context{},
@@ -801,6 +859,9 @@ func (e *Engine) Run(ctx context.Context, t *Task) {
 		if err := e.m.SetTaskStatus(t.ID, "running"); err == nil {
 			t.Status = "running"
 		}
+		// 任务归属公司（v0.4.40）：范围内资产 100% 属于同一家公司且公司资产规模同
+		// 量级时，自动写 company scope 并快照资产；否则只在活动流里给出建议。
+		e.autoAttributeCompany(t)
 	}
 	e.touch(t.ID)
 	runTaskRoutine(rt, func(loopCtx context.Context) { e.plannerLoop(loopCtx, t) })

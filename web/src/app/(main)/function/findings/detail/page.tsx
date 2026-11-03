@@ -11,6 +11,7 @@ import { toast } from "sonner";
 
 import { CopyButton } from "@/components/copy-button";
 import { FindingRetestPanel } from "@/components/finding-retest-panel";
+import { ArtifactDataViewerDialog } from "@/components/artifact-data-viewer";
 import { FindingTrafficPanel } from "@/components/finding-traffic-panel";
 import { EvidenceView } from "@/components/evidence-view";
 import { Markdown } from "@/components/markdown";
@@ -402,6 +403,8 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
   const own = all.filter(
     (a) => String(a.finding_id ?? "") === findingId && (a.kind === "image" || isDoc(a)),
   );
+  const [dataPreview, setDataPreview] = React.useState<TaskArtifact | null>(null);
+  const dataOwn = own.filter((a) => a.kind === "data" || a.kind === "log");
   const images = own.filter((a) => a.kind === "image");
   const docs = own.filter((a) => a.kind !== "image" && isDoc(a));
   // 本漏洞已归属但不是可视证据的附件（JSON/日志/HTML），空态时要说清楚，
@@ -541,16 +544,22 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
               任务级证据（目标首页、批次照片等）请到任务总览的「证据附件」查看，也可以直接从任务证据里挑选后归属到本漏洞。
             </span>
             <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="default"
-                onClick={() => {
-                  setPickSelected([]);
-                  setPickerOpen(true);
-                }}
-              >
-                从任务证据中挑选
-              </Button>
+              {dataOwn.length > 0 ? (
+                <Button size="sm" variant="default" onClick={() => setDataPreview(dataOwn[0])}>
+                  查看数据（{dataOwn.length}）
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="default"
+                  onClick={() => {
+                    setPickSelected([]);
+                    setPickerOpen(true);
+                  }}
+                >
+                  从任务证据中挑选
+                </Button>
+              )}
               <Button size="sm" variant="outline" asChild>
                 <Link href={`/function/tasks/detail?id=${taskId}&tab=overview`}>
                   查看任务总览 <ArrowUpRightIcon className="size-3.5" />
@@ -589,6 +598,29 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
             </Button>
           </CardTitle>
         </CardHeader>
+
+        {dataOwn.length > 0 && (
+          <CardContent className="flex flex-col gap-2 border-t pt-4">
+            <div className="text-muted-foreground text-xs">
+              数据证据（{dataOwn.length}）：点「查看数据」在线阅读（JSON/CSV 转表格），或下载原件。
+            </div>
+            <div className="flex flex-col divide-y rounded border">
+              {dataOwn.map((a) => (
+                <div key={a.id} className="flex min-w-0 items-center gap-2 px-3 py-2 text-sm">
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">数据</span>
+                  <span className="min-w-0 flex-1 truncate" title={a.note || a.name}>{a.name}</span>
+                  <span className="shrink-0 text-muted-foreground text-xs">{(a.size_bytes / 1024).toFixed(0)}KB</span>
+                  <Button size="sm" variant="outline" onClick={() => setDataPreview(a)}>
+                    查看数据
+                  </Button>
+                  <Button size="sm" variant="ghost" asChild>
+                    <a href={`${api.artifactUrl(taskId!, a.id)}?download=1`}>下载</a>
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        )}
         {expanded && (
           <CardContent className="flex flex-col gap-3">
             {images.length > 0 && (
@@ -749,6 +781,12 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
         </DialogContent>
       </Dialog>
       {pickerDialog}
+      <ArtifactDataViewerDialog
+        taskId={taskId!}
+        artifact={dataPreview}
+        open={!!dataPreview}
+        onClose={() => setDataPreview(null)}
+      />
     </>
   );
 }

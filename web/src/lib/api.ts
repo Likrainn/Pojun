@@ -8,6 +8,7 @@ import { MOCK } from "@/lib/mock/enabled";
 import type {
   ActiveFindingRetest,
   RetestCandidate,
+  DataPreviewPayload,
   RetestState,
   Activity,
   Agent,
@@ -766,6 +767,9 @@ export const api = {
   updateTaskArtifact: (taskId: string, artifactId: number, findingId: number) =>
     patch<{ artifact: TaskArtifact }>(`/tasks/${taskId}/artifacts/${artifactId}`, { finding_id: findingId }),
   // 文档预览（v0.4.21）：第 N 页 JPEG / 手动重新生成。
+  // 数据文件在线预览（v0.4.41）：JSON/JSONL/CSV/TSV 解析成表格行，文本返回前 200 行。
+  artifactDataPreview: (taskId: string, artifactId: number) =>
+    get<DataPreviewPayload>(`/tasks/${encodeURIComponent(taskId)}/artifacts/${artifactId}/data-preview`),
   artifactPreviewUrl: (taskId: string, artifactId: number, page: number) =>
     `/api/tasks/${taskId}/artifacts/${artifactId}/preview/${page}`,
   regenerateArtifactPreview: (taskId: string, artifactId: number) =>
