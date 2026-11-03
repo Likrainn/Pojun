@@ -27,7 +27,8 @@ jobs:
           name: web-dist
           path: web/out
 
-  # ② 五平台交叉编译（内嵌前端）+ 打 zip
+  # ② Linux 交叉编译（amd64/arm64，内嵌前端）+ 打 zip。
+  #    暂不适配 Windows/macOS：产品定位是 Linux 服务器常驻部署。
   binaries:
     needs: frontend
     runs-on: ubuntu-latest
@@ -36,9 +37,6 @@ jobs:
         include:
           - { goos: linux, goarch: amd64 }
           - { goos: linux, goarch: arm64 }
-          - { goos: darwin, goarch: amd64 }
-          - { goos: darwin, goarch: arm64 }
-          - { goos: windows, goarch: amd64 }
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6

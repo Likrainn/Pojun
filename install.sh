@@ -8,7 +8,7 @@
 #   sudo ./install.sh --mode=docker       Docker Compose：容器 + 容器内 PostgreSQL
 #   sudo ./install.sh --mode=binary --with-tools
 #
-#   curl -fsSL .../install.sh | sudo bash -s -- --mode=binary   # 管道场景必须显式给 --mode
+#   curl -fsSL .../install.sh | sudo bash    # 一条命令，交互式（模式/代理均可在 /dev/tty 里选）
 #
 # 幂等：重复执行 = 升级程序，保留数据（config.json / jwt.key / data / 数据库 / .env）。
 #
@@ -35,6 +35,11 @@ ASSUME_YES=0
 # 默认装;不想让 Web 端具备装包能力时用 --no-installer 关掉。
 WITH_INSTALLER=1
 
+# 管道执行（curl ... | sudo bash）时 stdin 是脚本本身，不能用来读输入。
+# 只要 /dev/tty 可读，就仍可交互提问（宝塔式一键安装的关键）。
+CAN_PROMPT=0
+if [ -r /dev/tty ]; then CAN_PROMPT=1; fi
+
 info(){ printf '\033[36m[*]\033[0m %s\n' "$*"; }
 ok(){   printf '\033[32m[+]\033[0m %s\n' "$*"; }
 warn(){ printf '\033[33m[!]\033[0m %s\n' "$*"; }
@@ -48,6 +53,7 @@ POJUN 安装脚本
 
 部署形态:
   --mode=binary|docker   二进制（默认，推荐）或 Docker。不给则交互选择
+                         （管道执行 curl ... | bash 时同样会从 /dev/tty 交互）
   --with-tools           顺装常用渗透工具（Docker 形态下工具随镜像固定，见说明）
 
 通用:
@@ -214,7 +220,7 @@ configure_proxy(){
 
   # 非交互场景不打扰：直连。
   [ "$ASSUME_YES" = "1" ] && return 0
-  [ ! -t 0 ] && return 0
+  [ "$CAN_PROMPT" = "0" ] && return 0
 
   printf '\n'
   printf '是否配置出网代理？\n'
@@ -223,7 +229,7 @@ configure_proxy(){
   printf '  带认证：http://user:pass@host:port ；留空 = 直连\n'
   printf '代理地址（留空直连）: '
   local ans=""
-  read -r ans || ans=""
+  read -r ans </dev/tty || ans=""
   ans="$(printf '%s' "$ans" | tr -d ' \t"'"'"'')"
   [ -z "$ans" ] && { info "使用直连"; return 0; }
 
@@ -272,11 +278,11 @@ if [ -n "$INSTALL_PROXY" ]; then
   else
     printf '\n'
     warn "代理验证失败（GitHub API 不可达）"
-    if [ "$ASSUME_YES" = "1" ] || [ ! -t 0 ]; then
+    if [ "$ASSUME_YES" = "1" ] || [ "$CAN_PROMPT" = "0" ]; then
       die "代理不可用，中止安装（用 --install-proxy= 修正，或不传该参数走直连）"
     fi
     printf '仍然使用这个代理继续？(y/N) '
-    local _ans=""; read -r _ans || _ans=""
+    local _ans=""; read -r _ans </dev/tty || _ans=""
     case "$_ans" in
       y|Y|yes|YES) : ;;
       *) die "已中止" ;;
@@ -322,7 +328,7 @@ choose_mode(){
   if [ -n "$MODE" ]; then
     case "$MODE" in binary|docker) return ;; *) die "--mode 只能是 binary 或 docker"; esac
   fi
-  if [ "$ASSUME_YES" = "1" ] || [ ! -t 0 ]; then
+  if [ "$ASSUME_YES" = "1" ] || [ "$CAN_PROMPT" = "0" ]; then
     MODE="binary"
     info "非交互模式，默认使用二进制部署（--mode 可显式指定）"
     return
@@ -332,7 +338,7 @@ choose_mode(){
   printf '  2) Docker 部署         容器编排，工具随镜像固定\n'
   printf '选择 [1]: '
   local pick=""
-  read -r -t 60 pick || true
+  read -r -t 60 pick </dev/tty || true
   case "${pick:-1}" in
     2|docker|D) MODE="docker" ;;
     *)          MODE="binary" ;;

@@ -12,7 +12,7 @@ Go 单体后端（内嵌 Next.js 前端）· PostgreSQL · 多 Agent 自主推�
 [![Release](https://img.shields.io/github/v/release/chu0119/Pojun?include_prereleases&label=release)](https://github.com/chu0119/Pojun/releases)
 [![CI](https://github.com/chu0119/Pojun/actions/workflows/ci.yml/badge.svg)](https://github.com/chu0119/Pojun/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
-![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey)
+![Platform](https://img.shields.io/badge/platform-linux-lightgrey)
 
 📦 **Docker**：`ghcr.io/chu0119/pojun` · `xingchuan1314/pojun`
 🧠 **单技能版**：[pojun-skill](https://github.com/chu0119/pojun-skill)——Pojun 方法论的单 skill 版，任意 AI Agent 即装即用
@@ -222,23 +222,40 @@ flowchart LR
 > 依赖 **PostgreSQL**；探索需配置 **LLM**（UI 里配，支持 Anthropic / OpenAI /
 > 任意 OpenAI 兼容网关，三通道轮询 + 故障转移）。
 
-### 方式一：一键部署脚本（推荐）
+### 方式一：一条命令，全自动交互安装（推荐 · 仅 Linux）
+
+在**全新 Linux 服务器**（Debian/Ubuntu/CentOS/RHEL/Kali 等）上以 root 执行：
 
 ```bash
-git clone https://github.com/chu0119/Pojun.git && cd Pojun
-sudo ./install.sh                    # 交互选择（默认二进制）
-sudo ./install.sh --mode=binary      # 二进制 + systemd（生产推荐）
-sudo ./install.sh --mode=binary --with-tools   # 顺装常用渗透工具
-sudo ./install.sh --mode=docker      # Docker Compose
+curl -fsSL https://github.com/chu0119/Pojun/releases/latest/download/install.sh | sudo bash
+```
+
+脚本会交互式问你（直接回车用默认值）：
+
+1. **部署形态**：二进制（推荐，systemd + 系统 PostgreSQL）或 Docker；
+2. **出网代理**（可选）：apt / GitHub 下载受限时填 `http://host:port`；
+3. 然后自动完成：装依赖（PostgreSQL / LibreOffice / poppler / ImageMagick / 字体等）
+   → 建运行用户与目录 → 初始化数据库 → 装 systemd 服务
+   → 首次启动 → 打印访问地址与初始账号。
+
+常用非交互姿势：
+
+```bash
+# 全默认（二进制、直连）
+curl -fsSL https://github.com/chu0119/Pojun/releases/latest/download/install.sh | sudo bash -s -- -y
+# 带代理 + 顺装常用渗透工具
+curl -fsSL .../install.sh | sudo bash -s -- --install-proxy=http://10.0.0.14:7897 --with-tools
+# Docker 形态
+curl -fsSL .../install.sh | sudo bash -s -- --mode=docker
 ```
 
 幂等：重复执行 = 原地升级；`config.json` / `jwt.key` / 数据 / 数据库不动。
 卸载：`systemctl disable --now pojun pojun-hostd && rm -rf /opt/pojun`。
 
-### 方式二：下载预编译二进制
+### 方式二：下载预编译包（Linux amd64 / arm64）
 
-到 [Releases](https://github.com/chu0119/Pojun/releases) 下载对应平台 zip
-（5 平台 + SHA256SUMS），解压后：
+到 [Releases](https://github.com/chu0119/Pojun/releases) 下载
+`pojun-<版本>-linux-<架构>.zip`（附 SHA256SUMS），解压后：
 
 ```bash
 cp config.example.json config.json   # 填好 database 连接
@@ -246,6 +263,7 @@ cp config.example.json config.json   # 填好 database 连接
 ```
 
 > 用 `start.sh` 启动而非直接跑二进制——它是守护脚本，「一键更新」靠它完成换装。
+> 目前只适配 Linux；Windows/macOS 暂不支持。
 
 ### 方式三：从源码编译
 

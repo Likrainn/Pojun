@@ -6,6 +6,25 @@
 
 > 以下 0.4.20 起为逐版详录；0.4.4–0.4.19 期间的发版见文末「0.4.4–0.4.19 发版概要」。
 
+## [0.4.36] - 2026-11-03
+
+> 发布形态收敛：只发布 Linux（amd64/arm64），README 改成「一条命令、交互式安装」。
+
+### 变更
+
+- **GitHub Release 只出 Linux 包**：release 工作流矩阵从 5 平台（linux/darwin/windows）
+  收敛为 `linux/amd64` + `linux/arm64`；`build.sh --release` 默认目标同步收敛。
+  Windows/macOS 暂不适配。
+- **README 安装章节重写**：主推一条命令
+  `curl -fsSL https://github.com/chu0119/Pojun/releases/latest/download/install.sh | sudo bash`
+  ——交互式选择部署形态（二进制/Docker）与可选出网代理，自动装依赖（PostgreSQL/
+  LibreOffice/poppler/ImageMagick/字体）、建用户目录、初始化数据库、装 systemd 服务并
+  启动；另列 `-y`/`--install-proxy`/`--mode=docker` 非交互姿势。预编译包说明改为
+  Linux amd64/arm64。
+- **install.sh 支持管道执行下的交互**：`curl | sudo bash` 时 stdin 是脚本本身，原先
+  会退化为非交互；现统一从 `/dev/tty` 读取模式/代理/确认输入（无 tty 环境自动回落
+  默认值），宝塔式「一条命令跑完」体验成立。
+
 ## [0.4.35] - 2026-11-03
 
 > 借鉴 sapper-v2（腾讯智能攻防赛冠军，MIT）的三项机制：时间军规、同族迁移、

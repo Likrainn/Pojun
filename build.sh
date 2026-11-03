@@ -35,18 +35,18 @@ usage() {
   ./build.sh --release               编译并打包全部支持的目标
 
 选项：
-  --release              构建 Linux、macOS、Windows 的 amd64/arm64 目标并生成 zip
-  --target OS/ARCH       设置单个目标，例如 windows/amd64
+  --release              构建 Linux amd64/arm64 发布包并生成 zip（其他平台暂不发布）
+  --target OS/ARCH       设置单个目标，例如 linux/arm64（其他平台仅供本地调试）
   --upx                  强制使用 UPX 压缩二进制（可能影响部分 Linux 环境兼容性）
   --no-compress          不使用 UPX，仅使用 Go linker 裁剪并压缩 zip
   --help                 显示帮助
 
 多目标列表可通过 POJUN_TARGETS 覆盖，例如：
-  POJUN_TARGETS=linux/amd64,windows/amd64 ./build.sh --release
+  POJUN_TARGETS=linux/amd64 ./build.sh --release
 EOF
 }
 
-RELEASE_TARGETS_DEFAULT="linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64"
+RELEASE_TARGETS_DEFAULT="linux/amd64,linux/arm64"
 POJUN_RELEASE="${POJUN_RELEASE:-0}"
 POJUN_COMPRESS="${POJUN_COMPRESS:-off}"
 POJUN_PACKAGE="${POJUN_PACKAGE:-0}"
