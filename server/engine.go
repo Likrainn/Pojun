@@ -551,7 +551,7 @@ func (e *Engine) drainSteer(intentID int64) (string, bool) {
 // before each tool call it drains a queued course-correction (if any) and blocks the
 // call, handing the message back to the model — which re-plans its next step instead
 // of running the tool. No queued message → the guard behaves exactly as before.
-// 它同时负责「空转回合」的续跑，见 Stop。
+// 它同时负责「空转回合」的续跑（Stop）与「重复调用」拦截（PreToolUse，v0.4.28）。
 type steerHooks struct {
 	inner harness.HookRunner
 	drain func() (string, bool)
@@ -563,6 +563,9 @@ type steerHooks struct {
 	limit int
 	// label 形如 "worker-1 · #42"，只用于日志。
 	label string
+	// repeats 是重复调用检测器（v0.4.28，PentAGI 机制自研）：同名工具+完全相同入参
+	// 连续 ≥3 次即拦截回喂纠正提示；同一串最多拦 2 次后放行兜底。nil = 不介入。
+	repeats *repeatTracker
 }
 
 // 空转回合(只有思考、既无正文也无工具调用)续跑次数的默认值，与 SDK 空响应重试的
@@ -600,6 +603,14 @@ func isThinkingOnlyTurn(messages []llm.Message) bool {
 }
 
 func (h steerHooks) PreToolUse(ctx context.Context, name string, input []byte) (bool, string, []byte) {
+	// 重复调用检测（v0.4.28）：拦截优先级低于 steer 纠偏——先让排队的人类/规划者
+	// 指令说话，再查重复。
+	if h.repeats != nil {
+		if streak, block := h.repeats.observe(name, input); block {
+			log.Printf("[work %s] 重复调用拦截：%s 连续第 %d 次完全相同入参", h.label, name, streak)
+			return true, repeatBlockText(streak), nil
+		}
+	}
 	if msg, ok := h.drain(); ok {
 		return true, "【规划者实时纠偏】" + msg +
 			"\n（这是规划者对本意图的即时指令；本次工具调用未执行，请据此调整下一步。若与你当前打算冲突，以此为准。）", nil
@@ -1167,14 +1178,26 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	}
 	label := fmt.Sprintf("%s · #%d", name, iid)
 	workCtx = intercept.WithTaskContext(workCtx, t.ID, label, taskEmit)
+	// 意图级软预算（v0.4.28）：usage 活动的累计 token 到顶 → steer 注入收尾提醒（软的，
+	// 不杀进程，一次为准）；重复调用检测器挂进 steerHooks。两者都可经 settings 关闭/调整。
+	if bw := intentBudgetWatcher(intentBudgetFromPG(e.m.pg), func(msg string) error {
+		return e.SteerWork(iid, msg)
+	}, label); bw != nil {
+		inner := emit
+		emit = func(a db.Activity) {
+			bw(a)
+			inner(a)
+		}
+	}
 	// nudges 有意建在 model_error 重跑循环之外:空转续跑的上限是「这条意图」的总量，
 	// 重跑一轮不该把额度清零重来。
 	hooks := steerHooks{
-		inner:  t.Guard.Hooks(),
-		drain:  func() (string, bool) { return e.drainSteer(iid) },
-		nudges: &atomic.Int64{},
-		limit:  e.emptyTurnNudgeLimit(),
-		label:  label,
+		inner:   t.Guard.Hooks(),
+		drain:   func() (string, bool) { return e.drainSteer(iid) },
+		nudges:  &atomic.Int64{},
+		limit:   e.emptyTurnNudgeLimit(),
+		label:   label,
+		repeats: newRepeatTracker(),
 	}
 	wTaskID, _ := strconv.ParseInt(t.ID, 10, 64)
 	runStart := time.Now() // 意图墙钟起点（跨 model_error 重试累计），结算时落 payload

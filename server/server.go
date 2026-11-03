@@ -3433,6 +3433,7 @@ func (s *Server) settingsPayload() map[string]any {
 		concLimit = defaultConcurrencyLimit // 关闭时也回显一个合理默认值给 UI
 	}
 	af := autoFinishConfigFromPG(s.m.pg)
+	ib := intentBudgetFromPG(s.m.pg)
 	return map[string]any{
 		"traffic_capture":       s.m.TrafficEnabled(),
 		"agent_traffic_binding": s.m.pg.GetBool(settingAgentTrafficBinding, false),
@@ -3461,6 +3462,9 @@ func (s *Server) settingsPayload() map[string]any {
 		"auto_finish_min_rounds":   af.MinRounds,
 		"auto_finish_coverage_pct": af.CoveragePct,
 		"auto_finish_max_rounds":   af.MaxRounds,
+		// 意图级软预算（v0.4.28）：单意图 token 到顶注入收尾提醒（不杀进程）。
+		"intent_budget_enabled": ib.Enabled,
+		"intent_budget_tokens":  ib.Tokens,
 		// LLM 轮询(故障转移)。默认关；开启后走全局激活配置的 agent 在当前配置不可用时
 		// 自动切到下一个配置。bind_fallback 仅在轮询开启时有意义(默认关)。
 		"llm_pool_enabled":       s.m.LLMPoolEnabled(),
@@ -3553,6 +3557,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		AutoFinishMinRounds  *int  `json:"auto_finish_min_rounds"`
 		AutoFinishCoverage   *int  `json:"auto_finish_coverage_pct"`
 		AutoFinishMaxRounds  *int  `json:"auto_finish_max_rounds"`
+		// 意图级软预算（v0.4.28）：单意图 token 上限，500k–20M。
+		IntentBudgetEnabled *bool `json:"intent_budget_enabled"`
+		IntentBudgetTokens  *int  `json:"intent_budget_tokens"`
 		// LLM 轮询(故障转移)开关 + 「绑定配置失败也兜底回轮询链」开关。两者都需要
 		// 重建 provider 链才生效，走下面的 changed → applyLLM 路径。
 		LLMPoolEnabled      *bool `json:"llm_pool_enabled"`
@@ -3735,6 +3742,22 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.m.pg.SetSetting(settingAutoFinishMaxRounds, strconv.Itoa(*req.AutoFinishMaxRounds)); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.IntentBudgetEnabled != nil {
+		if err := s.m.pg.SetBool(settingIntentBudgetEnabled, *req.IntentBudgetEnabled); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.IntentBudgetTokens != nil {
+		if *req.IntentBudgetTokens < 500_000 || *req.IntentBudgetTokens > 20_000_000 {
+			writeErr(w, 400, "intent_budget_tokens 必须在 500000–20000000 之间")
+			return
+		}
+		if err := s.m.pg.SetSetting(settingIntentBudgetTokens, strconv.Itoa(*req.IntentBudgetTokens)); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}

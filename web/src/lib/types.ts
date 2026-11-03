@@ -1042,6 +1042,9 @@ export interface Settings {
   auto_finish_min_rounds?: number; // 默认 5，范围 1–50
   auto_finish_coverage_pct?: number; // 默认 0=关闭，1–100
   auto_finish_max_rounds?: number; // 默认 80，0=不限
+  // 意图级软预算（v0.4.28）：单意图累计 token 到顶注入收尾提醒（不杀进程）。
+  intent_budget_enabled?: boolean; // 默认 true
+  intent_budget_tokens?: number; // 默认 3000000，范围 500000–20000000
   // LLM 轮询(故障转移)。默认关；开启后「未指定模型」的 agent 在当前配置不可用
   // （余额不足/key 失效/限流/服务异常）时自动切到下一个配置。
   llm_pool_enabled?: boolean; // 默认 false

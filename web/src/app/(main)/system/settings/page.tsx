@@ -2,7 +2,7 @@
 
 import * as React from "react";
 
-import { CpuIcon, FlaskConicalIcon, KeyboardIcon, RadioTowerIcon, SearchIcon, ShieldAlertIcon, TimerResetIcon } from "lucide-react";
+import { CpuIcon, FlaskConicalIcon, GaugeIcon, KeyboardIcon, RadioTowerIcon, SearchIcon, ShieldAlertIcon, TimerResetIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -45,6 +45,9 @@ export default function SystemSettingsPage() {
   const [autoFinishMin, setAutoFinishMin] = React.useState("5");
   const [autoFinishCoverage, setAutoFinishCoverage] = React.useState("0");
   const [autoFinishMax, setAutoFinishMax] = React.useState("80");
+  const [intentBudgetEnabled, setIntentBudgetEnabled] = React.useState(true);
+  const [intentBudgetTokens, setIntentBudgetTokens] = React.useState("3000000");
+  const [savingIntentBudget, setSavingIntentBudget] = React.useState(false);
   const [savingAutoFinish, setSavingAutoFinish] = React.useState(false);
   // 冷节点压缩的输出预算与墙钟上限。0=用默认值(65536 token / 20 分钟)。
   const [compactionTokens, setCompactionTokens] = React.useState("0");
@@ -86,6 +89,8 @@ export default function SystemSettingsPage() {
     setAutoFinishMin(String(s.auto_finish_min_rounds ?? 5));
     setAutoFinishCoverage(String(s.auto_finish_coverage_pct ?? 0));
     setAutoFinishMax(String(s.auto_finish_max_rounds ?? 80));
+    setIntentBudgetEnabled(s.intent_budget_enabled !== false);
+    setIntentBudgetTokens(String(s.intent_budget_tokens ?? 3000000));
   }, []);
 
   const saveWorkers = () => {
@@ -141,6 +146,23 @@ export default function SystemSettingsPage() {
       })
       .catch((e) => toast.error(`保存失败：${(e as Error).message}`))
       .finally(() => setSavingAutoFinish(false));
+  };
+
+  const saveIntentBudget = () => {
+    const tokens = Number(intentBudgetTokens);
+    if (!Number.isInteger(tokens) || tokens < 500000 || tokens > 20000000) {
+      toast.error("意图 token 预算必须在 500000–20000000 之间");
+      return;
+    }
+    setSavingIntentBudget(true);
+    api
+      .setSettings({ intent_budget_enabled: intentBudgetEnabled, intent_budget_tokens: tokens })
+      .then((s) => {
+        apply(s);
+        toast.success("已保存意图预算（对之后启动的意图生效）");
+      })
+      .catch((e) => toast.error(`保存失败：${(e as Error).message}`))
+      .finally(() => setSavingIntentBudget(false));
   };
 
   const saveCompaction = () => {
@@ -872,6 +894,54 @@ export default function SystemSettingsPage() {
             <div>
               <Button onClick={saveAutoFinish} disabled={!loaded || savingAutoFinish}>
                 {savingAutoFinish ? "保存中…" : "保存"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="mb-4 break-inside-avoid md:mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <GaugeIcon className="size-4" />
+              意图级软预算与重复调用拦截
+            </CardTitle>
+            <CardDescription>
+              单条意图累计 token 到预算后，系统向运行中的 worker 注入一条<b>收尾提醒</b>：
+              停止扩大探索、把已有结论写回后结束（软提醒，不杀进程；任务超时与自动收尾仍是最终兜底）。
+              默认 300 万——任务 5 实测单意图均值 ≈300 万，超出的意图通常是空转。
+              <br />
+              重复调用拦截随此开关联动：同一工具+完全相同入参连续 3 次会被拦下并回喂纠正提示
+              （同一串最多拦 2 次，之后放行兜底，不会卡死）。修改后<b>对之后启动的意图生效</b>。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <div className="flex items-center justify-between gap-4 rounded-lg border px-3 py-2">
+              <div className="flex flex-col">
+                <span className="text-sm font-medium">启用意图预算提醒</span>
+                <span className="text-muted-foreground text-xs">关闭后不注入提醒，也不做重复调用拦截</span>
+              </div>
+              <Switch
+                checked={intentBudgetEnabled}
+                disabled={!loaded || savingIntentBudget}
+                onCheckedChange={setIntentBudgetEnabled}
+              />
+            </div>
+            <label className="flex flex-col gap-1 text-sm">
+              <span>单意图 token 预算（500000–20000000）</span>
+              <Input
+                type="number"
+                min={500000}
+                max={20000000}
+                step={100000}
+                className="w-48 font-mono text-sm"
+                value={intentBudgetTokens}
+                disabled={!loaded || savingIntentBudget}
+                onChange={(e) => setIntentBudgetTokens(e.target.value)}
+              />
+            </label>
+            <div>
+              <Button onClick={saveIntentBudget} disabled={!loaded || savingIntentBudget}>
+                {savingIntentBudget ? "保存中…" : "保存"}
               </Button>
             </div>
           </CardContent>

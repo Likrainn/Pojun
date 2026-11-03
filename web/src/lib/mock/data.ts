@@ -3357,6 +3357,8 @@ export const settings: Settings = {
   auto_finish_min_rounds: 5,
   auto_finish_coverage_pct: 0,
   auto_finish_max_rounds: 80,
+  intent_budget_enabled: true,
+  intent_budget_tokens: 3000000,
 };
 
 // ── LLM 轮询（故障转移）──────────────────────────────────────────────────────
