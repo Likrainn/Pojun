@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"archive/zip"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2326,6 +2327,60 @@ func (s *Server) findingsExport(w http.ResponseWriter, r *http.Request) {
 		defer file.Close()
 		setDownload("application/zip", "findings-"+stamp+".zip")
 		http.ServeContent(w, r, "findings.zip", now, file)
+	case "docx-zip":
+		// 批量 Word 导出（v0.4.48）：每条漏洞生成独立 .docx 并打包 zip。
+		for _, f := range fs {
+			fCopy := *f
+			names := s.reportAssetNames([]*db.DBFinding{&fCopy})
+			retests, _ := s.m.pg.ListFindingRetests(fCopy.ID)
+			customer := ""
+			classification := "内部资料 · 仅限授权方"
+			if fCopy.TaskID != nil && *fCopy.TaskID > 0 {
+				if tt := s.m.ResolveTask(strconv.FormatInt(*fCopy.TaskID, 10)); tt != nil {
+					customer = s.taskCustomerNames(tt)
+				}
+			}
+			doc := report.BuildFindingDocx(report.FindingDocxInput{
+				Finding:        &fCopy,
+				GeneratedAt:    now,
+				AssetNameMap:   names,
+				Retests:        retests,
+				Customer:       customer,
+				Classification: classification,
+				ArtifactImage: func() func(int64) ([]byte, string, bool) {
+					if fCopy.TaskID == nil || *fCopy.TaskID <= 0 {
+						return nil
+					}
+					return s.artifactImageResolver(strconv.FormatInt(*fCopy.TaskID, 10), fCopy.ID)
+				}(),
+			})
+			fname := fmt.Sprintf("pojun-finding-%d-%s.docx", fCopy.ID, now.Format("20060102"))
+			docFile := filepath.Join(stage, fname)
+			file, err := os.Create(docFile)
+			if err != nil {
+				writeErr(w, 500, err.Error())
+				return
+			}
+			if err = doc.Encode(file); err != nil {
+				file.Close()
+				writeErr(w, 500, err.Error())
+				return
+			}
+			file.Close()
+		}
+		zipPath := filepath.Join(stage, "findings-word-"+stamp+".zip")
+		if err := zipDocxFiles(stage, zipPath); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		file, err := os.Open(zipPath)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		defer file.Close()
+		setDownload("application/zip", "findings-word-"+stamp+".zip")
+		http.ServeContent(w, r, "findings-word-"+stamp+".zip", now, file)
 	case "csv":
 		setDownload("text/csv; charset=utf-8", "findings-"+stamp+".csv")
 		_, _ = w.Write(report.FindingsCSV(fs))
@@ -4248,4 +4303,34 @@ func atoiDefault(s string, d int) int {
 		return n
 	}
 	return d
+}
+
+// zipDocxFiles 打包 stage 目录下的 .docx 文件为 zip（v0.4.48 批量 Word 导出）。
+func zipDocxFiles(stage, zipPath string) error {
+	zipFile, err := os.Create(zipPath)
+	if err != nil {
+		return err
+	}
+	defer zipFile.Close()
+	zw := zip.NewWriter(zipFile)
+	defer zw.Close()
+	entries, err := os.ReadDir(stage)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".docx") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(stage, e.Name()))
+		if err != nil {
+			continue
+		}
+		f, err := zw.Create(e.Name())
+		if err != nil {
+			continue
+		}
+		_, _ = f.Write(data)
+	}
+	return nil
 }

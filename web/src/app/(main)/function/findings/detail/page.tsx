@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { CopyButton } from "@/components/copy-button";
 import { FindingRetestPanel } from "@/components/finding-retest-panel";
 import { ArtifactDataViewerDialog } from "@/components/artifact-data-viewer";
+import { ZoomableImageDialog } from "@/components/zoomable-image-dialog";
 import { FindingTrafficPanel } from "@/components/finding-traffic-panel";
 import { EvidenceView } from "@/components/evidence-view";
 import { Markdown } from "@/components/markdown";
@@ -702,34 +703,14 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
           </CardContent>
         )}
       </Card>
-      <Dialog
+      <ZoomableImageDialog
         open={!!preview}
-        onOpenChange={(o) => {
-          if (!o) setPreview(null);
-        }}
-      >
-        <DialogContent className="max-w-5xl">
-          <DialogHeader>
-            <DialogTitle className="break-all text-base">{preview?.note || preview?.name}</DialogTitle>
-          </DialogHeader>
-          {preview && (
-            <>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={fullUrl(preview.id)}
-                alt={preview.note || preview.name}
-                className="mx-auto max-h-[68vh] w-auto max-w-full rounded object-contain"
-              />
-              <div className="flex flex-wrap items-center justify-between gap-2 text-muted-foreground text-xs">
-                <span className="break-all">{preview.name}</span>
-                <Button size="sm" variant="outline" asChild>
-                  <a href={`${fullUrl(preview.id)}?download=1`}>下载原件</a>
-                </Button>
-              </div>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+        onClose={() => setPreview(null)}
+        src={preview ? fullUrl(preview.id) : ""}
+        title={preview?.note || preview?.name || ""}
+        description={preview ? `${preview.name} · ${(preview.size_bytes / 1024).toFixed(0)}KB` : ""}
+        downloadUrl={preview ? `${fullUrl(preview.id)}?download=1` : ""}
+      />
       <Dialog
         open={!!docPreview}
         onOpenChange={(o) => {
