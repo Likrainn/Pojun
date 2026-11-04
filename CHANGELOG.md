@@ -33,6 +33,20 @@
   同一意图是天然的 provenance 边界——不会误绑其他意图的证据。
   返回值 evidence_note 告知模型自动归属了几条。
 
+## [0.4.50] - 2026-11-05
+
+> 红队工作流差距审计——从渗透测试工程师视角逐环节检查平台功能覆盖，
+> 补齐 worker 工具权限 + 充实红队后渗透 skill。
+
+### 新增 / 优化
+
+- **Worker 工具权限扩展**：新增 `expand_digest`（展开冷区折叠节点完整内容）、
+  `list_untested_assets`（自行补漏未测资产）、`list_goals`（感知目标完成进度）
+  ——worker 不再只被动执行，有了自主判断方向完成的工具面。
+- **redteam-ops skill 大幅充实**：从 106 行扩展到 ~100 行结构化方法论——
+  Linux/Windows 提权清单、横向移动（pth/隧道/凭据喷射）、Windows 域专项
+  （Kerberoasting/DCSync/BloodHound）、数据获取纪律、证据绑定。
+
 ## [0.4.49] - 2026-11-04
 
 > 全流程审计修复批次：拦截规则误伤清理（322 条审批积压根因）+ worker 提示词
