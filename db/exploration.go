@@ -2205,3 +2205,20 @@ func (s *ExplorationStore) StallOverview() (rounds, recentNew, openCnt int, err 
 		WHERE exploration_id=$1 AND kind='intent' AND state='open'`, s.expID).Scan(&openCnt)
 	return
 }
+
+// RetroBindIntentEvidence 把意图运行目录下全部未归属证据一次性绑定到漏洞。
+// 触发时机：report_finding 落库后——worker 先 save_evidence、后 report_finding，
+// 同一意图目录（/i<intentID>/）下 finding_id 为空的证据天然属于这个漏洞。
+func (s *ExplorationStore) RetroBindIntentEvidence(taskID, intentID, findingID int64) (int, error) {
+	pattern := "%/i" + strconv.FormatInt(intentID, 10) + "/%"
+	res, err := s.db.Exec(`
+UPDATE task_artifacts
+SET finding_id=$3
+WHERE task_id=$1 AND finding_id IS NULL AND storage_path LIKE $2`,
+		taskID, pattern, findingID)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}

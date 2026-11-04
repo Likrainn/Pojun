@@ -1,6 +1,7 @@
 package db
 
 import (
+	"strconv"
 	"context"
 	"time"
 )
@@ -193,4 +194,23 @@ func (d *DB) ListArtifactTaskIDs() ([]string, error) {
 		out = append(out, id)
 	}
 	return out, rows.Err()
+}
+
+// RetroBindIntentEvidence 把指定意图运行目录下的全部未归属证据一次性绑定到漏洞。
+// 触发时机：report_finding 落库后——worker 在意图执行中先存证据、后报漏洞，
+// 此时所有该意图下已保存但 finding_id 为空的证据都属于这个漏洞。
+// 返回实际绑定的数量。调用方（report_finding）不需要额外确认——同意图目录是
+// 天然的 provenance 边界，不会误绑其他意图的证据。
+func (d *DB) RetroBindIntentEvidence(taskID string, intentID int64, findingID int64) (int, error) {
+	pattern := "%/i" + strconv.FormatInt(intentID, 10) + "/%"
+	res, err := d.Exec(`
+UPDATE task_artifacts
+SET finding_id=$3
+WHERE task_id=$1 AND finding_id IS NULL AND storage_path LIKE $2`,
+		taskID, pattern, findingID)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }

@@ -1681,6 +1681,12 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			result.EvidenceNote += " ⚠ 以下流量引用未生效（ID 不存在或正文不可读）：" + strings.Join(ids, ", ") +
 				"。已生效的引用已正常绑定；若这些 ID 确实存在，请用 traffic_get 核实真实 ID 后用 bind_finding_traffic 补绑。"
 		}
+		// 回溯归属（v0.4.47）：同一意图目录下所有 finding_id 为空的证据一次性归属。
+		if bindIntent := pid(a.IntentID); bindIntent > 0 && t.taskID > 0 {
+			if n, err := t.ts.RetroBindIntentEvidence(t.taskID, bindIntent, recorded.FindingID); err == nil && n > 0 {
+				result.EvidenceNote += fmt.Sprintf(" ✨ 自动归属了本意图的 %d 条历史证据。", n)
+			}
+		}
 		raw, _ := json.Marshal(result)
 		return actool.Text(fmt.Sprintf("finding recorded: %d\n%s", recorded.NodeID, raw)), nil
 	})
