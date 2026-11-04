@@ -1814,7 +1814,15 @@ func (s *Server) seed(t *Task, text string) {
 // origin fact (RelDerivedFrom) so it still traces back to a fact node. Best-effort —
 // a failure just falls back to the normal planner-driven flow.
 func (s *Server) seedFirstIntent(t *Task) {
-	summary := fmt.Sprintf("完成任务目标：%s（任务：%s）", t.Goal, t.Description)
+	// v0.4.46：种子意图只适用于简单任务——描述+目标合计 ≤200 字符时才下发。
+	// 复杂任务（如渗透测试全流程描述动辄上千字）让 planner 拆解成 3-5 条具体
+	// 意图，不生成「做整个任务」的种子——否则 worker 收到等于收到整个任务。
+	combined := strings.TrimSpace(t.Goal + " " + t.Description)
+	if len([]rune(combined)) > 200 {
+		log.Printf("[seed] task %s: 描述+目标合计 %d 字符超过 200，跳过种子意图（由 planner 拆解）", t.ID, len([]rune(combined)))
+		return
+	}
+	summary := fmt.Sprintf("完成任务目标：%s", t.Goal)
 	id, err := t.Store.AddIntent(map[string]any{"summary": summary}, 8, nil, "seed")
 	if err != nil {
 		log.Printf("[seed] task %s: 下发种子意图失败: %v", t.ID, err)
@@ -1823,7 +1831,7 @@ func (s *Server) seedFirstIntent(t *Task) {
 	if origin, _ := t.Store.OriginFactID(); origin > 0 {
 		_ = t.Store.Link(origin, db.RelDerivedFrom, id)
 	}
-	log.Printf("[seed] task %s: 已下发种子意图 #%d", t.ID, id)
+	log.Printf("[seed] task %s: 已下发种子意图 #%d（短任务）", t.ID, id)
 }
 
 func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
