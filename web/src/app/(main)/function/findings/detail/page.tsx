@@ -711,56 +711,41 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
         description={preview ? `${preview.name} · ${(preview.size_bytes / 1024).toFixed(0)}KB` : ""}
         downloadUrl={preview ? `${fullUrl(preview.id)}?download=1` : ""}
       />
-      <Dialog
+      {/* v0.4.53：文档分页预览接入缩放组件（与任务总览一致），翻页自动重置缩放。 */}
+      <ZoomableImageDialog
         open={!!docPreview}
-        onOpenChange={(o) => {
-          if (!o) setDocPreview(null);
-        }}
-      >
-        <DialogContent className="max-w-6xl">
-          <DialogHeader>
-            <DialogTitle className="break-all text-base">
-              {docPreview?.artifact.note || docPreview?.artifact.name}
-            </DialogTitle>
-          </DialogHeader>
-          {docPreview && (
-            <>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={previewUrl(docPreview.artifact.id, docPreview.page)}
-                alt={`${docPreview.artifact.name} 第 ${docPreview.page} 页`}
-                className="mx-auto max-h-[70vh] w-auto max-w-full rounded border object-contain"
-              />
-              <div className="flex flex-wrap items-center justify-between gap-2 text-muted-foreground text-xs">
-                <span className="break-all">
-                  {docPreview.artifact.name} · 第 {docPreview.page} / {docPreview.artifact.preview_pages ?? 0} 页
-                </span>
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={docPreview.page <= 1}
-                    onClick={() => setDocPreview((cur) => (cur ? { ...cur, page: cur.page - 1 } : cur))}
-                  >
-                    <ChevronLeftIcon className="size-3.5" /> 上一页
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={docPreview.page >= (docPreview.artifact.preview_pages ?? 1)}
-                    onClick={() => setDocPreview((cur) => (cur ? { ...cur, page: cur.page + 1 } : cur))}
-                  >
-                    下一页 <ChevronRightIcon className="size-3.5" />
-                  </Button>
-                  <Button size="sm" variant="outline" asChild>
-                    <a href={downloadUrl(docPreview.artifact.id)}>下载原件</a>
-                  </Button>
-                </div>
-              </div>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+        onClose={() => setDocPreview(null)}
+        src={docPreview ? previewUrl(docPreview.artifact.id, docPreview.page) : ""}
+        title={docPreview?.artifact.note || docPreview?.artifact.name || ""}
+        description={
+          docPreview
+            ? `${docPreview.artifact.name} · 第 ${docPreview.page} / ${docPreview.artifact.preview_pages ?? 0} 页`
+            : ""
+        }
+        downloadUrl={docPreview ? downloadUrl(docPreview.artifact.id) : ""}
+        footer={
+          docPreview ? (
+            <div className="flex items-center justify-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={docPreview.page <= 1}
+                onClick={() => setDocPreview((cur) => (cur ? { ...cur, page: cur.page - 1 } : cur))}
+              >
+                <ChevronLeftIcon className="size-3.5" /> 上一页
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={docPreview.page >= (docPreview.artifact.preview_pages ?? 1)}
+                onClick={() => setDocPreview((cur) => (cur ? { ...cur, page: cur.page + 1 } : cur))}
+              >
+                下一页 <ChevronRightIcon className="size-3.5" />
+              </Button>
+            </div>
+          ) : null
+        }
+      />
       {pickerDialog}
       <ArtifactDataViewerDialog
         taskId={taskId!}

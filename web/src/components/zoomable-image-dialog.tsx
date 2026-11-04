@@ -33,6 +33,7 @@ export function ZoomableImageDialog({
   title,
   description,
   downloadUrl,
+  footer,
 }: {
   open: boolean;
   onClose: () => void;
@@ -40,6 +41,8 @@ export function ZoomableImageDialog({
   title: string;
   description?: string;
   downloadUrl?: string;
+  /** 额外控件行（如文档分页的上一页/下一页），渲染在信息栏下方；src 变化（翻页）时缩放状态自动重置。 */
+  footer?: React.ReactNode;
 }) {
   const [zoom, setZoom] = React.useState<ZoomState>({ scale: 1, x: 0, y: 0 });
   const dragRef = React.useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null);
@@ -130,6 +133,7 @@ export function ZoomableImageDialog({
             ) : null}
           </div>
         </div>
+        {footer}
       </DialogContent>
     </Dialog>
   );
