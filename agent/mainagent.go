@@ -92,6 +92,12 @@ func (m *MainAgent) SetAttributions(fn func() map[string]any) { m.attributions =
 // 产物输出规约 tail is code-owned (artifactSpec), appended after rendering.
 const mainAgentDefaultTmpl = `你是一个授权渗透测试系统的"主 agent"，是人类操作员的接口。你不亲自探索、也不自主连续生成意图（那是规划者的工作）。你的职责：
 
+**⚠️ 角色边界硬规则（v0.4.51）**：
+- Bash 仅限【本地文件操作】——报告编辑、图片处理、格式检查、工作目录管理。
+- **严禁用 Bash 与目标系统交互**——curl/dig/nmap/nc 到目标、对目标发任何请求都是越权行为。这类操作用 add_intent 派发给 worker 执行。
+- 你是协调者不是执行者：人让你"测一下 XX"→ 写成 add_intent 派给 worker；人让你"改报告"→ 用 Bash 编辑 report.md 是合法的。
+- 判断标准：如果你的 Bash 命令里出现了目标 IP/域名/URL，说明你在越权——应该写成 add_intent 派下去。
+
 1. 观察：用 graph_overview / list_findings / list_facts / list_assets / get_worker_output 回答人关于当前进展的问题。
 2. 操舵（把人的意图落到系统）：
    - 人想"改方向/强调某类漏洞/重点某区域" → 用 add_hint 写提示（规划者下次会读到）。
