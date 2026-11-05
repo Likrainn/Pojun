@@ -15,6 +15,17 @@ info(){ printf '\033[36m[*]\033[0m %s\n' "$*"; }
 ok(){   printf '\033[32m[+]\033[0m %s\n' "$*"; }
 warn(){ printf '\033[33m[!]\033[0m %s\n' "$*"; }
 
+# fetch：下载重试——GitHub release blob 当天抖动是常态（2026-11-05 实测
+# CI 上同 URL 一轮全通、下一轮全断），三轮间隔 8s 能跨过大多数抖动窗口。
+fetch(){
+  local url="$1" out="$2" i
+  for i in 1 2 3; do
+    curl -fsSL --retry 2 --connect-timeout 15 --max-time 300 "$url" -o "$out" && return 0
+    sleep 8
+  done
+  return 1
+}
+
 arch="$(dpkg --print-architecture)"
 case "$arch" in
   amd64) pa="amd64"  p2="x86_64"  p3="x86" p4="x64" ;;
@@ -69,7 +80,7 @@ for spec in $specs; do
   asset="${asset//\{arch3\}/$p3}"; asset="${asset//\{arch4\}/$p4}"
   url="https://github.com/$repo/releases/download/${tag}/${asset}"
   file="$tmpd/$(basename "$asset")"
-  if ! curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 "$url" -o "$file"; then warn "  $bin 下载失败，跳过"; continue; fi
+  if ! fetch "$url" "$file"; then warn "  $bin 下载失败，跳过"; continue; fi
   xdir="$tmpd/x"; rm -rf "$xdir"; mkdir -p "$xdir"
   case "$asset" in
     *.zip) unzip -oq "$file" -d "$xdir" 2>/dev/null || true ;;
@@ -106,9 +117,14 @@ done
 # 必须从 GitHub 源码装：PyPI wheel 只带库+少数示例，且 0.12 起不注册命令；
 # 源码 setup.py 会把 examples 全部注册成 impacket-smbexec/wmiexec/getST 等
 # 命令——渗透作业按这些命令名调用。源码装失败再退 wheel+wrapper 兜底。
-if python3 -m pip install --no-cache-dir --root-user-action=ignore \
-     "impacket @ git+https://github.com/fortra/impacket" >/dev/null 2>&1 \
-     && command -v impacket-smbexec >/dev/null 2>&1; then
+imp_ok=0
+for i in 1 2 3; do
+  python3 -m pip install --no-cache-dir --root-user-action=ignore \
+       "impacket @ git+https://github.com/fortra/impacket" >/dev/null 2>&1 \
+    && command -v impacket-smbexec >/dev/null 2>&1 && { imp_ok=1; break; }
+  sleep 8
+done
+if [ "$imp_ok" = "1" ]; then
   ok "  impacket（源码，含全套示例命令）"
 else
   warn "  impacket 源码安装失败，退 PyPI wheel + wrapper"
@@ -128,8 +144,14 @@ fi
 # 引用的都是这个目录。浅克隆 + 去掉 .git 减体积。
 if [ ! -d /opt/SecLists/Discovery ]; then
   info "克隆 SecLists 字典集（浅克隆）..."
-  git clone --depth 1 https://github.com/danielmiessler/SecLists.git /opt/SecLists >/dev/null 2>&1 \
-    && rm -rf /opt/SecLists/.git && ok "  SecLists → /opt/SecLists" \
+  sec_ok=0
+  for i in 1 2 3; do
+    git clone --depth 1 https://github.com/danielmiessler/SecLists.git /opt/SecLists >/dev/null 2>&1 \
+      && { sec_ok=1; break; }
+    rm -rf /opt/SecLists; sleep 8
+  done
+  [ "$sec_ok" = "1" ] \
+    && { rm -rf /opt/SecLists/.git; ok "  SecLists → /opt/SecLists"; } \
     || warn "  SecLists 克隆失败（构建机网络问题；运行时可按 hosttools 目录条目手动克隆）"
 fi
 
