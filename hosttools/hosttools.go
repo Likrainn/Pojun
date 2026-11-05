@@ -186,10 +186,13 @@ var catalog = []Tool{
 		Repo: "projectdiscovery/tlsx", AssetTmpl: "tlsx_{ver}_linux_{arch}.zip"},
 
 	{Name: "wafw00f", Purpose: "WAF 识别", Kind: KindPip, Category: CatWeb, Pip: "wafw00f"},
-	// impacket 是 SMB/NTLM/票据的 Python 库(提供 msmfmap、ntlmrelay、secretsdump
-	// 等脚本)。apt 源里的包名是 python3-impacket,Debian/Ubuntu 都有。
-	{Name: "impacket", Purpose: "SMB/NTLM 协议工具集(secretsdump/ntlmrelay 等)", Kind: KindApt, Category: CatCred,
-		Apt: "python3-impacket", Dnf: "python3-impacket"},
+	// impacket：SMB/NTLM/票据工具集(smbexec/wmiexec/secretsdump 等)。
+	// 注意(2026-11 实测):apt 的 python3-impacket 只有 Kali 带 examples 命令,
+	// Debian 只有库;PyPI 的 wheel/sdist 无论 0.11 还是 0.12+ 都不注册命令。
+	// 所以体检以 impacket-smbexec 命令为准;缺失时按下方 Install 配方从已装
+	// 包的 examples 目录生成包装器(Docker 镜像构建期已自动做)。
+	{Name: "impacket", Bin: "impacket-smbexec", Purpose: "SMB/NTLM 协议工具集(smbexec/wmiexec/secretsdump 等)", Kind: KindManual, Category: CatCred,
+		Install: "pip3 install impacket && EX=$(python3 -c 'import impacket,os;print(os.path.join(os.path.dirname(impacket.__file__),\"examples\"))') && for f in $EX/*.py; do b=$(basename $f .py); printf '#!/bin/sh\\nexec python3 \"%s/%s.py\" \"$@\"\\n' $EX $b > /usr/local/bin/impacket-$b && chmod +x /usr/local/bin/impacket-$b; done"},
 	// SecLists 是最大的通用字典集(目录爆破/参数 fuzz 的语料)。apt 源里没有
 	// 稳定包名,只能从 GitHub 克隆——但它是目录而非单文件,GitHub 配方装不了,
 	// 所以走 KindManual 并在 install.sh 里单独克隆。
