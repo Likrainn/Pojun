@@ -974,6 +974,40 @@ func resetPlannerTimer(timer *time.Timer, d time.Duration) {
 	timer.Reset(d)
 }
 
+// warnFindingsWithoutReport 在任务落终态前检查「已上报但详细报告为空」的漏洞。
+// 终局之后不再派 worker，这些缺口只能提示人在漏洞页补齐——报告导出时一条
+// 空报告漏洞会直接拉低交付质量（v0.4.56 复盘：12 个任务累计 7 条无报告漏洞）。
+func (e *Engine) warnFindingsWithoutReport(t *Task) {
+	if e.m == nil || e.m.pg == nil {
+		return
+	}
+	fs, _, err := e.m.pg.ListFindingsPage(db.FindingFilter{TaskID: t.ID}, 1, 500)
+	if err != nil {
+		return
+	}
+	var missing []string
+	for _, f := range fs {
+		if strings.TrimSpace(f.Report) == "" {
+			title := strings.TrimSpace(f.Name)
+			if title == "" {
+				title = strings.TrimSpace(f.VulnClass)
+			}
+			if title == "" {
+				title = "未分类"
+			}
+			missing = append(missing, fmt.Sprintf("#%d %s", f.ID, title))
+			if len(missing) >= 5 {
+				break
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	e.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
+		Summary: fmt.Sprintf("收尾检查：%d 条漏洞缺少详细报告（%s…），可在漏洞页补齐后再导出", len(missing), strings.Join(missing, "、"))})
+}
+
 func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 	interval := plannerHeartbeatInterval(t)
 	// 心跳定时器在 loop 入口臂 = 从任务 start 计时:即使是跳过首轮 planner 的 seed 任务
@@ -1036,6 +1070,8 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		if open, err := t.Store.HasOpenGoal(); err == nil && !open {
 			t.drainTriggers() // 丢弃累积的 done/finding 触发，避免 goalless 长会话里无界增长
 			if active, err := t.Store.HasActiveIntent(); err == nil && !active {
+				// 落 done 前点名缺报告的漏洞（见 warnFindingsWithoutReport）。
+				e.warnFindingsWithoutReport(t)
 				// frontier 抽干且无在跑意图 → 收尾。用 Guarded 版做 CAS，避免踩到并发的
 				// pause/delete/超时收尾的状态转换。
 				if won, err := e.m.SetTaskStatusGuarded(t.ID, "done"); err != nil {

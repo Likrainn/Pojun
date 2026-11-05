@@ -229,6 +229,17 @@ func (s *Server) admitTaskWhen(t *Task, mode string, requirePaused bool) (queued
 		// 上一轮生命周期遗留的挂起收尾请求同样作废——否则复活的第一个规划轮
 		// 会先消费它，把刚复活的任务又收一遍。
 		t.clearSettle()
+		// 自愈：把「服务停止被取消」（部署重启的遗留物）而卡死的 blocked 意图
+		// 重开——继续 = 把没跑完的跑完。用户手动 block 的不受影响。
+		if t.Store != nil {
+			if n, err := t.Store.ReopenCanceledIntents(); err != nil {
+				log.Printf("[admission] task %s 重开 canceled 意图失败: %v", t.ID, err)
+			} else if n > 0 {
+				log.Printf("[admission] task %s 复活时重开 %d 条 canceled blocked 意图", t.ID, n)
+				s.engine.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
+					Summary: fmt.Sprintf("复活时自动重开 %d 条因服务停止而中断的意图", n)})
+			}
+		}
 		log.Printf("[admission] task %s 从终态 %q 复活，超时预算已重置", t.ID, lifecycle.Status)
 	}
 	if shouldQueue {

@@ -432,6 +432,22 @@ WHERE exploration_id=$1 AND kind='intent' AND state='blocked'`, s.expID)
 	return n, nil
 }
 
+// ReopenCanceledIntents 重开「因服务停止被取消」的 blocked 意图（部署重启的
+// 遗留物，不是真实失败——v0.4.56 复盘：任务 6/8/9 共 11 条此类意图永久卡在
+// blocked，任务看着完成实则漏测）。任务从终态复活时调用：继续 = 把没跑完的
+// 跑完。用户手动 block 的意图不在此列（原因不含 context canceled）。
+func (s *ExplorationStore) ReopenCanceledIntents() (int64, error) {
+	res, err := s.db.Exec(`UPDATE exploration_nodes
+SET state='open', completed_at=NULL, blocked_reason=NULL, content_version=content_version+1
+WHERE exploration_id=$1 AND kind='intent' AND state='blocked'
+  AND blocked_reason ILIKE '%context canceled%'`, s.expID)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 func (s *ExplorationStore) SetIntentState(id int64, state string) error {
 	// terminal states stamp completed_at; reopening (back to open/running) clears it.
 	terminal := state == "done" || state == "blocked" || state == "exhausted" || state == "stopped"

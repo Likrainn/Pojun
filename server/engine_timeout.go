@@ -260,6 +260,9 @@ func (e *Engine) settleTaskWithReason(ctx context.Context, t *Task, reason, deta
 	}
 	defer e.decInflight(t.ID)
 
+	// ⑤′ 落终态前点名缺报告的漏洞（终局后不再派 worker，只能提示人补齐）。
+	e.warnFindingsWithoutReport(t)
+
 	// ⑥ 定终态(带守卫)：timeout 保持 met?done:timeout；自动收尾统一 done。
 	status := "done"
 	if reason == "timeout" && !met {
