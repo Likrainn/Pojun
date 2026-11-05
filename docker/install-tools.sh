@@ -28,8 +28,8 @@ fetch(){
 
 arch="$(dpkg --print-architecture)"
 case "$arch" in
-  amd64) pa="amd64"  p2="x86_64"  p3="x86" p4="x64" ;;
-  arm64) pa="arm64"  p2="aarch64" p3="arm" p4="arm64" ;;
+  amd64) pa="amd64"  p2="x86_64"  p3="x86" p4="x64" lin="x86_64" ;;
+  arm64) pa="arm64"  p2="aarch64" p3="arm" p4="arm64" lin="arm64" ;;
   *) echo "unsupported arch: $arch"; exit 1 ;;
 esac
 
@@ -55,7 +55,7 @@ jpillora/chisel|chisel_{ver}_linux_{arch}.gz|chisel
 OWASP/Amass|amass_linux_{arch}.tar.gz|amass
 hahwul/dalfox|dalfox-{verv}-linux-{arch2}.tar.gz|dalfox
 epi052/feroxbuster|{arch2}-linux-feroxbuster.tar.gz|feroxbuster
-OJ/gobuster|gobuster_{ver}_linux_{arch}.tar.gz|gobuster
+OJ/gobuster|gobuster_Linux_{lin}.tar.gz|gobuster
 "
 
 tmpd="$(mktemp -d)"
@@ -77,7 +77,7 @@ for spec in $specs; do
   asset="$tmpl"
   asset="${asset//\{ver\}/$ver}"; asset="${asset//\{verv\}/$tag}"
   asset="${asset//\{arch\}/$pa}";  asset="${asset//\{arch2\}/$p2}"
-  asset="${asset//\{arch3\}/$p3}"; asset="${asset//\{arch4\}/$p4}"
+  asset="${asset//\{arch3\}/$p3}"; asset="${asset//\{arch4\}/$p4}"; asset="${asset//\{lin\}/$lin}"
   url="https://github.com/$repo/releases/download/${tag}/${asset}"
   file="$tmpd/$(basename "$asset")"
   if ! fetch "$url" "$file"; then warn "  $bin 下载失败，跳过"; continue; fi
@@ -118,10 +118,16 @@ done
 # 源码 setup.py 会把 examples 全部注册成 impacket-smbexec/wmiexec/getST 等
 # 命令——渗透作业按这些命令名调用。源码装失败再退 wheel+wrapper 兜底。
 imp_ok=0
+rm -rf /tmp/impacket-src; mkdir -p /tmp/impacket-src
 for i in 1 2 3; do
-  python3 -m pip install --no-cache-dir --root-user-action=ignore \
-       "impacket @ git+https://github.com/fortra/impacket" >/dev/null 2>&1 \
-    && command -v impacket-smbexec >/dev/null 2>&1 && { imp_ok=1; break; }
+  # 不用 pip git+：那要构建机有 git；codeload tarball 走 release 同款 CDN，fetch 自带重试
+  if fetch "https://github.com/fortra/impacket/archive/refs/heads/master.tar.gz" /tmp/impacket-src/imp.tar.gz; then
+    tar -xzf /tmp/impacket-src/imp.tar.gz -C /tmp/impacket-src 2>/dev/null || true
+    d="$(find /tmp/impacket-src -maxdepth 1 -type d -name 'impacket-*' | head -1)"
+    [ -n "$d" ] || break
+    python3 -m pip install --no-cache-dir --root-user-action=ignore "$d" >/dev/null 2>&1 \
+      && command -v impacket-smbexec >/dev/null 2>&1 && { imp_ok=1; break; }
+  fi
   sleep 8
 done
 if [ "$imp_ok" = "1" ]; then

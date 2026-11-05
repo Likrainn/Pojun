@@ -893,9 +893,9 @@ install_fonts(){
 # 不用 apt 源：这些工具的 apt 包要么没有要么版本极旧。
 install_github_tools(){
   local GOBIN_DIR="/usr/local/bin"
-  local arch="amd64" arch2="x86_64" arch3="x86" arch4="x64"
+  local arch="amd64" arch2="x86_64" arch3="x86" arch4="x64" lin="x86_64"
   if [ "$ARCH" = "aarch64" ]; then
-    arch="arm64"; arch2="aarch64"; arch3="arm"; arch4="arm64"
+    arch="arm64"; arch2="aarch64"; arch3="arm"; arch4="arm64"; lin="arm64"
   fi
 
   # repo|资产模板|二进制名
@@ -914,7 +914,7 @@ jpillora/chisel|chisel_{ver}_linux_{arch}.gz|chisel
 OWASP/Amass|amass_linux_{arch}.tar.gz|amass
 hahwul/dalfox|dalfox-{verv}-linux-{arch2}.tar.gz|dalfox
 epi052/feroxbuster|{arch2}-linux-feroxbuster.tar.gz|feroxbuster
-OJ/gobuster|gobuster_{ver}_linux_{arch}.tar.gz|gobuster
+OJ/gobuster|gobuster_Linux_{lin}.tar.gz|gobuster
 "
   local spec repo tmpl bin tag ver url asset file tmpd
   for spec in $specs; do
@@ -939,6 +939,7 @@ OJ/gobuster|gobuster_{ver}_linux_{arch}.tar.gz|gobuster
     asset="${asset//\{arch2\}/$arch2}"
     asset="${asset//\{arch3\}/$arch3}"
     asset="${asset//\{arch4\}/$arch4}"
+    asset="${asset//\{lin\}/$lin}"
     url="https://github.com/$repo/releases/download/${tag}/${asset}"
     file="$TMP/$(basename "$asset")"
     tmpd="$TMP/ghtool"
