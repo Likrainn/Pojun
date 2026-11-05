@@ -54,8 +54,13 @@ for spec in $specs; do
   tmpl="$(printf '%s' "$spec" | cut -d'|' -f2)"
   bin="$(printf '%s' "$spec" | cut -d'|' -f3)"
   if command -v "$bin" >/dev/null 2>&1; then ok "  $bin 已存在"; continue; fi
+  # 版本解析双通道：API 限流时走 releases/latest 302 重定向（不吃 API 配额）
   tag="$(curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 "https://api.github.com/repos/$repo/releases/latest" \
     | grep -oE '"tag_name": *"[^"]+"' | head -1 | cut -d'"' -f4)" || tag=""
+  if [ -z "$tag" ]; then
+    tag="$(curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 -o /dev/null -w '%{url_effective}' \
+      "https://github.com/$repo/releases/latest" | sed 's|.*/tag/||')" || tag=""
+  fi
   if [ -z "$tag" ]; then warn "  $bin 无法解析版本，跳过"; continue; fi
   ver="${tag#v}"
   asset="$tmpl"

@@ -38,7 +38,13 @@ RUN set -eux; \
       arm64) nuclei_arch="linux_arm64" ;; \
       *) echo "unsupported arch: $arch"; exit 1 ;; \
     esac; \
-    nuclei_ver="$(curl -fsSL https://api.github.com/repos/projectdiscovery/nuclei/releases/latest | jq -r .tag_name)"; \
+    # 版本解析双通道：GitHub API 对 CI runner 共享 IP 经常 403 限流（实测
+    # 2026-11-05 v0.4.54 构建挂在这），后备走 releases/latest 的 302 Location
+    # ——浏览器同款路径，不吃 API 配额。api github 域名也要加超时防挂死。
+    nuclei_ver="$(curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 https://api.github.com/repos/projectdiscovery/nuclei/releases/latest | jq -r .tag_name)" || nuclei_ver=""; \
+    [ -n "$nuclei_ver" ] && [ "$nuclei_ver" != "null" ] || \
+      nuclei_ver="$(curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 -o /dev/null -w '%{url_effective}' https://github.com/projectdiscovery/nuclei/releases/latest | sed 's|.*/tag/||')"; \
+    [ -n "$nuclei_ver" ] || { echo "cannot resolve nuclei version"; exit 1; }; \
     curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 "https://github.com/projectdiscovery/nuclei/releases/download/${nuclei_ver}/nuclei_${nuclei_ver#v}_${nuclei_arch}.zip" -o /tmp/nuclei.zip; \
     unzip -o /tmp/nuclei.zip -d /tmp/nuclei && install -m 0755 /tmp/nuclei/nuclei /usr/local/bin/nuclei \
     && nuclei -version && rm -rf /tmp/nuclei /tmp/nuclei.zip
