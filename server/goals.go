@@ -218,11 +218,18 @@ func (s *Server) admitTaskWhen(t *Task, mode string, requirePaused bool) (queued
 		}
 		return false, err
 	}
-	if lifecycle.Status == "timeout" && status == "running" {
-		// ApplyTaskAdmission reset this timed-out run's persisted clock. Clear the
-		// matching Engine gates before either parking it in FIFO or starting work;
-		// otherwise the old settling flag would make every worker skip forever.
-		s.engine.resetTimeoutRevival(t.ID)
+	if wasTerminal && status == "running" {
+		// 终态复活（timeout/done/failed）统一清 Engine 侧的 per-run 闸门：
+		// ApplyTaskAdmission 已把 first_run_at/deadline_at 清零（旧一轮预算已耗尽，
+		// 复活的跟进工作拿全新预算），这里同步清 settling/deadline/stamped/coordStarted。
+		// 不清的话：timeout 复活会被残留 settling 卡住所有 worker；done 复活则会让
+		// 新起的 deadline 协调器拿过期 deadline 当场再收尾一次，人工跟进意图
+		// （如「深入漏洞」）被静默吞掉（任务 13，2026-11-05 实证）。
+		s.engine.resetTerminalRevival(t.ID)
+		// 上一轮生命周期遗留的挂起收尾请求同样作废——否则复活的第一个规划轮
+		// 会先消费它，把刚复活的任务又收一遍。
+		t.clearSettle()
+		log.Printf("[admission] task %s 从终态 %q 复活，超时预算已重置", t.ID, lifecycle.Status)
 	}
 	if shouldQueue {
 		if !wasQueued {

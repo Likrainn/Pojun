@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [0.4.55] - 2026-11-05
+
+> 任务 13 事故修复：「深入漏洞」人工跟进意图被任务终局收尾静默吞掉。
+> 时间线实证：16:36:16 跟进意图 #7470 创建 → 16:36:17 终局判定轮启动 →
+> 「全部目标已 met，按终局收尾指令不新增意图，本轮收束」→ 任务 timeout。
+
+### 修复
+
+- **终态复活重置超时预算**（根因）：任务 11-04 因「目标已全部达成」落 done，
+  但 first_run_at/deadline_at 仍停在 11-04 的 8 小时预算（18:02 已过期）。
+  11-05 人工跟进把 done 复活为 running 时，旧代码只对 timeout 复活重置时钟 →
+  新起的 deadline 协调器读到已过期 deadline，1 秒后再次收尾，跟进意图从未被
+  worker 领取。现在任何终态（done/failed/timeout）复活都清空
+  first_run_at/deadline_at，下一次真实运行重新盖章整套预算。
+- **Engine per-run 闸门同口径清理**：resetTimeoutRevival → resetTerminalRevival，
+  覆盖 settling/deadline/stamped/coordStarted 四项，复活任务不再被残留标志卡住。
+- **复活时清挂起收尾请求**：上一轮生命周期遗留的 pendingSettle 作废，避免复活后
+  第一个规划轮先消费它又收一遍。
+- 回归测试：done 复活后 DB/内存双时钟清零 + 重新盖章得到从现在起算的新预算。
+
 ## [0.4.54] - 2026-11-05
 
 > Docker 镜像内置工具补齐：此前镜像只有 recon 基础件（nmap/nuclei/
