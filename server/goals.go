@@ -279,7 +279,7 @@ func (s *Server) startAdmittedTask(t *Task, mode string) {
 	s.engine.Run(s.ctx, t)
 	s.engine.Resume(t)
 	// Run returns early for an already-started task. Explicitly ensure a timeout
-	// coordinator exists after resume; resetTimeoutRevival cleared the completed
+	// coordinator exists after resume; resetTerminalRevival cleared the completed
 	// coordinator's marker and the next real call will stamp a fresh deadline.
 	s.engine.startDeadlineCoordinator(s.ctx, t)
 }
