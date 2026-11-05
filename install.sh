@@ -914,6 +914,7 @@ jpillora/chisel|chisel_{ver}_linux_{arch}.gz|chisel
 OWASP/Amass|amass_linux_{arch}.tar.gz|amass
 hahwul/dalfox|dalfox-{verv}-linux-{arch2}.tar.gz|dalfox
 epi052/feroxbuster|{arch2}-linux-feroxbuster.tar.gz|feroxbuster
+OJ/gobuster|gobuster_{ver}_linux_{arch}.tar.gz|gobuster
 "
   local spec repo tmpl bin tag ver url asset file tmpd
   for spec in $specs; do

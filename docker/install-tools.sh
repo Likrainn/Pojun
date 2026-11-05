@@ -44,7 +44,7 @@ jpillora/chisel|chisel_{ver}_linux_{arch}.gz|chisel
 OWASP/Amass|amass_linux_{arch}.tar.gz|amass
 hahwul/dalfox|dalfox-{verv}-linux-{arch2}.tar.gz|dalfox
 epi052/feroxbuster|{arch2}-linux-feroxbuster.tar.gz|feroxbuster
-goacme/gobuster|gobuster_{ver}_linux_{arch}.tar.gz|gobuster
+OJ/gobuster|gobuster_{ver}_linux_{arch}.tar.gz|gobuster
 "
 
 tmpd="$(mktemp -d)"
@@ -88,19 +88,40 @@ done
 # ── pip 组（python 基础镜像自带 pip，无 PEP668 限制）──
 # 包名|可执行名。逐个 || true：单个包装不上不阻断整个构建，
 # 但构建日志里能看到 warn，宿主环境体检页也会如实显示缺失。
-info "pip 安装 wafw00f / impacket / semgrep / pwntools..."
+info "pip 安装 wafw00f / semgrep / pwntools..."
 # impacket 必须走 pip：Debian 的 python3-impacket deb 只带库，不带
 # impacket-smbexec 等命令脚本；pip 版会装全套 /usr/local/bin/impacket-*。
 # netexec（nxc）不装：NetExec 2026 起商业化，PyPI 上的发行文件已全部
 # 撤下（/simple/netexec 404），pip 装不到。需要时从 GitHub 源码安装
 # （hosttools 目录 netexec 条目留有说明），运行期体检会如实显示缺失。
-for pkg in wafw00f impacket semgrep pwntools; do
+for pkg in wafw00f semgrep pwntools; do
   if python3 -m pip install --no-cache-dir --root-user-action=ignore "$pkg" >/dev/null 2>&1; then
     ok "  $pkg"
   else
     warn "  $pkg pip 安装失败"
   fi
 done
+
+# ── impacket 专用安装 ─────────────────────────────
+# 必须从 GitHub 源码装：PyPI wheel 只带库+少数示例，且 0.12 起不注册命令；
+# 源码 setup.py 会把 examples 全部注册成 impacket-smbexec/wmiexec/getST 等
+# 命令——渗透作业按这些命令名调用。源码装失败再退 wheel+wrapper 兜底。
+if python3 -m pip install --no-cache-dir --root-user-action=ignore \
+     "impacket @ git+https://github.com/fortra/impacket" >/dev/null 2>&1 \
+     && command -v impacket-smbexec >/dev/null 2>&1; then
+  ok "  impacket（源码，含全套示例命令）"
+else
+  warn "  impacket 源码安装失败，退 PyPI wheel + wrapper"
+  python3 -m pip install --no-cache-dir --root-user-action=ignore impacket >/dev/null 2>&1 || true
+  exdir="$(python3 -c 'import impacket, os; print(os.path.join(os.path.dirname(impacket.__file__), "examples"))')" 2>/dev/null || exdir=""
+  if [ -n "$exdir" ] && [ -d "$exdir" ]; then
+    for s in secretsdump smbclient mssqlshell ldap_shell; do
+      [ -f "$exdir/$s.py" ] || continue
+      printf '#!/bin/sh\nexec python3 "%s/%s.py" "$@"\n' "$exdir" "$s" > "/usr/local/bin/impacket-$s"
+      chmod +x "/usr/local/bin/impacket-$s"
+    done
+  fi
+fi
 
 # ── SecLists 字典集 ──────────────────────────────────
 # 路径必须是 /opt/SecLists——hosttools.go 的 seclists 条目与 worker 提示词
