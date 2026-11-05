@@ -862,6 +862,8 @@ func (e *Engine) Run(ctx context.Context, t *Task) {
 		// 任务归属公司（v0.4.40）：范围内资产 100% 属于同一家公司且公司资产规模同
 		// 量级时，自动写 company scope 并快照资产；否则只在活动流里给出建议。
 		e.autoAttributeCompany(t)
+		// 开局窄面提示（v0.4.57 复盘）：范围内资产 <10 时提醒操作者预期。
+		e.warnNarrowScope(t)
 	}
 	e.touch(t.ID)
 	runTaskRoutine(rt, func(loopCtx context.Context) { e.plannerLoop(loopCtx, t) })
@@ -972,6 +974,28 @@ func resetPlannerTimer(timer *time.Timer, d time.Duration) {
 		}
 	}
 	timer.Reset(d)
+}
+
+// warnNarrowScope 任务开局提示资产面宽窄（v0.4.57 复盘：任务 16/17 类薄面站点
+// 完整跑完流程但产出有限——提前让操作者知道预期，好调整目标/预算/超时）。
+// 只在 created→running 的首次启动时随 autoAttributeCompany 一起发一次。
+func (e *Engine) warnNarrowScope(t *Task) {
+	if e.m == nil || e.m.pg == nil || e.m.assets == nil {
+		return
+	}
+	tid, err := strconv.ParseInt(t.ID, 10, 64)
+	if err != nil || tid <= 0 {
+		return
+	}
+	cov, err := e.m.assets.TaskCoverageWithSources(tid)
+	if err != nil || cov == nil || !cov.Enabled {
+		return
+	}
+	if cov.Denominator == 0 || cov.Denominator >= 10 {
+		return
+	}
+	e.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
+		Summary: fmt.Sprintf("开局提示：当前范围内仅 %d 个资产——资产面较窄，预期产出有限；可考虑扩大范围或调低该任务的预算/超时", cov.Denominator)})
 }
 
 // warnFindingsWithoutReport 在任务落终态前检查「已上报但详细报告为空」的漏洞。

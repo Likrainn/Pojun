@@ -665,8 +665,9 @@ function ProfileSheet({
             </div>
           </div>
           <p className="-mt-2 text-muted-foreground text-xs">
-            限速 0 = 不限，全 Agent 共享。上下文窗口单位 K（千 token），0 = 默认 200K，上限 1000（即
-            1M）；设太高会导致压缩不触发。
+            限速 0 = 不限，全 Agent 共享。上下文窗口单位 K（千 token），上限 1000（即 1M）。
+            ⚠️ 务必按模型真实窗口填写（如 128/200）：0 会按 1M 计算，压缩几乎不触发，
+            超过模型真实上限的请求只会以远端报错收场（复盘实测 LongCat 压缩错误率 11.4% 的根因）。
           </p>
 
           <div className="grid gap-3 rounded-lg border p-3">
