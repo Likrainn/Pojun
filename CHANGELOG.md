@@ -4,6 +4,31 @@
 
 ## [Unreleased]
 
+## [0.4.54] - 2026-11-05
+
+> Docker 镜像内置工具补齐：此前镜像只有 recon 基础件（nmap/nuclei/
+> Playwright/LibreOffice），与二进制形态 --with-tools 的工具集差一大截，
+> 而 Docker 形态没有 pojun-hostd 一键安装——缺的工具永远显示缺失。
+
+### 新增
+
+- **镜像内置工具对齐 --with-tools**：apt 组（masscan/sqlmap/hydra/whatweb/
+  ffuf/john/impacket/socat/proxychains4，逐包容错）+ GitHub release 表
+  （httpx/subfinder/naabu/dnsx/katana/tlsx/notify/interactsh/gitleaks/chisel/
+  amass/dalfox/feroxbuster/gobuster）+ pip 组（wafw00f/impacket/semgrep/
+  pwntools）+ SecLists 字典（/opt/SecLists）+ 公文字体（COPY 仓库内
+  report/fonts，docx→PDF 不再依赖运行期下载）。
+- **基础镜像 Python 3.12→3.11**：impacket/semgrep 等工具链兼容性更稳。
+- **下载全加超时**：nuclei/工具下载 --max-time/--connect-timeout，构建机
+  网络半死时快速失败而不是无限挂起。
+
+### 修复
+
+- **netexec 移除出自动安装**（install.sh 与镜像同口径）：NetExec 2026 起
+  商业化，PyPI 发行文件全部撤下（/simple/netexec 404），pip 装必失败；
+  hosttools 条目注明需从 GitHub 源码安装。bookworm 源没有 nikto，镜像
+  逐包容错跳过（体检页如实显示）。
+
 ## [0.4.53] - 2026-11-05
 
 > 图片预览缩放补齐：任务总览与漏洞详情的文档分页预览此前仍是静态 img，

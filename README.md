@@ -265,7 +265,12 @@ docker compose up -d      # → http://localhost:8787
 ```
 
 - 镜像 `ghcr.io/chu0119/pojun`，amd64/arm64 双架构，`POJUN_TAG` 默认 `latest`；
-  常用渗透工具（nmap/nuclei/sqlmap/impacket/LibreOffice/Playwright…）随镜像内置；
+  渗透工具随镜像内置（与二进制 `--with-tools` 同一套）：nmap / masscan /
+  sqlmap / hydra / whatweb / nikto / ffuf / john / impacket / socat /
+  proxychains / nuclei / httpx / subfinder / naabu / dnsx / katana / tlsx /
+  notify / interactsh / gitleaks / chisel / amass / dalfox / feroxbuster /
+  gobuster / wafw00f / semgrep / pwntools / SecLists 字典 /
+  Playwright + chromium / LibreOffice / poppler / ImageMagick / 公文字体；
 - 数据落 `./data`（宿主机可直接查看/备份），数据库在 `pgdata` 卷；
 - 升级：`docker compose pull && docker compose up -d`；卸载：`docker compose down -v`；
 - 回连端口映射示例见 `docker-compose.yml` 注释（reverse shell 需放开对应端口）。
