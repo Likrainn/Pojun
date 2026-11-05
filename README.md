@@ -14,7 +14,7 @@ Go 单体后端（内嵌 Next.js 前端）· PostgreSQL · 多 Agent 自主推�
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-linux-lightgrey)
 
-📦 **Docker**：`ghcr.io/chu0119/pojun` · `xingchuan1314/pojun`
+📦 **Docker**：`ghcr.io/chu0119/pojun`（amd64 / arm64 双架构，每版 CI 自动发布）
 🧠 **单技能版**：[pojun-skill](https://github.com/chu0119/pojun-skill)——Pojun 方法论的单 skill 版，任意 AI Agent 即装即用
 
 </div>
@@ -254,7 +254,23 @@ curl -fsSL .../install.sh | sudo bash -s -- --mode=docker
 幂等：重复执行 = 原地升级；`config.json` / `jwt.key` / 数据 / 数据库不动。
 卸载：`systemctl disable --now pojun pojun-hostd && rm -rf /opt/pojun`。
 
-### 方式二：下载预编译包（Linux amd64 / arm64）
+### 方式二：Docker Compose 直跑（ghcr 已发布镜像）
+
+已经会用 Docker 的话，不需要 install.sh：
+
+```bash
+git clone --depth 1 https://github.com/chu0119/Pojun.git pojun && cd pojun
+cp .env.example .env      # 至少改 POSTGRES_PASSWORD；POJUN_TAG 可钉到具体版本（如 v0.4.53）
+docker compose up -d      # → http://localhost:8787
+```
+
+- 镜像 `ghcr.io/chu0119/pojun`，amd64/arm64 双架构，`POJUN_TAG` 默认 `latest`；
+  常用渗透工具（nmap/nuclei/sqlmap/impacket/LibreOffice/Playwright…）随镜像内置；
+- 数据落 `./data`（宿主机可直接查看/备份），数据库在 `pgdata` 卷；
+- 升级：`docker compose pull && docker compose up -d`；卸载：`docker compose down -v`；
+- 回连端口映射示例见 `docker-compose.yml` 注释（reverse shell 需放开对应端口）。
+
+### 方式三：下载预编译包（Linux amd64 / arm64）
 
 到 [Releases](https://github.com/chu0119/Pojun/releases) 下载
 `pojun-<版本>-linux-<架构>.zip`（附 SHA256SUMS），解压后：
@@ -267,7 +283,7 @@ cp config.example.json config.json   # 填好 database 连接
 > 用 `start.sh` 启动而非直接跑二进制——它是守护脚本，「一键更新」靠它完成换装。
 > 目前只适配 Linux；Windows/macOS 暂不支持。
 
-### 方式三：从源码编译
+### 方式四：从源码编译
 
 ```bash
 cd web && npm ci && npm run build:static && cd ..
