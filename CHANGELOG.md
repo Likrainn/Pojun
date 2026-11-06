@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+## [0.4.60] - 2026-11-06
+
+> 用户反馈「任务几乎不调 skill」+ 14 个同类项目对比研究后的融合批次
+> （完整分析见 docs/同类工具对比-2026-11-06.md）。
+
+### 修复
+
+- **技能速查注入 system prompt**（根因）：数据实证——skill_usage 全生命周期仅
+  8 次、任务 18 零次调用；根因是 Skill 元工具只活在工具描述里，系统提示从不
+  提。renderSystem 现在按 agent 绑定注入「技能速查块」（名称+何时用+调用方式），
+  覆盖 worker/planner/pentest/chat；registry 60s 缓存。附回归测试。
+
+### 新增
+
+- **内置 4 个任务 Playbook**（借鉴 PentestAgent）：Web 全流程渗透 / 内网域渗透 /
+  APP 逆向+API / 纯侦察资产盘点——安康系列实测验证过的目标结构，建任务一键套用；
+  settings flag 批次种子，用户删改不复活。附幂等测试。
+- **独立复现规划规则**（借鉴 Pentest-AI / Pentest-Swarm-AI）：critical/high 若
+  证据仅来自单一 worker、无独立复验事实，planner 派「只复现不扩大」的验证意图；
+  复现失败必须降级，不许保留高等级。
+- **HexStrike 工具桥 MCP 预设**：桥接 150+ 安全工具（nmap/sqlmap/metasploit/
+  nuclei/ghidra…），克隆到 mcp-servers/hexstrike-ai 并启动服务即用。
+
 ## [0.4.59] - 2026-11-06
 
 > 用户实测反馈：Vue 站点（任务 18）对 webpack 源码泄露完全没有检测——

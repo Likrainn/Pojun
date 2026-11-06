@@ -130,6 +130,15 @@ const mcpPresets: MCPPreset[] = [
     requires: "需 node ≥ 18；路径按需修改",
   },
   {
+    name: "hexstrike",
+    title: "HexStrike 工具桥",
+    description: "桥接 150+ 安全工具（nmap/sqlmap/metasploit/nuclei/ghidra…），AI 统一调度。",
+    transport: "stdio",
+    command: "python3",
+    args: "mcp-servers/hexstrike-ai/hexstrike_mcp.py --server http://127.0.0.1:5000",
+    requires: "先把 hexstrike-ai 克隆到 mcp-servers/ 并启动 hexstrike_server.py（:5000）",
+  },
+  {
     name: "fofa",
     title: "FOFA 资产测绘",
     description: "按域名/证书/端口/指纹搜资产（内置 one-fox 通道与多账号轮换）。",

@@ -281,6 +281,9 @@ ON CONFLICT (name) DO NOTHING`,
 	if err := d.seedBuiltinSkillVisibility(); err != nil {
 		return fmt.Errorf("seed skill visibility: %w", err)
 	}
+	if err := d.seedBuiltinTaskPlaybooks(); err != nil {
+		return fmt.Errorf("seed task playbooks: %w", err)
+	}
 	if err := d.seedDefaultInterceptRules(); err != nil {
 		return fmt.Errorf("seed intercept rules: %w", err)
 	}
