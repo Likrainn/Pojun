@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [0.4.61] - 2026-11-06
+
+> 全新部署打磨：装机脚本前置检查、uv 落位修复、README 系统选择指引。
+
+### 修复
+
+- **uv 落位**（真实踩坑）：pojun 服务是 systemd 用户，PATH 只保证
+  `/usr/local/bin` 等系统目录；pipx 以 root 安装会把 uv 放到 `/root/.local/bin`
+  ——服务用户既无权限穿越 /root 也不在 PATH，导致「FOFA MCP 预设能加、MCP 起不来」。
+  ensure_uv 现在统一把二进制落到 `/usr/local/bin/uv` 并验证可执行。
+
+### 新增
+
+- **装机前置检查**：内存 <4G、根分区 <10G、python3 <3.10 时给出明确提示（不阻断）。
+- **安装完成后的下一步指引**：管理员密码 → LLM 通道 → MCP 预设（FOFA/Playwright）
+  → 任务 Playbook。
+- **README 系统选择与配置要求表**：Debian 12 / Ubuntu LTS 首选，Kali 可用但滚动
+  有风险，RHEL 系覆盖少；最低 2C4G/20G、推荐 4C8G/60G。
+- `install.sh --help` 顶部加系统与硬件建议。
+
 ## [0.4.60] - 2026-11-06
 
 > 用户反馈「任务几乎不调 skill」+ 14 个同类项目对比研究后的融合批次
