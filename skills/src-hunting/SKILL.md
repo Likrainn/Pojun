@@ -22,6 +22,7 @@ tags:
 | 已知 CVE/PoC | `search_vulns` / `get_vuln` / `get_poc` / `scan_with_nuclei` |
 | 回连/OOB | `listener_start` + `listener_sessions` |
 | 鉴权对照 | `auth_request`（用已登记凭据组请求）+ `diff_responses` |
+| SPA/webpack 源码泄露 | `js_audit`（sourcemap 还原+密钥/接口抽取，Vue/React 必跑） |
 | 新资产入库 | `insert_assets` / `add_task_scope` |
 | 产物落盘 | 任务目录 `/opt/pojun/data/tasks/<id>/`（rules 里提到的「桌面任务文件夹」以本目录为准） |
 

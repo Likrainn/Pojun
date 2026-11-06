@@ -4,6 +4,31 @@
 
 ## [Unreleased]
 
+## [0.4.59] - 2026-11-06
+
+> 用户实测反馈：Vue 站点（任务 18）对 webpack 源码泄露完全没有检测——
+> worker 不去看 `.js.map`，SPA 前端面被直接略过。参考外部资料
+> （SourceMapX / unwebpack-sourcemap / shuji 的检测链）做成平台领域工具。
+
+### 新增
+
+- **js_audit 领域工具**（worker/mainagent 同款）：入口 URL → 自动提取
+  `<script src>` 与 hash chunk → 检测 sourceMappingURL（外链/内联 base64）+
+  `<js>.map` 兜底探测 → 命中即还原 sourcesContent 原始源码落盘（保留
+  .vue/.env 目录结构）→ 扫描密钥（阿里云 LTAI/AKID、AWS AKIA、私钥、JWT、
+  AK-SK 键值对、内网段）→ 抽取接口/路由清单。只落脚本+组命令，流量照常过
+  MITM 留证。结论口径：map 命中=CWE-540 high；真实凭据=critical。
+- **skill 更新**：api-recon 与 web-attack-methods 增补「Webpack/Sourcemap
+  源码泄露」章节（含假点：SPA fallback 给 404 页回 200 不算命中）；
+  src-hunting 工具映射表加 js_audit。
+
+### 验证
+
+- 本地 fixture（假 Vue dist + 真实 sourcesContent）：链路 html→scripts→js→
+  map→还原落盘→密钥命中（LTAI/内网段）全通；
+- 对平台自身前端实测：SPA fallback 200 误判 bug（可达≠命中）已修复，
+  修复后 found=0 准确。
+
 ## [0.4.58] - 2026-11-06
 
 > 复盘后续批次：开局窄面预期提示 + 上下文窗口纠偏。

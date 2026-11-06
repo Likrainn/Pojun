@@ -106,3 +106,14 @@ tags:
 - 同一参数多种手法失败 → 落负结果 fact，避免重复打；
 - 想升级严重性必须给出「真实影响」：命令回显、文件内容、越权读到的他人数据；
   仅有报错/延迟 → 最多 medium 并注明利用条件。
+
+## 前端构建产物泄露（SPA/Vue/React）
+
+- sourcemap 泄露：`//# sourceMappingURL=x.js.map` → 拉 `.map` → `sourcesContent`
+  = 原始源码全文（组件/接口/密钥）。平台工具 **`js_audit`** 一键全链路（见
+  api-recon 同名章节）；手工版：`curl -s <js>` 尾部找提示 → `curl <js>.map | jq -r '.sources[]'`。
+- chunk 接口提取：bundle 里 `"/prod-api/..."`、`baseURL`、`axios.create`、
+  vue-router `path:"/..."` 全部抽出来当接口清单（未公开接口 = 新攻击面）。
+- 密钥扫描：`LTAI`(阿里云AK)、`AKIA`(AWS)、`-----BEGIN PRIVATE KEY`、
+  `eyJ`(JWT)、`accessKey/secretKey/appSecret` 键值对——命中且能调通 = critical。
+- 定级：纯源码结构还原 = high（CWE-540）；含可用密钥/未公开接口 = critical 视影响。
