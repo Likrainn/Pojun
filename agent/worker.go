@@ -443,19 +443,31 @@ func renderWorkerGraphOverview(data map[string]any) string {
 // max_turns) and a per-kind breakdown of what was written back (so an intent that
 // explored but persisted nothing isn't mistaken for done, and the engine can log
 // facts/assets/findings separately instead of lumping them under "facts").
-func (w *Worker) Execute(ctx context.Context, name string, taskID int64, as *db.AssetStore, ts *db.ExplorationStore, intent *db.Node, hooks harness.HookRunner, emit func(db.Activity), enr EnrichTrigger, notifyFinding func(int64, string)) (harness.TerminalReason, WriteCounts, error) {
-	return w.execute(ctx, name, taskID, as, ts, intent, hooks, emit, enr, notifyFinding, "", "")
+// workCancel（可选变参）：本 run 的 context 取消器。idle-stop 提示后仍无写回
+// 时用它真正收场（见 agent/idlestop.go）；不传则退化为只 block 不终止。
+func (w *Worker) Execute(ctx context.Context, name string, taskID int64, as *db.AssetStore, ts *db.ExplorationStore, intent *db.Node, hooks harness.HookRunner, emit func(db.Activity), enr EnrichTrigger, notifyFinding func(int64, string), workCancel ...func(error)) (harness.TerminalReason, WriteCounts, error) {
+	return w.execute(ctx, name, taskID, as, ts, intent, hooks, emit, enr, notifyFinding, "", "", firstCancel(workCancel))
 }
 
 // ExecuteWithMessage runs the next turn in the same intent conversation with a
 // human-authored message. The HTTP handler does not edit the transcript;
 // agentcore records the message as a normal user turn when this Worker starts.
 // This keeps Worker continuation identical to the regular agent chat flow.
-func (w *Worker) ExecuteWithMessage(ctx context.Context, name string, taskID int64, as *db.AssetStore, ts *db.ExplorationStore, intent *db.Node, hooks harness.HookRunner, emit func(db.Activity), enr EnrichTrigger, notifyFinding func(int64, string), requestID, message string) (harness.TerminalReason, WriteCounts, error) {
-	return w.execute(ctx, name, taskID, as, ts, intent, hooks, emit, enr, notifyFinding, strings.TrimSpace(requestID), strings.TrimSpace(message))
+func (w *Worker) ExecuteWithMessage(ctx context.Context, name string, taskID int64, as *db.AssetStore, ts *db.ExplorationStore, intent *db.Node, hooks harness.HookRunner, emit func(db.Activity), enr EnrichTrigger, notifyFinding func(int64, string), requestID, message string, workCancel ...func(error)) (harness.TerminalReason, WriteCounts, error) {
+	return w.execute(ctx, name, taskID, as, ts, intent, hooks, emit, enr, notifyFinding, strings.TrimSpace(requestID), strings.TrimSpace(message), firstCancel(workCancel))
 }
 
-func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.AssetStore, ts *db.ExplorationStore, intent *db.Node, hooks harness.HookRunner, emit func(db.Activity), enr EnrichTrigger, notifyFinding func(int64, string), requestID, message string) (harness.TerminalReason, WriteCounts, error) {
+// firstCancel 取变参里第一个非 nil 的取消器。
+func firstCancel(cs []func(error)) func(error) {
+	for _, c := range cs {
+		if c != nil {
+			return c
+		}
+	}
+	return nil
+}
+
+func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.AssetStore, ts *db.ExplorationStore, intent *db.Node, hooks harness.HookRunner, emit func(db.Activity), enr EnrichTrigger, notifyFinding func(int64, string), requestID, message string, workCancel func(error)) (harness.TerminalReason, WriteCounts, error) {
 	tsx := NewToolSet(ts, name)
 	tsx.SetFindingRecorder(w.findingRecorder)
 	tsx.SetTaskID(taskID)
@@ -597,11 +609,11 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		logged := wrapToolLog(hooks, KindWorker, fmt.Sprintf("%s · #%d", name, intent.ID))
 		opts.Hooks = wrapIdleStop(logged, tsx.Writes, func(reason string) {
 			logIdleStop(name, taskID, intent.ID, reason)
-		})
+		}, workCancel)
 	} else {
 		opts.Hooks = wrapIdleStop(toolLogSink(KindWorker), tsx.Writes, func(reason string) {
 			logIdleStop(name, taskID, intent.ID, reason)
-		})
+		}, workCancel)
 	}
 	if w.tx != nil { // persist raw LLM conversation; one file per worked intent
 		opts.Transcript = w.tx

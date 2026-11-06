@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [0.4.62] - 2026-11-06
+
+> Issue #2 修复：idle-stop 在探索期过于激进（用户反馈 + 线上数据实证）。
+> 线上 journal 实测 2,583 条收场日志、单意图被拦到「连续 20 轮」才结束——
+> 根因是 PreToolUse 的 block 只拦单次工具调用、run 不结束，模型逐轮跟 hook
+> 辩论烧 token；且收场原因完全没落库（ReasonStopHookPrevented 未分流，
+> 全部落进 done + 空原因，统计与 planner 都看不见）。
+
+### 修复
+
+- **收场不彻底（核心）**：提示后仍无写回时，到 prevent 轮（5 轮）取消 run
+  context 真正收场——不再逐轮 block 让模型辩论（nudge 3 轮 + 2 轮写回机会）。
+  新增 `AbortIdleStop` cancel cause；engine 分流为 exhausted(idle_stop)。
+- **收场原因落库**：idle-stop 现在写 `blocked_reason=idle_stop`（此前完全
+  不可见）；planner 可区分「探到边界」与「正常完成/超时」。
+- **进展口径扩大**：`save_evidence` 计入写回（附证据=具体产出，且不再被拦）；
+  提示词明确列出四种产出（fact/asset/finding/evidence）且**负结果也算事实**。
+- **提示词重写**：说明「这不是惩罚，是给你一次把成果落库的机会」，写回后计数
+  重置——直接回应「worker 花 token 跟规则辩论」的观察。
+
 ## [0.4.61] - 2026-11-06
 
 > 全新部署打磨：装机脚本前置检查、uv 落位修复、README 系统选择指引。

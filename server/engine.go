@@ -1365,9 +1365,9 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	var wrote agent.WriteCounts
 	var err error
 	if hasChatMessage {
-		reason, wrote, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message)
+		reason, wrote, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message, workCancel)
 	} else {
-		reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding)
+		reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, workCancel)
 	}
 	e.EndLLMCall(t.ID)
 	// model_error 收场 → 额外重跑几次（退避后再试）。仅在意图仍属本 work、任务
@@ -1384,9 +1384,9 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		}
 		e.BeginLLMCall(t.ID)
 		if hasChatMessage {
-			reason, wrote, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message)
+			reason, wrote, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message, workCancel)
 		} else {
-			reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding)
+			reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, workCancel)
 		}
 		e.EndLLMCall(t.ID)
 	}
@@ -1396,7 +1396,8 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	// unregister would always be true (unregister cancels it) → every completed
 	// work would be wrongly marked stopped.
 	workCause := context.Cause(workCtx)
-	killed := workCtx.Err() != nil && ectx.Err() == nil
+	// idle-stop 是自己收场，不是 planner 终止——排除后走下方 exhausted 分流。
+	killed := workCtx.Err() != nil && ectx.Err() == nil && !errors.Is(workCause, agent.AbortIdleStop)
 	action, completeWork := e.detachWork(intent.ID)
 	// A caller may stop waiting and release its in-memory reservation before the
 	// agent honors cancellation. The named context cause remains authoritative and
@@ -1504,6 +1505,16 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	state := "done"
 	stopReason := ""
 	switch {
+	case errors.Is(workCause, agent.AbortIdleStop) || errors.Is(err, agent.AbortIdleStop):
+		// 无增量自动收场（issue #2）：方向探到边界，不是失败也不是完成。
+		state = "exhausted"
+		stopReason = db.IntentStopIdleStop
+		log.Printf("[worker %s] intent %d 无增量自动收场(exhausted/idle_stop)，本次写回 %s", name, intent.ID, wrote)
+	case reason == harness.ReasonStopHookPrevented:
+		// Stop hook 路径的收场（模型不再调工具后触发）——同样记 idle_stop。
+		state = "exhausted"
+		stopReason = db.IntentStopIdleStop
+		log.Printf("[worker %s] intent %d 无增量自动收场(exhausted/idle_stop，Stop hook)，本次写回 %s", name, intent.ID, wrote)
 	case err != nil:
 		state = "blocked"
 		stopReason = db.IntentStopError

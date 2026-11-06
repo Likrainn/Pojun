@@ -587,6 +587,9 @@ const (
 	IntentStopKilled = "killed"
 	// IntentStopShutdown 服务停止/任务范围取消，意图已放回 open（恢复后重跑）。
 	IntentStopShutdown = "server_shutdown"
+	// IntentStopIdleStop 无增量自动收场：连续多轮零写回，提示后仍无产出。
+	// 与 timeout/max_turns 区分——这是「方向探到边界」的信号，规划者据此换角度。
+	IntentStopIdleStop = "idle_stop"
 )
 
 // SetIntentStopReason records WHY an intent stopped. Unlike SetIntentBlockedReason
