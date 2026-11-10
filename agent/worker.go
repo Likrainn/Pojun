@@ -56,16 +56,20 @@ type Worker struct {
 	findingRecorder FindingRecorder
 	// artifactRecorder 由 host 注入：证据附件（截图/样本/日志）落盘登记。
 	artifactRecorder ArtifactRecorder
-	prov             llm.Provider
-	model            string
-	workDir          string
-	proxyAddr        string
-	proxyCACert      string            // recording proxy's CA cert path (for WebFetch HTTPS verify)
-	webSearch        WebSearchOpts     // web_search tool backend selection (off by default)
-	tx               *transcript.Store // raw LLM conversation persistence (nil = off)
-	window           int               // context window in tokens (for compaction)
-	windowFn         func() int        // optional dynamic task-chain minimum
-	maxTurns         int               // max agent turns per run (0 = unlimited)
+	// 授权边界守卫开关（红队版 v0.6.18 下放）：装配时从设置读取，传到 ToolSet。
+	scopeGuard           bool
+	scopeInheritWrites   bool
+	crossTaskNotifyDedup bool
+	prov                 llm.Provider
+	model                string
+	workDir              string
+	proxyAddr            string
+	proxyCACert          string            // recording proxy's CA cert path (for WebFetch HTTPS verify)
+	webSearch            WebSearchOpts     // web_search tool backend selection (off by default)
+	tx                   *transcript.Store // raw LLM conversation persistence (nil = off)
+	window               int               // context window in tokens (for compaction)
+	windowFn             func() int        // optional dynamic task-chain minimum
+	maxTurns             int               // max agent turns per run (0 = unlimited)
 	// runTimeout is the wall-clock budget for the main exploration of one intent
 	// (0 = unlimited). When it fires, the run is cut and a settlement round is
 	// forced so already-identified facts get written back instead of being lost.
@@ -324,7 +328,8 @@ func workerSystem(proxyAddr, caCert, dataDir, runDir string) string {
 	// caCert is present only when the recording MITM is on, which is exactly when
 	// the traffic_* tools are registered — so it gates the traffic-tool note.
 	// Optional finding guidance is added for every role after tool resolution.
-	out := body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir)
+	// 作业硬尾巴（红队版下放）：扫描器优先 + 技能路由，代码注入不可经 UI 改掉。
+	out := body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir) + scannerFirstGuidance + skillRoutingGuidance
 	// 宿主工具清单：真正动手的是 worker，所以清单必须进 worker 的 system prompt。
 	// 之前只有 planner 的唤醒提示里有（用于「派意图选手段」），worker 看不到——
 	// 于是新装的一批工具（dalfox/feroxbuster/chisel…）一次都没被用起来。
@@ -469,6 +474,7 @@ func firstCancel(cs []func(error)) func(error) {
 
 func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.AssetStore, ts *db.ExplorationStore, intent *db.Node, hooks harness.HookRunner, emit func(db.Activity), enr EnrichTrigger, notifyFinding func(int64, string), requestID, message string, workCancel func(error)) (harness.TerminalReason, WriteCounts, error) {
 	tsx := NewToolSet(ts, name)
+	tsx.SetScopeFlags(w.scopeGuard, w.scopeInheritWrites, w.crossTaskNotifyDedup)
 	tsx.SetFindingRecorder(w.findingRecorder)
 	tsx.SetTaskID(taskID)
 	coverageEnabled := as == nil || as.CoverageEnabled(taskID)
@@ -744,3 +750,10 @@ const sqlmapGuidance = `
 - 拿到结果后把**实际跑通的完整命令**（含真实 URL/参数/附加头，不要写成模板）原样写进 evidence，并附上关键输出特征（Parameter / Type / DBMS / Payload 片段）。这是报告「复测命令」小节的来源。
 - 只读边界：默认只用注入探测与数据读取（--dump 限定表/列，先 --count/--schema）；不要用 --os-shell / --sql-shell / --file-write / --os-pwn 等写操作，除非任务明确要求且审批通过。
 - sqlmap 跑不通（网络/代理/被拦）时，用等价的手工 payload 复现并写明 sqlmap 尝试过与失败原因；**禁止编造 sqlmap 输出**。`
+
+// SetScopeFlags（红队版 v0.6.18 下放）：授权边界守卫与跨任务去重开关。
+func (w *Worker) SetScopeFlags(scopeGuard, scopeInheritWrites, crossTaskNotifyDedup bool) {
+	w.scopeGuard = scopeGuard
+	w.scopeInheritWrites = scopeInheritWrites
+	w.crossTaskNotifyDedup = crossTaskNotifyDedup
+}

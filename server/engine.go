@@ -1196,6 +1196,12 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 				e.recordAndEvaluateAutoFinish(t, int64(round), triggers)
 			}
 		}
+		// 覆盖矩阵 / 纵深缺口提醒（红队版 v0.6.10/0.6.17 下放）：提示词约束不住弱模型时，
+		// 引擎侧确定性补一层。不要求本轮 res.err==nil——超时/模型故障时同样要提醒。
+		if ectx.Err() == nil && !e.isSettling(t.ID) {
+			e.nudgeCoverageGaps(t)
+			e.nudgeDepthGaps(t)
+		}
 		e.touch(t.ID)
 	}
 

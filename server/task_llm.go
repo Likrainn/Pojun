@@ -698,7 +698,17 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	mainRuntime := &taskLLMRuntime{s: s, taskID: t.ID, agentKey: "mainagent"}
 	tx := transcript.NewStore(filepath.Join(s.m.dir, "transcripts"))
 	window := workerRuntime.CompactionWindow()
+	// 授权边界守卫开关（红队版 v0.6.18 下放）：每个 agent bundle 装配时读一次设置。
+	var scopeGuard, scopeInherit, notifyDedup bool
+	if s.m.PG() != nil {
+		scopeGuard = s.m.PG().GetBool("scope_write_guard", true)
+		scopeInherit = s.m.PG().GetBool("scope_inherit_writes", false)
+		notifyDedup = s.m.PG().GetBool("notify_cross_task_dedup", true)
+	} else {
+		scopeGuard, notifyDedup = true, true
+	}
 	wk := agent.NewWorker(workerRuntime, "task-router", s.m.dir, tx, window, s.agentMaxTurns("worker"))
+	wk.SetScopeFlags(scopeGuard, scopeInherit, notifyDedup)
 	wk.SetFindingRecorder(s.evidenceStore())
 	wk.SetArtifactRecorder(s) // v0.5.0 证据附件：save_evidence 落盘登记
 	wk.SetCompactionWindowResolver(workerRuntime.CompactionWindow)
@@ -720,6 +730,7 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 		}
 	}
 	pl := agent.NewPlanner(plannerRuntime, "task-router", s.m.dir, tx, plannerRuntime.CompactionWindow(), s.agentMaxTurns("planner"))
+	pl.SetScopeFlags(scopeGuard, scopeInherit, notifyDedup)
 	pl.SetFindingRecorder(s.evidenceStore())
 	pl.SetCompactionWindowResolver(plannerRuntime.CompactionWindow)
 	pl.SetNonStreaming(plannerRuntime.nonStreaming)
@@ -756,6 +767,7 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	compactor.SetMaxBlockMembers(s.m.CompactionMaxMembers())
 	pl.SetCompactor(compactor)
 	main := agent.NewMainAgent(mainRuntime, "task-router", s.m.dir, tx, mainRuntime.CompactionWindow(), s.agentMaxTurns("mainagent"))
+	main.SetScopeFlags(scopeGuard, scopeInherit, notifyDedup)
 	main.SetFindingRecorder(s.evidenceStore())
 	main.SetCompactionWindowResolver(mainRuntime.CompactionWindow)
 	main.SetNonStreaming(mainRuntime.nonStreaming)

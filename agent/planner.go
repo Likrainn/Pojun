@@ -21,25 +21,29 @@ import (
 // assets, judges whether the task goal is met, and emits 0..N exploration intents
 // into the frontier. It is the sole intent generator.
 type Planner struct {
-	findingRecorder   FindingRecorder
-	prov              llm.Provider
-	model             string
-	tx                *transcript.Store                      // raw LLM conversation persistence (nil = off)
-	window            int                                    // context window in tokens (for compaction)
-	windowFn          func() int                             // optional dynamic task-chain minimum
-	maxTurns          int                                    // max agent turns per run (0 = unlimited)
-	killWork          func(intentID int64) error             // engine callback to terminate a running work (nil = off)
-	steerWork         func(intentID int64, msg string) error // engine callback to steer a running work mid-run (nil = off)
-	attributions      func() map[string]any                  // Guard 归因读取（nil = 概览不带 guard_attributions 块）
-	proxyAddr         string                                 // recording proxy for WebFetch (empty = direct)
-	proxyCACert       string                                 // recording proxy's CA cert path (HTTPS verify)
-	webSearch         WebSearchOpts                          // web_search tool backend selection (off by default)
-	workDir           string                                 // shared work dir (surfaced in prompt as artifact-output target)
-	injectConstraints func() bool                            // resolver: inject task operation constraints into system prompt? (nil = yes)
-	nonStreamingFn    func() bool                            // resolver: use non-streaming (Complete) path? (nil = streaming)
-	noaEnabledFn      func() bool                            // resolver: use experimental noa compaction? (nil = off)
-	maxTokensFn       func() int                             // resolver: per-reply output cap (nil/0 = send no cap)
-	compactor         *Compactor                             // cold-node compaction (§7); nil = disabled
+	findingRecorder FindingRecorder
+	// 授权边界守卫开关（红队版 v0.6.18 下放）：装配时从设置读取，传到 ToolSet。
+	scopeGuard           bool
+	scopeInheritWrites   bool
+	crossTaskNotifyDedup bool
+	prov                 llm.Provider
+	model                string
+	tx                   *transcript.Store                      // raw LLM conversation persistence (nil = off)
+	window               int                                    // context window in tokens (for compaction)
+	windowFn             func() int                             // optional dynamic task-chain minimum
+	maxTurns             int                                    // max agent turns per run (0 = unlimited)
+	killWork             func(intentID int64) error             // engine callback to terminate a running work (nil = off)
+	steerWork            func(intentID int64, msg string) error // engine callback to steer a running work mid-run (nil = off)
+	attributions         func() map[string]any                  // Guard 归因读取（nil = 概览不带 guard_attributions 块）
+	proxyAddr            string                                 // recording proxy for WebFetch (empty = direct)
+	proxyCACert          string                                 // recording proxy's CA cert path (HTTPS verify)
+	webSearch            WebSearchOpts                          // web_search tool backend selection (off by default)
+	workDir              string                                 // shared work dir (surfaced in prompt as artifact-output target)
+	injectConstraints    func() bool                            // resolver: inject task operation constraints into system prompt? (nil = yes)
+	nonStreamingFn       func() bool                            // resolver: use non-streaming (Complete) path? (nil = streaming)
+	noaEnabledFn         func() bool                            // resolver: use experimental noa compaction? (nil = off)
+	maxTokensFn          func() int                             // resolver: per-reply output cap (nil/0 = send no cap)
+	compactor            *Compactor                             // cold-node compaction (§7); nil = disabled
 
 	// todos keeps ONE plan-scratchpad per task (keyed by exploration id) so the
 	// planner's multi-step plan survives across wake-ups — each Plan() is a fresh
@@ -51,6 +55,12 @@ type Planner struct {
 
 func NewPlanner(prov llm.Provider, model, workDir string, tx *transcript.Store, window, maxTurns int) *Planner {
 	return &Planner{prov: prov, model: model, workDir: workDir, tx: tx, window: window, maxTurns: maxTurns, todos: map[int64]*actool.TodoStore{}}
+}
+
+func (p *Planner) SetScopeFlags(scopeGuard, scopeInheritWrites, crossTaskNotifyDedup bool) {
+	p.scopeGuard = scopeGuard
+	p.scopeInheritWrites = scopeInheritWrites
+	p.crossTaskNotifyDedup = crossTaskNotifyDedup
 }
 
 func (p *Planner) SetCompactionWindowResolver(fn func() int) { p.windowFn = fn }
@@ -394,7 +404,8 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 
 func plannerSystem(goal, dataDir, workDir string) string {
 	body := renderSystem("planner", plannerDefaultTmpl, PlannerVars{Goal: goal, DataDir: dataDir, Now: nowStr()})
-	return body + artifactSpec(workDir)
+	// 作业硬尾巴（红队版下放）：漏洞覆盖矩阵/纵深优先 + 授权边界复核。
+	return body + artifactSpec(workDir) + coverageMatrixPlannerGuidance + scopeVerifyPlannerGuidance
 }
 
 // Plan runs one planning round. emit, if non-nil, receives the planner's execution
@@ -413,6 +424,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	p.compactor.OnPlannerRound(ctx, ts)
 	tsx := NewToolSet(ts, "planner")
 	tsx.SetFindingRecorder(p.findingRecorder)
+	tsx.SetScopeFlags(p.scopeGuard, p.scopeInheritWrites, p.crossTaskNotifyDedup)
 	if as != nil {
 		tsx.SetAssetStore(as, as.Companies())
 	}

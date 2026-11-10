@@ -386,6 +386,7 @@ var builtinSkillVisibility = map[string][]string{
 	"src-hunting": {"planner", "pentest", "worker"},
 	// 浏览器自动化：worker 做 SPA/登录态探测时可用
 	"playwright-cli": {"pentest", "worker"},
+	"apk-reverse":    {"pentest", "worker"},
 }
 
 // seedBuiltinSkillVisibility binds the shipped built-in skills to their default

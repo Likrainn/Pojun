@@ -42,6 +42,27 @@ func assetInterceptCandidates(item assetInputItem) (domains, ips, urls []string)
 	return domains, ips, urls
 }
 
+// identityHint 把候选串压成给模型看的一行身份提示（最多 3 个）。
+func identityHint(domains, ips, urls []string) string {
+	parts := make([]string, 0, 3)
+	for _, d := range domains {
+		if len(parts) < 3 {
+			parts = append(parts, d)
+		}
+	}
+	for _, u := range urls {
+		if len(parts) < 3 {
+			parts = append(parts, u)
+		}
+	}
+	for _, ip := range ips {
+		if len(parts) < 3 {
+			parts = append(parts, ip)
+		}
+	}
+	return strings.Join(parts, ",")
+}
+
 // assetInputLabel 返回一条待插入资产的简短标识，用于拦截说明消息。
 func assetInputLabel(item assetInputItem) string {
 	typ := strings.TrimSpace(item.Type)
@@ -252,6 +273,22 @@ func (t *ToolSet) insertAssets() actool.CoreTool {
 				typ := strings.TrimSpace(item.Type)
 				var id int64
 				var err error
+
+				// 授权边界守卫（红队版 v0.6.18 下放）：插入/认领前先查身份——
+				// 若该资产已存在、由其他任务登记、且不在本任务自有 scope，则跳过，
+				// 防止「碰到就自动认领」把别的任务的资产悄悄拉进本任务。
+				if t.ScopeWriteGuard && taskID > 0 {
+					gd, gi, gu := assetInterceptCandidates(item)
+					if fid, owners, ferr := t.as.FindForeignAssetForTask(taskID, gd, gi, gu); ferr == nil && fid > 0 {
+						errs = append(errs, errEntry{
+							Index: i,
+							Error: fmt.Sprintf("资产 %s %s 已归属其他任务(任务 %s)且不在本任务自有范围，已跳过登记——"+
+								"防止跨任务串资产。如确属本任务授权，请先用 add_task_scope 显式纳入本任务范围后重试。",
+								assetInputLabel(item), identityHint(gd, gi, gu), owners),
+						})
+						continue
+					}
+				}
 
 				switch typ {
 				case "root_domain":

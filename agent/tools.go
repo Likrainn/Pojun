@@ -77,6 +77,12 @@ type ToolSet struct {
 	findingRecorder FindingRecorder
 	// artifactRecorder 由 host 注入（v0.5.0 证据附件）；nil=当前环境不支持存档。
 	artifactRecorder ArtifactRecorder
+	// ── 授权边界守卫（红队版 v0.6.18 下放，2026-11-10）──
+	// 三个开关由 server 在装配时从设置读取（scope_write_guard / scope_inherit_writes /
+	// notify_cross_task_dedup），改动下一条意图生效。全部关闭=回到软约束旧行为。
+	ScopeWriteGuard      bool // 写回锚定守卫：fact/finding 只能锚定自有范围资产（默认开）
+	ScopeInheritWrites   bool // 继承/来源任务范围资产也可写（默认关；串资产根因开关）
+	CrossTaskNotifyDedup bool // 跨任务同指纹漏洞不再重复推送（默认开）
 	// runDir 是本次运行的专属工作目录（worker 在这里产生截图/样本），
 	// save_evidence 的相对路径基准；由 Worker.Execute 注入。
 	runDir string
@@ -213,6 +219,14 @@ func (t *ToolSet) SetArtifactRecorder(r ArtifactRecorder) { t.artifactRecorder =
 
 // SetRunDir 注入本次运行的工作目录（save_evidence 的相对路径基准）。
 func (t *ToolSet) SetRunDir(dir string) { t.runDir = dir }
+
+// SetScopeFlags（红队版 v0.6.18 下放）：授权边界守卫与跨任务去重的三个开关，
+// 由 server 在装配时从设置读取；改动下一条意图生效。全部关=回到软约束旧行为。
+func (t *ToolSet) SetScopeFlags(scopeGuard, scopeInheritWrites, crossTaskNotifyDedup bool) {
+	t.ScopeWriteGuard = scopeGuard
+	t.ScopeInheritWrites = scopeInheritWrites
+	t.CrossTaskNotifyDedup = crossTaskNotifyDedup
+}
 
 // SetCoverageEnabled records whether this task has the asset-coverage feature on
 // (default enabled). Passing false makes graphOverviewData omit the coverage block
@@ -1624,7 +1638,11 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		if err != nil {
 			return actool.Errorf(err.Error()), nil
 		}
-		input := db.RecordFindingInput{TaskID: t.taskID, ExplorationID: t.ts.ID(), IntentID: pid(a.IntentID), VulnClass: a.VulnClass, Name: a.Name, Severity: a.Severity, Summary: a.Summary, Evidence: a.Evidence, Worker: t.worker, AssetIDs: pidList(a.AssetIDs)}
+		// 授权边界守卫（红队版 v0.6.18 下放）：finding 的 asset_ids 只能落在自有范围资产上。
+		if msg := t.scopeGuardError(pidList(a.AssetIDs)); msg != "" {
+			return actool.Errorf(msg), nil
+		}
+		input := db.RecordFindingInput{TaskID: t.taskID, ExplorationID: t.ts.ID(), IntentID: pid(a.IntentID), VulnClass: a.VulnClass, Name: a.Name, Severity: a.Severity, Summary: a.Summary, Evidence: a.Evidence, Worker: t.worker, AssetIDs: pidList(a.AssetIDs), CrossTaskNotifyDedup: t.CrossTaskNotifyDedup}
 		var recorded *db.RecordedFinding
 		if t.findingRecorder != nil {
 			recorded, err = t.findingRecorder.Record(ctx, input, refs)
@@ -1657,6 +1675,20 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			EvidenceNote       string `json:"evidence_note,omitempty"`
 			EvidenceVerifyNote string `json:"evidence_verify_note,omitempty"`
 		}{RecordedFinding: recorded, EvidenceStatus: "bound", EvidenceVerifyNote: verifyNote}
+		if len(recorded.CrossTaskDupTasks) > 0 {
+			ids := make([]string, 0, len(recorded.CrossTaskDupTasks))
+			for _, tid := range recorded.CrossTaskDupTasks {
+				ids = append(ids, strconv.FormatInt(tid, 10))
+			}
+			result.EvidenceNote = (func(prev string) string {
+				if prev != "" {
+					return prev + " "
+				}
+				return ""
+			})(result.EvidenceNote) + fmt.Sprintf(
+				"◎ 跨任务提示：同指纹漏洞在任务 %s 中已存在，本次推送已按跨任务去重抑制（漏洞记录保留在本任务，页面可见）。"+
+					"这通常意味着该资产属于其他任务的范围——请核对本任务授权边界，不要继续在其他任务的资产上深挖。", strings.Join(ids, "/"))
+		}
 		if len(recorded.Traffic.Bindings) == 0 {
 			result.EvidenceStatus = "not_bound"
 			result.EvidenceNote = "漏洞已保存，未绑定流量。TCP/无包情形可正常继续；若已有核实的 HTTP 流量，请用可用的 bind_finding_traffic 或漏洞页面补绑，再完成证据交接。不要重复创建漏洞。"
@@ -1750,6 +1782,10 @@ func (t *ToolSet) recordOneFact(it factItem, defaultIntent int64) (int64, error)
 			assetIDs = auto
 		}
 	}
+	// 授权边界守卫（红队版 v0.6.18 下放）：fact 锚定只能落在自有范围资产上。
+	if msg := t.scopeGuardError(assetIDs); msg != "" {
+		return 0, fmt.Errorf("%s", msg)
+	}
 	id, err := t.ts.AddNode(db.KindFact, payload, 5, "confirmed", t.worker, assetIDs)
 	if err != nil {
 		return 0, err
@@ -1791,6 +1827,76 @@ func (t *ToolSet) missingAssetIDs(ids []int64) []int64 {
 		}
 	}
 	return missing
+}
+
+// scopeGuardError 是写回锚定的授权边界闸门（红队版 v0.6.18 下放，跨任务串资产
+// 防线的第④层硬化）：fact/finding 的 asset_ids 只允许「自有范围」资产——
+//
+//	own    ：匹配本任务自己的 scope，或本任务发现/登记（task_ids 含本任务）→ 放行；
+//	source ：只匹配来源/继承任务的 scope → 默认拒绝（继承范围只读；确属授权时
+//	         用 add_task_scope 显式纳入，或开启 scope_inherit_writes）；
+//	foreign：完全越界 → 一律拒绝。
+//
+// 返回空串表示放行；非空是给模型的中文纠正提示（含资产标签，便于它自己纠正）。
+// 查询失败 fail-open（返回空串）——闸门故障不能把正常任务全部卡死，由调用方记日志。
+func (t *ToolSet) scopeGuardError(ids []int64) string {
+	if !t.ScopeWriteGuard || t.as == nil || t.taskID <= 0 || len(ids) == 0 {
+		return ""
+	}
+	own, source, foreign, err := t.as.ClassifyAssetsForTask(t.taskID, ids)
+	if err != nil {
+		return "" // fail-open：分类查询故障不阻断正常任务，由调用方日志兜底
+	}
+	_ = own
+	if t.ScopeInheritWrites {
+		source = nil
+	}
+	if len(source) == 0 && len(foreign) == 0 {
+		return ""
+	}
+	label := func(ids []int64) string {
+		assets, err := t.as.GetByIDs(ids)
+		if err != nil {
+			return ""
+		}
+		parts := make([]string, 0, len(assets))
+		for i, a := range assets {
+			if a == nil {
+				continue
+			}
+			name := a.Domain
+			if name == "" {
+				name = a.URL
+			}
+			if name == "" {
+				name = a.IP
+			}
+			if name == "" {
+				name = a.AppName
+			}
+			if name == "" {
+				name = a.RootDomain
+			}
+			if i >= 6 {
+				parts = append(parts, fmt.Sprintf("…等 %d 个", len(assets)))
+				break
+			}
+			parts = append(parts, fmt.Sprintf("#%d %s", a.ID, name))
+		}
+		return strings.Join(parts, "、")
+	}
+	var b strings.Builder
+	b.WriteString("范围守卫：以下资产不属于本任务自有范围，禁止写回/上报：")
+	if len(source) > 0 {
+		b.WriteString(fmt.Sprintf("\n· 来源/继承任务范围（只读，默认不可写）：%s", label(source)))
+	}
+	if len(foreign) > 0 {
+		b.WriteString(fmt.Sprintf("\n· 完全越界：%s", label(foreign)))
+	}
+	b.WriteString("\n处理方式（二选一）：① 把本条结论的 asset_ids 改成自有范围资产，或删掉 asset_ids 让系统只记结论本身；" +
+		"② 若该资产确在本任务授权内，先用 add_task_scope 显式纳入本任务范围后重试。" +
+		"跨域名归属类结论必须先在两个域各自取证复核（本域复验 200/内容一致），未复核一律按 inferred 写，不得标 observed。")
+	return b.String()
 }
 
 var (

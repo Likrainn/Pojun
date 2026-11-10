@@ -334,6 +334,9 @@ type RecordFindingInput struct {
 	TaskID, ExplorationID, IntentID                      int64
 	VulnClass, Name, Severity, Summary, Evidence, Worker string
 	AssetIDs                                             []int64
+	// CrossTaskNotifyDedup（内部版同款）：同指纹漏洞在其他任务已存在时，不再为
+	// 本任务重复推送通知（漏洞记录本身照常入库，页面可见）。
+	CrossTaskNotifyDedup bool
 }
 
 type RecordedFinding struct {
@@ -343,6 +346,9 @@ type RecordedFinding struct {
 	// Duplicate=true 表示本次上报命中了同任务内已有的同指纹漏洞,证据已合并
 	// 进原记录(而不是新建);调用方应据此提示模型停止重复上报。
 	Duplicate bool `json:"-"`
+	// CrossTaskDupTasks（内部版同款）：非空 = 同指纹漏洞在其他任务也已存在
+	// （本次通知已按 CrossTaskNotifyDedup 抑制）。调用方据此在回执里提示模型「跨任务重复」。
+	CrossTaskDupTasks []int64 `json:"-"`
 	// SkippedRefs 是本次提交里无法解析(流量 ID 不存在/正文不可读)的引用。
 	// 漏洞本身照常入库——猜错一个 ID 不该丢掉已确认的漏洞——但调用方要把
 	// 这些 ID 原样回给模型,让它知道哪些证据没挂上。
@@ -464,16 +470,42 @@ VALUES(NULLIF($1,0),$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`, in.TaskID, out.N
 	// 在**同一事务**里登记一条推送事件：提交即保证「漏洞落库」与「推送任务存在」
 	// 原子一致，不存在提交成功却没入队、消息永久丢失的窗口。
 	// 这里的失败被隔离在保存点上、不影响漏洞写入（见函数注释），因此忽略返回值。
-	RecordNotificationEventTx(ctx, tx, notify.EventFindingCreated, out.FindingID, notify.Snapshot{
-		Kind:      notify.EventFindingCreated,
-		FindingID: out.FindingID,
-		TaskID:    in.TaskID,
-		VulnClass: in.VulnClass,
-		Name:      in.Name,
-		Severity:  in.Severity,
-		Summary:   in.Summary,
-		AssetIDs:  assets,
-	})
+	//
+	// v0.6.18 内部版同款跨任务去重：同指纹漏洞在其他未删除任务已存在时不再重复
+	// 推送通知（客户反馈跨任务重复漏洞「一直播报」）；漏洞记录本身照常保留。
+	if in.CrossTaskNotifyDedup {
+		var dupTasks []int64
+		dupRows, dupErr := tx.Query(`SELECT f.task_id FROM findings f
+JOIN tasks t ON t.id=f.task_id AND t.deleted_at IS NULL
+WHERE f.fingerprint=$1 AND f.task_id<>$2
+  AND EXISTS (SELECT 1 FROM findings f2 WHERE f2.task_id=f.task_id AND f2.fingerprint=$1
+              AND f2.status IN ('pending','in_progress','confirmed'))
+GROUP BY f.task_id ORDER BY f.task_id`, fp, in.TaskID)
+		if dupErr == nil {
+			for dupRows.Next() {
+				var tid int64
+				if _ = dupRows.Scan(&tid); tid > 0 {
+					dupTasks = append(dupTasks, tid)
+				}
+			}
+			_ = dupRows.Close()
+		}
+		if len(dupTasks) > 0 {
+			out.CrossTaskDupTasks = dupTasks
+		}
+	}
+	if !(in.CrossTaskNotifyDedup && len(out.CrossTaskDupTasks) > 0) {
+		RecordNotificationEventTx(ctx, tx, notify.EventFindingCreated, out.FindingID, notify.Snapshot{
+			Kind:      notify.EventFindingCreated,
+			FindingID: out.FindingID,
+			TaskID:    in.TaskID,
+			VulnClass: in.VulnClass,
+			Name:      in.Name,
+			Severity:  in.Severity,
+			Summary:   in.Summary,
+			AssetIDs:  assets,
+		})
+	} // 跨任务重复被抑制时：记录本身保留（页面可见），只不打扰通知。
 	if err := AddFindingTrafficTx(tx, out.FindingID, prepared); err != nil {
 		return nil, err
 	}
