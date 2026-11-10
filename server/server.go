@@ -255,7 +255,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		}
 		go s.evidenceStore().RunGC(s.ctx)
 		go s.recoverPendingPreviews() // 文档预览：恢复上次未完成的队列（v0.4.23）
-		go s.recoverEmptyFindingReports() // 空报告巡检：重启/崩溃后补写被中断的报告（红队版 v0.6.10 下放）
+		go s.recoverEmptyFindingReports() // 空报告巡检：重启/崩溃后补写被中断的报告（v0.4.63）
 		s.seedPythonInterpreter()     // 自定义脚本工具:开机检测 python 解释器入库(仅空时)
 		go newScheduler(s).Run(s.ctx) // P3 触发器调度(定时/finding/目标事件),仅自定义 agent
 		// 漏洞 IM 推送投递引擎。与 Scheduler 并列但独立：推送的实时性要求(3s)
@@ -3629,11 +3629,11 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		// 意图级软预算（v0.4.28）：单意图 token 上限，500k–20M。
 		IntentBudgetEnabled *bool `json:"intent_budget_enabled"`
 		IntentBudgetTokens  *int  `json:"intent_budget_tokens"`
-		// 授权边界守卫与跨任务去重（红队版 v0.6.18 下放）。
+		// 授权边界守卫与跨任务去重（v0.4.63）。
 		ScopeWriteGuard      *bool `json:"scope_write_guard"`
 		ScopeInheritWrites   *bool `json:"scope_inherit_writes"`
 		NotifyCrossTaskDedup *bool `json:"notify_cross_task_dedup"`
-		// 纵深缺口提醒（红队版 v0.6.17 下放）。
+		// 纵深缺口提醒（v0.4.63）。
 		DepthNudgeEnabled *bool `json:"depth_nudge_enabled"`
 		// 证据逐字回验（v0.4.29）：off|warn|block；工具输出注入告警开关。
 		EvidenceVerify *string `json:"finding_evidence_verify"`

@@ -274,7 +274,7 @@ func (t *ToolSet) insertAssets() actool.CoreTool {
 				var id int64
 				var err error
 
-				// 授权边界守卫（红队版 v0.6.18 下放）：插入/认领前先查身份——
+				// 授权边界守卫（v0.4.63）：插入/认领前先查身份——
 				// 若该资产已存在、由其他任务登记、且不在本任务自有 scope，则跳过，
 				// 防止「碰到就自动认领」把别的任务的资产悄悄拉进本任务。
 				if t.ScopeWriteGuard && taskID > 0 {

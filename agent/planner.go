@@ -22,7 +22,7 @@ import (
 // into the frontier. It is the sole intent generator.
 type Planner struct {
 	findingRecorder FindingRecorder
-	// 授权边界守卫开关（红队版 v0.6.18 下放）：装配时从设置读取，传到 ToolSet。
+	// 授权边界守卫开关（v0.4.63）：装配时从设置读取，传到 ToolSet。
 	scopeGuard           bool
 	scopeInheritWrites   bool
 	crossTaskNotifyDedup bool
@@ -404,7 +404,7 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 
 func plannerSystem(goal, dataDir, workDir string) string {
 	body := renderSystem("planner", plannerDefaultTmpl, PlannerVars{Goal: goal, DataDir: dataDir, Now: nowStr()})
-	// 作业硬尾巴（红队版下放）：漏洞覆盖矩阵/纵深优先 + 授权边界复核。
+	// 作业硬尾巴（v0.4.63）：漏洞覆盖矩阵/纵深优先 + 授权边界复核。
 	return body + artifactSpec(workDir) + coverageMatrixPlannerGuidance + scopeVerifyPlannerGuidance
 }
 

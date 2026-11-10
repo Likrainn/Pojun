@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// 硬尾巴守门测试（红队版 v0.6.8 同款校验）：扫描器优先与漏洞覆盖矩阵是代码注入
+// 硬尾巴守门测试（v0.4.63）：扫描器优先与漏洞覆盖矩阵是代码注入
 // 的提示词，不随 UI 改词消失；这里锁住关键锚点，防止后续重构把它们弄丢。
 func TestScannerAndCoverageTails(t *testing.T) {
 	w := workerSystem("", "", "/tmp", "/tmp/run")

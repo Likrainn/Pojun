@@ -77,7 +77,7 @@ type ToolSet struct {
 	findingRecorder FindingRecorder
 	// artifactRecorder 由 host 注入（v0.5.0 证据附件）；nil=当前环境不支持存档。
 	artifactRecorder ArtifactRecorder
-	// ── 授权边界守卫（红队版 v0.6.18 下放，2026-11-10）──
+	// ── 授权边界守卫（v0.4.63）──
 	// 三个开关由 server 在装配时从设置读取（scope_write_guard / scope_inherit_writes /
 	// notify_cross_task_dedup），改动下一条意图生效。全部关闭=回到软约束旧行为。
 	ScopeWriteGuard      bool // 写回锚定守卫：fact/finding 只能锚定自有范围资产（默认开）
@@ -220,7 +220,7 @@ func (t *ToolSet) SetArtifactRecorder(r ArtifactRecorder) { t.artifactRecorder =
 // SetRunDir 注入本次运行的工作目录（save_evidence 的相对路径基准）。
 func (t *ToolSet) SetRunDir(dir string) { t.runDir = dir }
 
-// SetScopeFlags（红队版 v0.6.18 下放）：授权边界守卫与跨任务去重的三个开关，
+// SetScopeFlags（v0.4.63）：授权边界守卫与跨任务去重的三个开关，
 // 由 server 在装配时从设置读取；改动下一条意图生效。全部关=回到软约束旧行为。
 func (t *ToolSet) SetScopeFlags(scopeGuard, scopeInheritWrites, crossTaskNotifyDedup bool) {
 	t.ScopeWriteGuard = scopeGuard
@@ -1638,7 +1638,7 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		if err != nil {
 			return actool.Errorf(err.Error()), nil
 		}
-		// 授权边界守卫（红队版 v0.6.18 下放）：finding 的 asset_ids 只能落在自有范围资产上。
+		// 授权边界守卫（v0.4.63）：finding 的 asset_ids 只能落在自有范围资产上。
 		if msg := t.scopeGuardError(pidList(a.AssetIDs)); msg != "" {
 			return actool.Errorf(msg), nil
 		}
@@ -1782,7 +1782,7 @@ func (t *ToolSet) recordOneFact(it factItem, defaultIntent int64) (int64, error)
 			assetIDs = auto
 		}
 	}
-	// 授权边界守卫（红队版 v0.6.18 下放）：fact 锚定只能落在自有范围资产上。
+	// 授权边界守卫（v0.4.63）：fact 锚定只能落在自有范围资产上。
 	if msg := t.scopeGuardError(assetIDs); msg != "" {
 		return 0, fmt.Errorf("%s", msg)
 	}
@@ -1829,7 +1829,7 @@ func (t *ToolSet) missingAssetIDs(ids []int64) []int64 {
 	return missing
 }
 
-// scopeGuardError 是写回锚定的授权边界闸门（红队版 v0.6.18 下放，跨任务串资产
+// scopeGuardError 是写回锚定的授权边界闸门（v0.4.63，跨任务串资产
 // 防线的第④层硬化）：fact/finding 的 asset_ids 只允许「自有范围」资产——
 //
 //	own    ：匹配本任务自己的 scope，或本任务发现/登记（task_ids 含本任务）→ 放行；

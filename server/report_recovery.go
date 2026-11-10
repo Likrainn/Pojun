@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// 补写空报告（v0.6.10 启动扫描；v0.6.12 改为常驻巡检）。
+// 补写空报告（v0.4.63：启动扫描 + 常驻巡检）。
 //
 // 现网两次踩到：reporter 正在写报告时后端重启（一键更新/部署），会话被中断，
 // finding 的报告留空——任务 #5 的 finding#24 就是这样（日志「运行被中断：后端进程
@@ -18,7 +18,7 @@ import (
 // 启动 45 秒后先扫一遍，之后每 15 分钟一轮；「报告为空且任务未删除、创建超过 20 分钟」
 // 的 finding 逐个用新会话重新唤起 reporter；同一个 finding 按指数退避（1/2/4/8h）
 // 唤起、最多 reportRecoverMaxTries 次（settings 里记次数与上次时间），避免重启风暴
-// 刷屏；超限后停止自动重试并告警一次（v0.6.22）。
+// 刷屏；超限后停止自动重试并告警一次（v0.4.63）。
 
 // reportRecoverMaxTries 是单个 finding 自动补写的尝试上限。
 const reportRecoverMaxTries = 6
@@ -81,7 +81,7 @@ ORDER BY f.created_at DESC LIMIT 20`)
 		if v, ok, _ := s.m.pg.GetSetting(triesKey); ok {
 			tries, _ = strconv.Atoi(v)
 		}
-		// v0.6.22：尝试上限 + 指数退避。现网实测（finding#143）：坏 LLM 配置期间
+		// v0.4.63：尝试上限 + 指数退避。现网实测（finding#143）：坏 LLM 配置期间
 		// 每小时被拉起一次、连续 ~20 次全是白烧 token，模型修好后自己就补上了。
 		// 6 次上限 + 1/2/4/8h 退避；超限后停止自动补写并告警一次，交人工。
 		if tries >= reportRecoverMaxTries {

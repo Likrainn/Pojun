@@ -1,6 +1,6 @@
 package agent
 
-// 作业硬尾巴（红队版 v0.6.8/0.6.17/0.6.18 下放，2026-11-10）：
+// 作业硬尾巴（v0.4.63）：
 // 代码注入到 worker/planner 系统提示末尾，不随 UI 改词消失。
 //
 // 现网复盘：装好的扫描器（ffuf/gobuster/nuclei/sqlmap + SecLists）在提示词里从没
@@ -33,7 +33,7 @@ const scannerFirstGuidance = `
 `
 
 // skillRoutingGuidance 是 worker 的技能路由尾巴（代码注入）。
-// 红队版原文含 blackgray-hunting（内部版专属），下放版已剥离；skill 名均为公开版内置。
+// skill 名均为平台内置技能。
 const skillRoutingGuidance = `
 【技能路由（动手前先加载对口方法论，别凭记忆现编）】
 - Web 漏洞打法（注入/XSS/上传/SSRF/越权/逻辑）→ Skill("web-attack-methods")
@@ -76,7 +76,7 @@ const coverageMatrixPlannerGuidance = `
 - 只有已确认线索都打不动时，才允许继续扩面；并且先让 worker 用 fact 写清每条为什么打不动。
 `
 
-// scopeVerifyPlannerGuidance 是 planner 的「授权边界 + 复核优先」硬尾巴（v0.6.18 下放）：
+// scopeVerifyPlannerGuidance 是 planner 的「授权边界 + 复核优先」硬尾巴（v0.4.63）：
 // 关联/归属类事实先复核再派攻击意图（与写回范围守卫配套）。
 const scopeVerifyPlannerGuidance = `
 【授权边界与复核优先（硬约束）】

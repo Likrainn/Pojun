@@ -56,7 +56,7 @@ type Worker struct {
 	findingRecorder FindingRecorder
 	// artifactRecorder 由 host 注入：证据附件（截图/样本/日志）落盘登记。
 	artifactRecorder ArtifactRecorder
-	// 授权边界守卫开关（红队版 v0.6.18 下放）：装配时从设置读取，传到 ToolSet。
+	// 授权边界守卫开关（v0.4.63）：装配时从设置读取，传到 ToolSet。
 	scopeGuard           bool
 	scopeInheritWrites   bool
 	crossTaskNotifyDedup bool
@@ -328,7 +328,7 @@ func workerSystem(proxyAddr, caCert, dataDir, runDir string) string {
 	// caCert is present only when the recording MITM is on, which is exactly when
 	// the traffic_* tools are registered — so it gates the traffic-tool note.
 	// Optional finding guidance is added for every role after tool resolution.
-	// 作业硬尾巴（红队版下放）：扫描器优先 + 技能路由，代码注入不可经 UI 改掉。
+	// 作业硬尾巴（v0.4.63）：扫描器优先 + 技能路由，代码注入不可经 UI 改掉。
 	out := body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir) + scannerFirstGuidance + skillRoutingGuidance
 	// 宿主工具清单：真正动手的是 worker，所以清单必须进 worker 的 system prompt。
 	// 之前只有 planner 的唤醒提示里有（用于「派意图选手段」），worker 看不到——
@@ -751,7 +751,7 @@ const sqlmapGuidance = `
 - 只读边界：默认只用注入探测与数据读取（--dump 限定表/列，先 --count/--schema）；不要用 --os-shell / --sql-shell / --file-write / --os-pwn 等写操作，除非任务明确要求且审批通过。
 - sqlmap 跑不通（网络/代理/被拦）时，用等价的手工 payload 复现并写明 sqlmap 尝试过与失败原因；**禁止编造 sqlmap 输出**。`
 
-// SetScopeFlags（红队版 v0.6.18 下放）：授权边界守卫与跨任务去重开关。
+// SetScopeFlags（v0.4.63）：授权边界守卫与跨任务去重开关。
 func (w *Worker) SetScopeFlags(scopeGuard, scopeInheritWrites, crossTaskNotifyDedup bool) {
 	w.scopeGuard = scopeGuard
 	w.scopeInheritWrites = scopeInheritWrites

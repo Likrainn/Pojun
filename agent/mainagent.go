@@ -20,7 +20,7 @@ import (
 // autonomous intent-generation loop (that is the planner's job).
 type MainAgent struct {
 	findingRecorder FindingRecorder
-	// 授权边界守卫开关（红队版 v0.6.18 下放）：装配时从设置读取，传到 ToolSet。
+	// 授权边界守卫开关（v0.4.63）：装配时从设置读取，传到 ToolSet。
 	scopeGuard           bool
 	scopeInheritWrites   bool
 	crossTaskNotifyDedup bool

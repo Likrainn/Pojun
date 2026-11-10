@@ -698,7 +698,7 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	mainRuntime := &taskLLMRuntime{s: s, taskID: t.ID, agentKey: "mainagent"}
 	tx := transcript.NewStore(filepath.Join(s.m.dir, "transcripts"))
 	window := workerRuntime.CompactionWindow()
-	// 授权边界守卫开关（红队版 v0.6.18 下放）：每个 agent bundle 装配时读一次设置。
+	// 授权边界守卫开关（v0.4.63）：每个 agent bundle 装配时读一次设置。
 	var scopeGuard, scopeInherit, notifyDedup bool
 	if s.m.PG() != nil {
 		scopeGuard = s.m.PG().GetBool("scope_write_guard", true)

@@ -334,7 +334,7 @@ type RecordFindingInput struct {
 	TaskID, ExplorationID, IntentID                      int64
 	VulnClass, Name, Severity, Summary, Evidence, Worker string
 	AssetIDs                                             []int64
-	// CrossTaskNotifyDedup（内部版同款）：同指纹漏洞在其他任务已存在时，不再为
+	// CrossTaskNotifyDedup：同指纹漏洞在其他任务已存在时，不再为
 	// 本任务重复推送通知（漏洞记录本身照常入库，页面可见）。
 	CrossTaskNotifyDedup bool
 }
@@ -346,7 +346,7 @@ type RecordedFinding struct {
 	// Duplicate=true 表示本次上报命中了同任务内已有的同指纹漏洞,证据已合并
 	// 进原记录(而不是新建);调用方应据此提示模型停止重复上报。
 	Duplicate bool `json:"-"`
-	// CrossTaskDupTasks（内部版同款）：非空 = 同指纹漏洞在其他任务也已存在
+	// CrossTaskDupTasks：非空 = 同指纹漏洞在其他任务也已存在
 	// （本次通知已按 CrossTaskNotifyDedup 抑制）。调用方据此在回执里提示模型「跨任务重复」。
 	CrossTaskDupTasks []int64 `json:"-"`
 	// SkippedRefs 是本次提交里无法解析(流量 ID 不存在/正文不可读)的引用。
@@ -471,7 +471,7 @@ VALUES(NULLIF($1,0),$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`, in.TaskID, out.N
 	// 原子一致，不存在提交成功却没入队、消息永久丢失的窗口。
 	// 这里的失败被隔离在保存点上、不影响漏洞写入（见函数注释），因此忽略返回值。
 	//
-	// v0.6.18 内部版同款跨任务去重：同指纹漏洞在其他未删除任务已存在时不再重复
+	// v0.4.63 跨任务去重：同指纹漏洞在其他未删除任务已存在时不再重复
 	// 推送通知（客户反馈跨任务重复漏洞「一直播报」）；漏洞记录本身照常保留。
 	if in.CrossTaskNotifyDedup {
 		var dupTasks []int64

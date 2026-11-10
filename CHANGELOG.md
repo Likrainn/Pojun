@@ -6,37 +6,38 @@
 
 ## [0.4.63] - 2026-11-10
 
-> 红队版（pojun_red）S 级功能下放：Logo 统一 + 写回守卫三件套 + 空报告巡检 +
-> 纵深/覆盖双提示 + 提示词硬尾巴 + APK 逆向技能。评估看 docs/红队版功能下放评估-2026-11-10.md。
+> 品牌与作业纪律更新：全新 Logo、写回授权边界守卫、空报告自动巡检、
+> 纵深与覆盖双提示、扫描器优先与技能路由提示词、APK 逆向技能。
 
 ### 新增
 
-- **Logo 统一**：公开版全套换成红队版「破军·劈星」（SVG 矢量重导 512 PNG +
-  favicon 多尺寸 + logo-mono；侧栏即刻生效，登录页按安全基线仍不引用 logo）。
-- **写回守卫三件套**（红队版 v0.6.18 下放）：
-  - 写回范围守卫（默认开）：record_fact / report_finding 的 asset_ids 只能锚定
-    本任务自有范围资产——来源/继承范围默认只读、完全越界一律拒绝；查询故障
-    fail-open 不卡正常任务；fact/finding 两处闸门 + 设置 `scope_write_guard`。
-  - insert_assets 认领守卫：碰到「他人任务登记且不在本任务范围」的既有资产时
-    跳过并提示，防止跨任务串资产（设置 `scope_inherit_writes` 可放开继承写）。
-  - 跨任务去重推送：同指纹漏洞在其他任务已存在时不再重复播报（记录照常保留），
-    回执提示模型核对授权边界（设置 `notify_cross_task_dedup`）。
-- **空报告巡检**（红队版 v0.6.10 下放）：启动 45s 后与每 15 分钟扫描 report 为空
-  的 finding 并自动唤起 reporter 补写；单条 6 次上限 + 1/2/4/8h 指数退避。
-- **纵深/覆盖双提示**（红队版 v0.6.10/0.6.17 下放，引擎侧确定性检查）：
-  资产 ≥50 且 high/critical=0 时提醒 planner 停铺面、打穿 1–2 条已验证线索；
-  意图文本完全没提某类漏洞（SQLi/XSS/SSRF/上传/RCE/目录）时点名补派。
-- **提示词硬尾巴四件**（红队版 v0.6.8/0.6.18 下放，代码注入不可经 UI 改掉）：
-  worker=扫描器优先（ffuf/gobuster/nuclei/sqlmap + SecLists 命令模板）+ 技能路由；
-  planner=漏洞覆盖矩阵（10 类逐行对照）+ 授权边界与复核优先。
-- **apk-reverse skill**（22 个内置 skill）：jadx/apktool/adb/frida 完整静态+动态
-  链路，无真机时静态+流量模拟替代路径；已剥离内部版专属知识库引用。
+- **全新 Logo**：「破军·劈星」品牌标识（SVG 矢量重导 512 PNG + 多尺寸 favicon +
+  深色版 logo-mono；侧栏生效，登录页按安全基线不引用 logo）。
+- **授权边界守卫（写回闸门，默认开）**：`record_fact` / `report_finding` 的
+  asset_ids 只能锚定本任务自有范围资产——来源/继承范围默认只读、完全越界一律
+  拒绝；fact/finding 两处闸门，分类查询故障 fail-open 不卡正常任务。新增设置
+  `scope_write_guard`、`scope_inherit_writes`。
+- **资产认领守卫**：`insert_assets` 遇到「已归属其他任务且不在本任务范围」的既有
+  资产时跳过并说明原因，防止跨任务串资产。
+- **跨任务去重推送**：同指纹漏洞在其他任务已存在时不再重复播报（漏洞记录照常
+  保留，页面可见），回执提示核对授权边界。新增设置 `notify_cross_task_dedup`。
+- **空报告自动巡检**：启动 45 秒后与每 15 分钟扫描 `report` 为空的漏洞，自动
+  唤起 reporter 补写；单条 6 次上限 + 1/2/4/8 小时指数退避，超限告警一次转人工。
+- **纵深 / 覆盖双提示（引擎侧确定性检查）**：已登记资产 ≥50 且 high/critical = 0
+  时提醒规划者停铺面、优先打穿 1–2 条已验证线索；意图文本完全没有覆盖某类漏洞
+  （SQLi / XSS / SSRF / 文件上传 / RCE / 目录发现）时点名补派。
+- **提示词硬尾巴（代码注入）**：worker 增加「扫描器优先」（ffuf / gobuster /
+  nuclei / sqlmap + SecLists 命令模板）与「技能路由」；planner 增加「漏洞覆盖
+  矩阵」（10 类逐行对照）与「授权边界与复核优先」。不随自定义提示词丢失，附
+  守门测试。
+- **APK 逆向技能**：jadx / apktool / adb / frida 完整静态 + 动态链路、重打包与
+  Hook 脚本、无真机时的静态 + 流量模拟替代路径；内置技能增至 22 个。
 
 ### 说明
 
-- 写回守卫三键与 depth_nudge_enabled 已接入设置 GET/PUT（默认：守卫开、
-  继承写关、跨任务去重开、纵深提醒开）。
-- 红队版 L 级功能（Autopilot/动态并发/macOS）未下放，按评估菜单待定。
+- 新增设置项 `scope_write_guard` / `scope_inherit_writes` /
+  `notify_cross_task_dedup` / `depth_nudge_enabled` 已接入设置接口；
+  默认：守卫开、继承写关、跨任务去重开、纵深提醒开。
 
 ## [0.4.62] - 2026-11-06
 
